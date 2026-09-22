@@ -1,0 +1,16 @@
+device,device_name,ifindex,name,descr,alias,mac,speed_mbps,admin,oper,ips
+10.0.0.1,core-rtr,1,Gi0/0/0,GigabitEthernet0/0/0,to dist-sw1,00:11:22:33:44:01,1000,up,up,10.0.0.1/30
+10.0.0.1,core-rtr,2,Gi0/0/1,GigabitEthernet0/0/1,WAN,00:11:22:33:44:02,1000,up,up,203.0.113.2/30
+10.0.0.2,dist-sw1,1,Gi1/0/1,GigabitEthernet1/0/1,uplink core-rtr,00:11:22:33:44:11,1000,up,up,10.0.0.2/30
+10.0.0.2,dist-sw1,2,Gi1/0/2,GigabitEthernet1/0/2,to acc-sw2,00:11:22:33:44:12,1000,up,up,
+10.0.0.2,dist-sw1,5,Gi1/0/5,GigabitEthernet1/0/5,srv-c,00:11:22:33:44:15,1000,up,up,
+10.0.0.2,dist-sw1,10,Vlan10,Vlan10,,00:11:22:33:44:10,1000,up,up,10.1.0.1/24
+10.0.0.2,dist-sw1,20,Vlan20,Vlan20,,00:11:22:33:44:10,1000,up,up,10.2.0.1/24
+10.0.0.2,dist-sw1,24,Gi1/0/24,GigabitEthernet1/0/24,ap-1,00:11:22:33:44:1f,1000,up,up,
+10.0.0.2,dist-sw1,30,Vlan30,Vlan30,,00:11:22:33:44:10,1000,up,up,192.168.99.1/24
+10.1.0.2,acc-sw2,1,1,1,,00:11:22:33:55:01,1000,up,up,
+10.1.0.2,acc-sw2,2,2,2,,00:11:22:33:55:02,1000,up,up,
+10.1.0.2,acc-sw2,3,3,3,,00:11:22:33:55:03,1000,up,up,
+10.1.0.2,acc-sw2,4,4,4,,00:11:22:33:55:04,1000,up,up,
+10.1.0.2,acc-sw2,24,24,24,,00:11:22:33:55:18,1000,up,up,
+10.1.0.2,acc-sw2,100,VLAN10,VLAN10,mgmt,00:11:22:33:44:20,1000,up,up,10.1.0.2/24

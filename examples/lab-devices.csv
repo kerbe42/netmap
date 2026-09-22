@@ -1,0 +1,4 @@
+ip,name,role,vendor,model,serial,location,contact,all_ips,interfaces,vlans,lldp_neighbors,cdp_neighbors,arp_entries,routes,fdb_entries,uptime_days,sysdescr,discovered_via,depth,credential,errors
+10.0.0.1,core-rtr,router,Cisco,ISR4331/K9,FDO2222R1XX,DC1,netops@example.test,10.0.0.1 203.0.113.2,2,0,0,1,2,4,0,0,"Cisco IOS Software, ISR4300 Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.6.4",seed,0,lab,
+10.0.0.2,dist-sw1,l3switch,Cisco,WS-C3850-24T,FOC1234SW1X,DC1,netops@example.test,10.0.0.2 10.1.0.1 10.2.0.1 192.168.99.1,7,3,3,1,8,3,8,0,"Cisco IOS Software, IOS-XE Software, Catalyst L3 Switch Software (CAT3K_CAA-UNIVERSALK9-M), Version 16.12.4",cdp:core-rtr,1,lab,
+10.1.0.2,acc-sw2,switch,HP,J9772A,CN51ABC123,DC1,netops@example.test,10.1.0.2,6,0,2,0,2,0,17,0,"HP J9772A 2530-48G-PoEP Switch, revision YA.16.10.0016, ROM YA.15.20",lldp:dist-sw1,2,lab,

@@ -1,0 +1,913 @@
+{
+ "meta": {
+  "created": 1790086032.4558847,
+  "version": 1,
+  "saved": 1790086032.4590907
+ },
+ "devices": {
+  "10.0.0.1": {
+   "id": "10.0.0.1",
+   "name": "core-rtr",
+   "sysdescr": "Cisco IOS Software, ISR4300 Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.6.4",
+   "sysobjectid": "1.3.6.1.4.1.9.1.2068",
+   "location": "DC1",
+   "contact": "netops@example.test",
+   "uptime_s": 1234,
+   "services": 6,
+   "vendor": "Cisco",
+   "model": "ISR4331/K9",
+   "serial": "FDO2222R1XX",
+   "role": "router",
+   "credential": "lab",
+   "depth": 0,
+   "discovered_via": "seed",
+   "lldp_chassis_id": "",
+   "interfaces": [
+    {
+     "index": 1,
+     "name": "Gi0/0/0",
+     "descr": "GigabitEthernet0/0/0",
+     "alias": "to dist-sw1",
+     "mac": "00:11:22:33:44:01",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "10.0.0.1/30"
+     ]
+    },
+    {
+     "index": 2,
+     "name": "Gi0/0/1",
+     "descr": "GigabitEthernet0/0/1",
+     "alias": "WAN",
+     "mac": "00:11:22:33:44:02",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "203.0.113.2/30"
+     ]
+    }
+   ],
+   "neighbors": [
+    {
+     "proto": "cdp",
+     "local_if_index": 1,
+     "local_port": "Gi0/0/0",
+     "remote_name": "dist-sw1.example.test",
+     "remote_port": "GigabitEthernet1/0/1",
+     "remote_chassis_id": "",
+     "remote_mgmt_ips": [
+      "10.0.0.2"
+     ],
+     "remote_platform": "cisco WS-C3850-24T",
+     "remote_caps": "router,switch,igmp"
+    }
+   ],
+   "routes": [
+    {
+     "dest": "0.0.0.0/0",
+     "nexthop": "203.0.113.1",
+     "if_index": 2,
+     "proto": 3,
+     "type": 4
+    },
+    {
+     "dest": "10.0.0.0/30",
+     "nexthop": "0.0.0.0",
+     "if_index": 1,
+     "proto": 2,
+     "type": 3
+    },
+    {
+     "dest": "10.1.0.0/24",
+     "nexthop": "10.0.0.2",
+     "if_index": 1,
+     "proto": 3,
+     "type": 4
+    },
+    {
+     "dest": "10.2.0.0/24",
+     "nexthop": "10.0.0.2",
+     "if_index": 1,
+     "proto": 3,
+     "type": 4
+    }
+   ],
+   "arp": [
+    {
+     "if_index": 1,
+     "ip": "10.0.0.2",
+     "mac": "00:11:22:33:44:10"
+    },
+    {
+     "if_index": 2,
+     "ip": "203.0.113.1",
+     "mac": "00:00:5e:00:01:01"
+    }
+   ],
+   "fdb": [],
+   "vlans": {},
+   "ips": [
+    "10.0.0.1",
+    "203.0.113.2"
+   ],
+   "macs": [
+    "00:11:22:33:44:01",
+    "00:11:22:33:44:02"
+   ],
+   "collected_at": 1790086032.4570367,
+   "collect_seconds": 0.0,
+   "errors": []
+  },
+  "10.0.0.2": {
+   "id": "10.0.0.2",
+   "name": "dist-sw1",
+   "sysdescr": "Cisco IOS Software, IOS-XE Software, Catalyst L3 Switch Software (CAT3K_CAA-UNIVERSALK9-M), Version 16.12.4",
+   "sysobjectid": "1.3.6.1.4.1.9.1.1745",
+   "location": "DC1",
+   "contact": "netops@example.test",
+   "uptime_s": 1234,
+   "services": 6,
+   "vendor": "Cisco",
+   "model": "WS-C3850-24T",
+   "serial": "FOC1234SW1X",
+   "role": "l3switch",
+   "credential": "lab",
+   "depth": 1,
+   "discovered_via": "cdp:core-rtr",
+   "lldp_chassis_id": "00:11:22:33:44:10",
+   "interfaces": [
+    {
+     "index": 1,
+     "name": "Gi1/0/1",
+     "descr": "GigabitEthernet1/0/1",
+     "alias": "uplink core-rtr",
+     "mac": "00:11:22:33:44:11",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "10.0.0.2/30"
+     ]
+    },
+    {
+     "index": 2,
+     "name": "Gi1/0/2",
+     "descr": "GigabitEthernet1/0/2",
+     "alias": "to acc-sw2",
+     "mac": "00:11:22:33:44:12",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 5,
+     "name": "Gi1/0/5",
+     "descr": "GigabitEthernet1/0/5",
+     "alias": "srv-c",
+     "mac": "00:11:22:33:44:15",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 10,
+     "name": "Vlan10",
+     "descr": "Vlan10",
+     "alias": "",
+     "mac": "00:11:22:33:44:10",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "10.1.0.1/24"
+     ]
+    },
+    {
+     "index": 20,
+     "name": "Vlan20",
+     "descr": "Vlan20",
+     "alias": "",
+     "mac": "00:11:22:33:44:10",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "10.2.0.1/24"
+     ]
+    },
+    {
+     "index": 24,
+     "name": "Gi1/0/24",
+     "descr": "GigabitEthernet1/0/24",
+     "alias": "ap-1",
+     "mac": "00:11:22:33:44:1f",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 30,
+     "name": "Vlan30",
+     "descr": "Vlan30",
+     "alias": "",
+     "mac": "00:11:22:33:44:10",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "192.168.99.1/24"
+     ]
+    }
+   ],
+   "neighbors": [
+    {
+     "proto": "lldp",
+     "local_if_index": 2,
+     "local_port": "Gi1/0/2",
+     "remote_name": "acc-sw2",
+     "remote_port": "24",
+     "remote_chassis_id": "00:11:22:33:44:20",
+     "remote_mgmt_ips": [
+      "10.1.0.2"
+     ],
+     "remote_platform": "HP J9772A 2530-48G-PoEP Switch",
+     "remote_caps": "bridge"
+    },
+    {
+     "proto": "lldp",
+     "local_if_index": 24,
+     "local_port": "Gi1/0/24",
+     "remote_name": "ap-lobby",
+     "remote_port": "aa:bb:cc:00:00:01",
+     "remote_chassis_id": "aa:bb:cc:00:00:01",
+     "remote_mgmt_ips": [],
+     "remote_platform": "Ubiquiti UniFi AP U6-Pro",
+     "remote_caps": "wlan-ap"
+    },
+    {
+     "proto": "lldp",
+     "local_if_index": 30,
+     "local_port": "Vlan30",
+     "remote_name": "branch-fw",
+     "remote_port": "ge-0/0/0",
+     "remote_chassis_id": "00:11:22:33:44:99",
+     "remote_mgmt_ips": [
+      "192.168.99.2"
+     ],
+     "remote_platform": "Juniper SRX300",
+     "remote_caps": "router"
+    },
+    {
+     "proto": "cdp",
+     "local_if_index": 1,
+     "local_port": "Gi1/0/1",
+     "remote_name": "core-rtr.example.test",
+     "remote_port": "GigabitEthernet0/0/0",
+     "remote_chassis_id": "",
+     "remote_mgmt_ips": [
+      "10.0.0.1"
+     ],
+     "remote_platform": "cisco ISR4331/K9",
+     "remote_caps": "router,switch,igmp"
+    }
+   ],
+   "routes": [
+    {
+     "dest": "0.0.0.0/0",
+     "nexthop": "10.0.0.1",
+     "if_index": 1,
+     "proto": 3,
+     "type": 4
+    },
+    {
+     "dest": "10.1.0.0/24",
+     "nexthop": "0.0.0.0",
+     "if_index": 10,
+     "proto": 2,
+     "type": 3
+    },
+    {
+     "dest": "10.2.0.0/24",
+     "nexthop": "0.0.0.0",
+     "if_index": 20,
+     "proto": 2,
+     "type": 3
+    }
+   ],
+   "arp": [
+    {
+     "if_index": 1,
+     "ip": "10.0.0.1",
+     "mac": "00:11:22:33:44:01"
+    },
+    {
+     "if_index": 10,
+     "ip": "10.1.0.2",
+     "mac": "00:11:22:33:44:20"
+    },
+    {
+     "if_index": 10,
+     "ip": "10.1.0.50",
+     "mac": "de:ad:be:ef:00:0a"
+    },
+    {
+     "if_index": 10,
+     "ip": "10.1.0.51",
+     "mac": "de:ad:be:ef:00:0b"
+    },
+    {
+     "if_index": 10,
+     "ip": "10.1.0.60",
+     "mac": "aa:bb:cc:00:00:01"
+    },
+    {
+     "if_index": 10,
+     "ip": "10.1.0.90",
+     "mac": "aa:bb:cc:00:00:02"
+    },
+    {
+     "if_index": 20,
+     "ip": "10.2.0.10",
+     "mac": "de:ad:be:ef:00:0c"
+    },
+    {
+     "if_index": 30,
+     "ip": "192.168.99.7",
+     "mac": "de:ad:be:ef:99:07"
+    }
+   ],
+   "fdb": [
+    {
+     "mac": "00:11:22:33:44:20",
+     "if_index": 2,
+     "vlan": 10
+    },
+    {
+     "mac": "00:11:22:33:44:21",
+     "if_index": 2,
+     "vlan": 10
+    },
+    {
+     "mac": "00:11:22:33:44:22",
+     "if_index": 2,
+     "vlan": 10
+    },
+    {
+     "mac": "aa:bb:cc:00:00:01",
+     "if_index": 24,
+     "vlan": 10
+    },
+    {
+     "mac": "aa:bb:cc:00:00:02",
+     "if_index": 2,
+     "vlan": 10
+    },
+    {
+     "mac": "de:ad:be:ef:00:0a",
+     "if_index": 2,
+     "vlan": 10
+    },
+    {
+     "mac": "de:ad:be:ef:00:0b",
+     "if_index": 2,
+     "vlan": 10
+    },
+    {
+     "mac": "de:ad:be:ef:00:0c",
+     "if_index": 5,
+     "vlan": 20
+    }
+   ],
+   "vlans": {
+    "10": "USERS",
+    "20": "SERVERS",
+    "30": "BRANCH"
+   },
+   "ips": [
+    "10.0.0.2",
+    "10.1.0.1",
+    "10.2.0.1",
+    "192.168.99.1"
+   ],
+   "macs": [
+    "00:11:22:33:44:11",
+    "00:11:22:33:44:12",
+    "00:11:22:33:44:15",
+    "00:11:22:33:44:10",
+    "00:11:22:33:44:1f"
+   ],
+   "collected_at": 1790086032.4580371,
+   "collect_seconds": 0.0,
+   "errors": []
+  },
+  "10.1.0.2": {
+   "id": "10.1.0.2",
+   "name": "acc-sw2",
+   "sysdescr": "HP J9772A 2530-48G-PoEP Switch, revision YA.16.10.0016, ROM YA.15.20",
+   "sysobjectid": "1.3.6.1.4.1.11.2.3.7.11.155",
+   "location": "DC1",
+   "contact": "netops@example.test",
+   "uptime_s": 1234,
+   "services": 2,
+   "vendor": "HP",
+   "model": "J9772A",
+   "serial": "CN51ABC123",
+   "role": "switch",
+   "credential": "lab",
+   "depth": 2,
+   "discovered_via": "lldp:dist-sw1",
+   "lldp_chassis_id": "00:11:22:33:44:20",
+   "interfaces": [
+    {
+     "index": 1,
+     "name": "1",
+     "descr": "1",
+     "alias": "",
+     "mac": "00:11:22:33:55:01",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 2,
+     "name": "2",
+     "descr": "2",
+     "alias": "",
+     "mac": "00:11:22:33:55:02",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 3,
+     "name": "3",
+     "descr": "3",
+     "alias": "",
+     "mac": "00:11:22:33:55:03",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 4,
+     "name": "4",
+     "descr": "4",
+     "alias": "",
+     "mac": "00:11:22:33:55:04",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 24,
+     "name": "24",
+     "descr": "24",
+     "alias": "",
+     "mac": "00:11:22:33:55:18",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": []
+    },
+    {
+     "index": 100,
+     "name": "VLAN10",
+     "descr": "VLAN10",
+     "alias": "mgmt",
+     "mac": "00:11:22:33:44:20",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [
+      "10.1.0.2/24"
+     ]
+    }
+   ],
+   "neighbors": [
+    {
+     "proto": "lldp",
+     "local_if_index": null,
+     "local_port": "5",
+     "remote_name": "SEPAABBCC000002",
+     "remote_port": "aa:bb:cc:00:00:02",
+     "remote_chassis_id": "aa:bb:cc:00:00:02",
+     "remote_mgmt_ips": [
+      "10.1.0.90"
+     ],
+     "remote_platform": "Cisco IP Phone 8845",
+     "remote_caps": "telephone"
+    },
+    {
+     "proto": "lldp",
+     "local_if_index": 24,
+     "local_port": "24",
+     "remote_name": "dist-sw1",
+     "remote_port": "Gi1/0/2",
+     "remote_chassis_id": "00:11:22:33:44:10",
+     "remote_mgmt_ips": [
+      "10.1.0.1"
+     ],
+     "remote_platform": "Cisco IOS-XE 16.12.4",
+     "remote_caps": "wlan-ap,telephone"
+    }
+   ],
+   "routes": [],
+   "arp": [
+    {
+     "if_index": 100,
+     "ip": "10.1.0.1",
+     "mac": "00:11:22:33:44:10"
+    },
+    {
+     "if_index": 100,
+     "ip": "10.1.0.90",
+     "mac": "aa:bb:cc:00:00:02"
+    }
+   ],
+   "fdb": [
+    {
+     "mac": "00:11:22:33:44:10",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:00",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:01",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:02",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:03",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:04",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:05",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:06",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:07",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:08",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:09",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:0a",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "00:11:22:33:66:0b",
+     "if_index": 24,
+     "vlan": null
+    },
+    {
+     "mac": "aa:bb:cc:00:00:02",
+     "if_index": 5,
+     "vlan": null
+    },
+    {
+     "mac": "de:ad:be:ef:00:0a",
+     "if_index": 3,
+     "vlan": null
+    },
+    {
+     "mac": "de:ad:be:ef:00:0b",
+     "if_index": 4,
+     "vlan": null
+    },
+    {
+     "mac": "de:ad:be:ef:00:0c",
+     "if_index": 24,
+     "vlan": null
+    }
+   ],
+   "vlans": {},
+   "ips": [
+    "10.1.0.2"
+   ],
+   "macs": [
+    "00:11:22:33:55:01",
+    "00:11:22:33:55:02",
+    "00:11:22:33:55:03",
+    "00:11:22:33:55:04",
+    "00:11:22:33:55:18",
+    "00:11:22:33:44:20"
+   ],
+   "collected_at": 1790086032.4587684,
+   "collect_seconds": 0.0,
+   "errors": []
+  }
+ },
+ "hosts": {
+  "10.0.0.2": {
+   "ip": "10.0.0.2",
+   "mac": "00:11:22:33:44:10",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.1",
+     "interface": "Gi0/0/0",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": false
+  },
+  "10.0.0.1": {
+   "ip": "10.0.0.1",
+   "mac": "00:11:22:33:44:01",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Gi1/0/1",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": false
+  },
+  "10.1.0.2": {
+   "ip": "10.1.0.2",
+   "mac": "00:11:22:33:44:20",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Vlan10",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": false
+  },
+  "10.1.0.50": {
+   "ip": "10.1.0.50",
+   "mac": "de:ad:be:ef:00:0a",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Vlan10",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": false
+  },
+  "10.1.0.51": {
+   "ip": "10.1.0.51",
+   "mac": "de:ad:be:ef:00:0b",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Vlan10",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": false
+  },
+  "10.1.0.60": {
+   "ip": "10.1.0.60",
+   "mac": "aa:bb:cc:00:00:01",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp",
+    "lldp-mac"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Vlan10",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": true
+  },
+  "10.1.0.90": {
+   "ip": "10.1.0.90",
+   "mac": "aa:bb:cc:00:00:02",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp",
+    "lldp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Vlan10",
+     "vlan": null,
+     "via": "arp"
+    },
+    {
+     "device": "10.1.0.2",
+     "interface": "VLAN10",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": true
+  },
+  "10.2.0.10": {
+   "ip": "10.2.0.10",
+   "mac": "de:ad:be:ef:00:0c",
+   "hostname": "srv-files",
+   "vendor": "Dell Inc.",
+   "role": "windows",
+   "sources": [
+    "arp",
+    "sweep"
+   ],
+   "seen_on": [
+    {
+     "device": "10.0.0.2",
+     "interface": "Vlan20",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [
+    {
+     "port": 445,
+     "proto": "tcp",
+     "service": "microsoft-ds",
+     "product": "Windows Server 2019"
+    },
+    {
+     "port": 3389,
+     "proto": "tcp",
+     "service": "ms-wbt-server",
+     "product": ""
+    }
+   ],
+   "snmp_failed": false
+  },
+  "10.1.0.1": {
+   "ip": "10.1.0.1",
+   "mac": "00:11:22:33:44:10",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
+   "sources": [
+    "arp"
+   ],
+   "seen_on": [
+    {
+     "device": "10.1.0.2",
+     "interface": "VLAN10",
+     "vlan": null,
+     "via": "arp"
+    }
+   ],
+   "ports": [],
+   "snmp_failed": false
+  }
+ },
+ "subnets": {
+  "10.0.0.0/30": {
+   "cidr": "10.0.0.0/30",
+   "sources": [
+    "device"
+   ],
+   "gateways": [],
+   "vlan": null,
+   "swept": false
+  },
+  "203.0.113.0/30": {
+   "cidr": "203.0.113.0/30",
+   "sources": [
+    "device"
+   ],
+   "gateways": [],
+   "vlan": null,
+   "swept": false
+  },
+  "10.1.0.0/24": {
+   "cidr": "10.1.0.0/24",
+   "sources": [
+    "device"
+   ],
+   "gateways": [],
+   "vlan": null,
+   "swept": false
+  },
+  "10.2.0.0/24": {
+   "cidr": "10.2.0.0/24",
+   "sources": [
+    "device"
+   ],
+   "gateways": [],
+   "vlan": null,
+   "swept": false
+  },
+  "192.168.99.0/24": {
+   "cidr": "192.168.99.0/24",
+   "sources": [
+    "device"
+   ],
+   "gateways": [],
+   "vlan": null,
+   "swept": false
+  }
+ },
+ "unreachable": {
+  "10.1.0.254": "gateway:10.1.0.0/24",
+  "10.2.0.254": "gateway:10.2.0.0/24",
+  "10.1.0.90": "lldp:acc-sw2",
+  "10.1.0.60": "lldp-mac:dist-sw1"
+ }
+}

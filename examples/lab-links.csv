@@ -1,0 +1,6 @@
+a,a_name,a_port,b,b_name,b_port,kind,detail
+10.0.0.1,core-rtr,Gi0/0/0,10.0.0.2,dist-sw1,GigabitEthernet1/0/1,cdp,Gi0/0/0 - GigabitEthernet1/0/1
+10.0.0.2,dist-sw1,Gi1/0/2,10.1.0.2,acc-sw2,24,lldp,Gi1/0/2 - 24
+10.0.0.2,dist-sw1,Gi1/0/24,10.1.0.60,ap-lobby,aa:bb:cc:00:00:01,lldp,Gi1/0/24 - aa:bb:cc:00:00:01
+10.0.0.2,dist-sw1,Vlan30,stub:branch-fw,branch-fw,ge-0/0/0,lldp,Vlan30 - ge-0/0/0
+10.1.0.2,acc-sw2,5,10.1.0.90,SEPAABBCC000002,aa:bb:cc:00:00:02,lldp,5 - aa:bb:cc:00:00:02

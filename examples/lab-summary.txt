@@ -1,0 +1,27 @@
+== 3 devices, 9 hosts, 5 subnets, 4 addresses without SNMP ==
+
+Devices by role:   router=1, l3switch=1, switch=1
+Devices by vendor: Cisco=2, HP=1
+Edges:             member=12, lldp=4, fdb=3, cdp=1
+
+IP               NAME                         ROLE       VENDOR         MODEL                  DEPTH VIA
+10.0.0.1         core-rtr                     router     Cisco          ISR4331/K9             0     seed
+10.0.0.2         dist-sw1                     l3switch   Cisco          WS-C3850-24T           1     cdp:core-rtr
+10.1.0.2         acc-sw2                      switch     HP             J9772A                 2     lldp:dist-sw1
+
+Seen via LLDP/CDP but not polled (1):
+  branch-fw  ip=192.168.99.2  chassis=00:11:22:33:44:99  Juniper SRX300
+
+Links (L2/L3):
+  core-rtr                     Gi0/0/0                <-cdp -> dist-sw1                     GigabitEthernet1/0/1
+  dist-sw1                     Gi1/0/2                <-lldp-> acc-sw2                      24
+  dist-sw1                     Gi1/0/24               <-lldp-> ap-lobby                     aa:bb:cc:00:00:01
+  dist-sw1                     Vlan30                 <-lldp-> branch-fw                    ge-0/0/0
+  acc-sw2                      5                      <-lldp-> SEPAABBCC000002              aa:bb:cc:00:00:02
+
+Subnets:
+  10.0.0.0/30          gw: core-rtr, dist-sw1                       hosts: 0
+  10.1.0.0/24          gw: dist-sw1, acc-sw2                        hosts: 4
+  10.2.0.0/24          gw: dist-sw1                                 hosts: 1
+  192.168.99.0/24      gw: dist-sw1                                 hosts: 0
+  203.0.113.0/30       gw: core-rtr                                 hosts: 0

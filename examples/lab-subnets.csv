@@ -1,0 +1,6 @@
+cidr,size,gateways,hosts_seen,sources,swept
+10.0.0.0/30,4,core-rtr dist-sw1,0,device,False
+10.1.0.0/24,256,dist-sw1 acc-sw2,4,device,False
+10.2.0.0/24,256,dist-sw1,1,device,False
+192.168.99.0/24,256,dist-sw1,0,device,False
+203.0.113.0/30,4,core-rtr,0,device,False

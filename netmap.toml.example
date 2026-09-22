@@ -1,0 +1,28 @@
+# netmap configuration. Copy to netmap.toml and run:  netmap crawl -c netmap.toml
+# CLI flags override values here. Secrets may be given as "env:VARNAME".
+
+[crawl]
+seeds = ["10.10.0.1", "10.10.0.2"]        # core routers / distribution switches of the target network
+scope = ["10.10.0.0/16", "172.20.0.0/14"]  # only addresses inside these ranges are ever probed
+exclude = ["10.10.250.0/24"]               # never touch (e.g. OT/ICS, medical, partner links)
+max_depth = 6          # hops from a seed to follow via LLDP/CDP/next-hop
+workers = 12           # devices polled in parallel
+timeout = 2.0          # SNMP timeout (seconds)
+retries = 1
+probe_hosts = false    # also try SNMP on every ARP-learned IP (finds APs, printers, servers; slower)
+cisco_vlan_fdb = false # walk Cisco IOS per-VLAN bridge tables (community@vlan); needed for host->port on older IOS
+
+# Credentials are tried in order for every device; the first that answers wins.
+[[credentials]]
+kind = "v3"
+label = "acquired-co-ro"
+user = "netmap-ro"
+auth = "SHA256"                 # MD5 SHA SHA224 SHA256 SHA384 SHA512
+auth_key = "env:NETMAP_AUTH"
+priv = "AES256"                 # DES 3DES AES AES192 AES256
+priv_key = "env:NETMAP_PRIV"
+
+[[credentials]]
+kind = "v2c"
+label = "legacy-ro"
+community = "env:NETMAP_COMMUNITY"
