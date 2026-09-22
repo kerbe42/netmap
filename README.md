@@ -42,11 +42,13 @@ Requires Python 3.11+. Dependencies: `pysnmp`, `cryptography` (SNMPv3 privacy), 
 1. Install Python 3.11+ from https://www.python.org/downloads/windows/ and tick **Add python.exe to PATH**.
 2. Install Nmap for Windows from https://nmap.org/download.html (accept the bundled **Npcap** installer;
    it is what lets nmap do ARP/ICMP sweeps). Optional, but `--sweep` needs it.
-3. Copy the `netmap` folder (or just `dist/netmap-*.whl` plus `netmap.toml.example`) to the PC, then in
-   PowerShell:
+3. Copy the `netmap` folder (or just `dist/netmap-*.whl` plus `netmap.toml.example`) to the PC. The
+   release `netmap-src.zip` unpacks into its own `netmap\` folder, so extracting it to `C:\netmap` puts
+   the project at `C:\netmap\netmap`. Run the steps below from the folder that contains `pyproject.toml`
+   (if pip says "neither setup.py nor pyproject.toml found", you are one level too high). Then in PowerShell:
 
 ```powershell
-cd C:\path\to\netmap
+cd C:\netmap\netmap                     # the folder with pyproject.toml in it
 py -m venv .venv
 .venv\Scripts\pip install -e .          # or: .venv\Scripts\pip install dist\netmap-0.1.0-py3-none-any.whl
 $env:NETMAP_COMMUNITY = 'their-ro-string'
