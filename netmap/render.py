@@ -6,12 +6,14 @@ import os
 import time
 
 from .graph import graph_to_dict
+from .util import resource_path
 
 ROLE_COLORS = {
     "router": "#e07a2f", "l3switch": "#d9a521", "switch": "#3b82f6", "firewall": "#dc2626", "wireless": "#8b5cf6",
     "server": "#10b981", "printer": "#a16207", "unpolled": "#6b7280", "unknown": "#9ca3af",
     "host": "#94a3b8", "workstation": "#94a3b8", "windows": "#38bdf8", "phone": "#c084fc", "camera": "#fb7185",
     "vm": "#34d399", "database": "#facc15", "subnet": "#334155",
+    "nas": "#0ea5e9", "ups": "#f59e0b",
 }
 
 TEMPLATE = r"""<!doctype html>
@@ -113,7 +115,7 @@ net.once('stabilizationIterationsDone', ()=>net.fit());
 """
 
 
-VENDOR_JS = os.path.join(os.path.dirname(__file__), "vendor", "vis-network.min.js")
+VENDOR_JS = resource_path("vendor", "vis-network.min.js")
 CDN_TAG = '<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/dist/vis-network.min.js"></script>'
 
 

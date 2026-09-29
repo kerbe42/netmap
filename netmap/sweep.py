@@ -42,17 +42,41 @@ def ping_args(ip: str) -> list[str]:
     return ["ping", "-c", "1", "-W", "1", ip]
 
 
+# Device families worth separating in an asset inventory, matched on the MAC's OUI
+# organization. Open ports win where they are decisive; the OUI is often all a host gives us.
+VENDOR_ROLES = [
+    ("printer", ("hp inc", "hewlett", "xerox", "ricoh", "kyocera", "brother", "canon", "lexmark", "zebra", "sato corp", "epson", "oki electric", "sharp corp", "konica", "toshiba tec")),
+    ("phone", ("polycom", "yealink", "grandstream", "snom", "avaya", "mitel", "audiocodes", "unify")),
+    ("camera", ("axis communication", "hikvision", "dahua", "hanwha", "mobotix", "vivotek", "bosch security", "uniview", "verkada")),
+    ("ups", ("american power conversion", "apc by", "eaton", "tripp lite", "vertiv", "schneider electric", "riello", "socomec")),
+    ("nas", ("synology", "qnap", "netapp", "buffalo.inc", "western digital", "drobo", "terra master")),
+    ("wireless", ("aerohive", "ruckus", "extreme networks wireless")),
+    ("vm", ("vmware", "xensource", "microsoft corp", "nutanix", "proxmox", "qemu", "parallels", "oracle virtual")),
+    ("workstation", ("apple", "samsung", "intel", "dell", "lenovo", "asus", "raspberry", "micro-star", "gigabyte", "hon hai", "wistron", "compal")),
+]
+
+
 def classify_host(ports: list[dict], vendor: str, hostname: str) -> str:
     ps = {p["port"] for p in ports}
     v = (vendor or "").lower()
-    if {9100, 631} & ps or any(k in v for k in ("hp inc", "hewlett", "xerox", "ricoh", "kyocera", "brother", "canon", "lexmark")):
+
+    def vendor_role() -> str:
+        for role, keys in VENDOR_ROLES:
+            if any(k in v for k in keys):
+                return role
+        return ""
+
+    vr = vendor_role()
+    if {9100, 631, 515} & ps or vr == "printer":
         return "printer"
-    if 5060 in ps or any(k in v for k in ("polycom", "yealink", "grandstream", "snom", "avaya")):
+    if 5060 in ps or vr == "phone":
         return "phone"
-    if {554, 8554} & ps or any(k in v for k in ("axis", "hikvision", "dahua", "hanwha")):
+    if {554, 8554} & ps or vr == "camera":
         return "camera"
-    if any(k in v for k in ("vmware", "xensource", "microsoft corp", "nutanix", "proxmox", "qemu")):
-        return "vm"
+    if vr in ("ups", "nas", "wireless", "vm"):
+        return vr
+    if {5000, 5001, 2049} & ps and {445, 139} & ps:
+        return "nas"
     if {3389, 445, 135} & ps and not (22 in ps):
         return "windows"
     if {3306, 5432, 1433, 1521, 27017, 6379} & ps:
@@ -61,8 +85,8 @@ def classify_host(ports: list[dict], vendor: str, hostname: str) -> str:
         return "server"
     if 22 in ps:
         return "server"
-    if any(k in v for k in ("apple", "samsung", "intel", "dell", "lenovo", "asus", "raspberry")):
-        return "workstation"
+    if vr:
+        return vr
     return "host"
 
 
@@ -151,6 +175,75 @@ async def sweep_subnet(cidr: str, fingerprint: bool = False, nmap_timeout: float
     sem = asyncio.Semaphore(128)
     results = await asyncio.gather(*[_ping(str(ip), sem) for ip in net.hosts()])
     return [{"ip": ip, "mac": None, "vendor": "", "hostname": "", "ports": []} for ip in results if ip]
+
+
+async def discover_targets(
+    inv: Inventory,
+    targets: list,
+    scope: list,
+    exclude: list,
+    fingerprint: bool = False,
+    probe_all: bool = False,
+    max_prefix: int = 22,
+    parallel: int = 4,
+) -> list[str]:
+    """Find candidate addresses inside the subnets the operator asked for.
+
+    Returns the addresses worth trying SNMP against. With `probe_all` every usable
+    address in each target is returned without pinging first, for networks that drop
+    ICMP but permit SNMP; otherwise a ping sweep decides, and whatever answers is also
+    recorded as a host (MAC, vendor, open ports) so non-SNMP kit still shows up.
+    """
+    nets = []
+    for t in targets:
+        net = ipaddress.ip_network(str(t), strict=False)
+        if not in_scope(str(net.network_address + 1), scope, exclude) and net.prefixlen < 32:
+            log.warning("target %s is outside the scope/exclude rules; skipping", net)
+            continue
+        nets.append(net)
+        inv.add_subnet(str(net), "target")
+    if not nets:
+        return []
+
+    if probe_all:
+        ips = []
+        for net in nets:
+            hosts = list(net.hosts()) if net.prefixlen < 31 else [net.network_address]
+            if net.prefixlen < max_prefix:
+                log.warning("target %s is larger than /%d; --probe-all would send %d probes, skipping", net, max_prefix, len(hosts))
+                continue
+            ips += [str(ip) for ip in hosts if in_scope(str(ip), scope, exclude)]
+        log.info("targets: %d addresses queued for SNMP (no ping first)", len(ips))
+        return ips
+
+    log.info("discovering live addresses in %d target subnet(s)%s", len(nets), " with fingerprinting" if fingerprint else "")
+    sem = asyncio.Semaphore(parallel)
+    live: list[str] = []
+
+    async def one(net):
+        if net.prefixlen < max_prefix:
+            log.info("skipping target %s: larger than /%d (raise --sweep-max-size to include)", net, max_prefix)
+            return
+        async with sem:
+            hosts = await sweep_subnet(str(net), fingerprint=fingerprint)
+        for rec in hosts:
+            if not in_scope(rec["ip"], scope, exclude):
+                continue
+            h = inv.touch_host(rec["ip"], "sweep", rec["mac"])
+            if rec["hostname"] and not h.hostname:
+                h.hostname = rec["hostname"]
+            if rec["vendor"] and not h.vendor:
+                h.vendor = rec["vendor"]
+            if rec["ports"]:
+                h.ports = rec["ports"]
+            h.role = classify_host(h.ports, h.vendor, h.hostname)
+            live.append(rec["ip"])
+        inv.subnets[str(net)].swept = True
+        log.info("target %s: %d addresses responded", net, len(hosts))
+
+    await asyncio.gather(*[one(n) for n in nets])
+    log.info("targets: %d live addresses queued for SNMP", len(live))
+    return live
 
 
 async def sweep(inv: Inventory, subnets: list[str], scope: list, exclude: list, fingerprint: bool = False, max_prefix: int = 22, parallel: int = 4, resweep: bool = False) -> int:

@@ -2,8 +2,17 @@
 # CLI flags override values here. Secrets may be given as "env:VARNAME".
 
 [crawl]
+# Two ways to point netmap at a network; use either or both.
+#  1. seeds:   spider outwards from a device you were given (LLDP/CDP/next-hops).
+#  2. targets: inventory the subnets you were told to look at, address by address.
 seeds = ["10.10.0.1", "10.10.0.2"]        # core routers / distribution switches of the target network
-scope = ["10.10.0.0/16", "172.20.0.0/14"]  # only addresses inside these ranges are ever probed
+targets = ["10.10.20.0/24", "10.10.30.0/24"]  # subnets to inventory directly; also become the scope
+target_files = ["ranges.txt"]              # or read them from a file, one subnet per line
+probe_all = false      # try SNMP on every address in the targets instead of pinging first
+                       # (for networks that drop ICMP but permit SNMP)
+
+scope = ["10.10.0.0/16", "172.20.0.0/14"]  # only addresses inside these ranges are ever probed.
+                       # Omit it and the targets above are the scope, so nothing else is touched.
 exclude = ["10.10.250.0/24"]               # never touch (e.g. OT/ICS, medical, partner links)
 max_depth = 6          # hops from a seed to follow via LLDP/CDP/next-hop
 workers = 12           # devices polled in parallel

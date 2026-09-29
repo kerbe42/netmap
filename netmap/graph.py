@@ -11,7 +11,8 @@ from typing import Optional
 import networkx as nx
 
 from .model import Inventory
-from .util import short_name
+from .sweep import classify_host
+from .util import oui_vendor, short_name
 
 TRUNK_MAC_THRESHOLD = 8
 
@@ -31,7 +32,91 @@ def norm_port(name: str) -> str:
     return n  # a port with more MACs than this is treated as an uplink/trunk, not a host port
 
 
+def enrich_inventory(inv: Inventory) -> None:
+    """Fill in what can be derived offline, so a crawl without nmap still types its kit.
+
+    Every MAC we learned - from ARP, from a bridge table, from a sweep - carries the
+    organization that owns its OUI, which is often the only clue a host gives us.
+    """
+    for h in inv.hosts.values():
+        if not h.vendor and h.mac:
+            h.vendor = oui_vendor(h.mac)
+        if h.role in ("host", "", None):
+            h.role = classify_host(h.ports, h.vendor, h.hostname)
+    for d in inv.devices.values():
+        if not d.vendor:
+            for mac in [d.lldp_chassis_id, *d.macs]:
+                v = oui_vendor(mac)
+                if v:
+                    d.vendor = v
+                    break
+
+
+def ipam_rows(inv: Inventory) -> list[dict]:
+    """Per-subnet address accounting, the IPAM view of a crawl.
+
+    `used` counts addresses we actually saw in use (device interfaces, ARP/sweep hosts,
+    route gateways), so utilisation is evidence-based and reads low for a subnet that was
+    never swept. `swept` says whether to trust it.
+    """
+    rows = []
+    for cidr, s in inv.subnets.items():
+        net = ipaddress.ip_network(cidr)
+        usable = max(net.num_addresses - 2, 1) if net.prefixlen < 31 else net.num_addresses
+        seen: set[str] = set()
+        for ip in inv.ip_to_device:
+            try:
+                if ipaddress.ip_address(ip) in net:
+                    seen.add(ip)
+            except ValueError:
+                continue
+        for ip in inv.hosts:
+            try:
+                if ipaddress.ip_address(ip) in net:
+                    seen.add(ip)
+            except ValueError:
+                continue
+        vlans = set()
+        for d in inv.devices.values():
+            for i in d.interfaces:
+                if any(ipaddress.ip_network(x, strict=False) == net for x in i.ips):
+                    m = re.search(r"vlan\s*0*(\d+)", f"{i.name} {i.descr}", re.I)
+                    if m:
+                        vlans.add(int(m.group(1)))
+        if s.vlan:
+            vlans.add(s.vlan)
+        rows.append(
+            {
+                "cidr": cidr,
+                "size": net.num_addresses,
+                "usable": usable,
+                "used": len(seen),
+                "free": max(usable - len(seen), 0),
+                "utilisation_pct": round(100.0 * len(seen) / usable, 1),
+                "gateways": " ".join(inv.devices[g].name or g for g in s.gateways if g in inv.devices),
+                "vlan": " ".join(str(v) for v in sorted(vlans)),
+                "sources": " ".join(s.sources),
+                "swept": s.swept,
+            }
+        )
+    return sorted(rows, key=lambda r: ipaddress.ip_network(r["cidr"]))
+
+
+def vlan_rows(inv: Inventory) -> dict:
+    """VLAN id -> (names seen for it, devices that carry it). Names differ between switches
+    more often than anyone expects, so keep every spelling rather than picking one."""
+    out: dict[int, tuple[set, set]] = defaultdict(lambda: (set(), set()))
+    for d in inv.devices.values():
+        for vid, name in d.vlans.items():
+            names, devs = out[vid]
+            if name:
+                names.add(name)
+            devs.add(d.name or d.id)
+    return out
+
+
 def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: bool = True, fdb_links: bool = True) -> nx.MultiGraph:
+    enrich_inventory(inv)
     g = nx.MultiGraph()
     # --- device nodes ---
     for d in inv.devices.values():
@@ -301,6 +386,19 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
             hosts = sum(1 for ip in inv.hosts if ip not in inv.ip_to_device and ipaddress.ip_address(ip) in n)
             w.writerow([cidr, n.num_addresses, " ".join(inv.devices[gid].name or gid for gid in s.gateways if gid in inv.devices), hosts, " ".join(s.sources), s.swept])
     files.append(p)
+    p = f"{prefix}ipam.csv"
+    with open(p, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["cidr", "size", "usable", "used", "free", "utilisation_pct", "vlan", "gateways", "sources", "swept"])
+        w.writeheader()
+        w.writerows(ipam_rows(inv))
+    files.append(p)
+    p = f"{prefix}vlans.csv"
+    with open(p, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["vlan", "name", "devices", "device_names"])
+        for vid, (names, devs) in sorted(vlan_rows(inv).items()):
+            w.writerow([vid, " / ".join(sorted(names)), len(devs), " ".join(sorted(devs))])
+    files.append(p)
     p = f"{prefix}interfaces.csv"
     with open(p, "w", newline="") as f:
         w = csv.writer(f)
@@ -333,10 +431,15 @@ def text_summary(inv: Inventory, g: nx.MultiGraph) -> str:
     for u, v, a in g.edges(data=True):
         if a["kind"] in ("lldp", "cdp", "l3"):
             lines.append(f"  {g.nodes[u]['label']:28} {a.get('src_port',''):22} <-{a['kind']:4}-> {g.nodes[v]['label']:28} {a.get('dst_port','') or a.get('label','')}")
-    lines += ["", "Subnets:"]
-    for cidr, s in sorted(inv.subnets.items(), key=lambda kv: ipaddress.ip_network(kv[0])):
-        gws = ", ".join(inv.devices[x].name or x for x in s.gateways if x in inv.devices)
-        n = ipaddress.ip_network(cidr)
-        hosts = sum(1 for ip in inv.hosts if ip not in inv.ip_to_device and ipaddress.ip_address(ip) in n)
-        lines.append(f"  {cidr:20} gw: {gws or '-':40} hosts: {hosts}{'  (swept)' if s.swept else ''}")
+    vl = vlan_rows(inv)
+    if vl:
+        lines += ["", f"VLANs ({len(vl)}):"]
+        for vid, (names, devs) in sorted(vl.items()):
+            lines.append(f"  {vid:<6} {' / '.join(sorted(names))[:36]:36} on {len(devs)} device(s)")
+    lines += ["", f"{'SUBNET':20} {'USED':>6} {'FREE':>7} {'UTIL':>6} {'VLAN':6} GATEWAY"]
+    for r in ipam_rows(inv):
+        lines.append(
+            f"  {r['cidr']:18} {r['used']:>6} {r['free']:>7} {str(r['utilisation_pct']) + '%':>6} {r['vlan'][:6]:6} "
+            f"{r['gateways'][:40] or '-'}{'' if r['swept'] else '  (not swept)'}"
+        )
     return "\n".join(lines)

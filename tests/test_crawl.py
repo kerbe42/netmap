@@ -7,11 +7,12 @@ import tempfile
 import pytest
 
 from netmap.crawl import CrawlConfig, Crawler
-from netmap.graph import build_graph, export_csv, export_dot, export_graphml, text_summary
+from netmap.graph import build_graph, enrich_inventory, export_csv, export_dot, export_graphml, ipam_rows, text_summary, vlan_rows
 from netmap.model import Inventory
 from netmap.render import render_html
+from netmap.report import export_xlsx
 from netmap.snmp import Credential
-from netmap.util import mask_to_prefix, oid_suffix, short_name
+from netmap.util import in_scope, mask_to_prefix, oid_suffix, oui_vendor, short_name
 
 from . import labnet
 from .fake_snmp import make_prober
@@ -101,8 +102,11 @@ def test_graph_edges_and_exports(tmp_path):
     p = tmp_path / "m"
     render_html(g, str(p) + ".html"), export_graphml(g, str(p) + ".graphml"), export_dot(g, str(p) + ".dot")
     files = export_csv(inv, g, str(p) + "-")
-    assert (p.parent / "m.html").stat().st_size > 5000 and len(files) == 5
+    assert (p.parent / "m.html").stat().st_size > 5000 and len(files) == 7
     assert "acc-sw2" in (p.parent / "m-hosts.csv").read_text()  # host A placed on acc-sw2
+    assert "USERS" in (p.parent / "m-vlans.csv").read_text()
+    ipam = (p.parent / "m-ipam.csv").read_text()
+    assert "10.1.0.0/24" in ipam and "utilisation_pct" in ipam
     txt = text_summary(inv, g)
     assert "core-rtr" in txt and "branch-fw" in txt
     # round-trip persistence
@@ -110,6 +114,98 @@ def test_graph_edges_and_exports(tmp_path):
     inv2 = Inventory.load(str(p) + ".json")
     assert set(inv2.devices) == set(inv.devices) and inv2.devices["10.0.0.2"].vlans == inv.devices["10.0.0.2"].vlans
     assert len(build_graph(inv2).edges) == len(g.edges)
+
+
+def test_oui_vendor_and_enrichment():
+    # Bundled IEEE table: a MAC alone should name the organisation that owns the block.
+    assert oui_vendor("00:50:56:11:22:33") == "VMware"
+    assert oui_vendor("b8-27-eb-00-11-22").startswith("Raspberry Pi")
+    assert oui_vendor("005056112233") == "VMware"
+    assert oui_vendor("zz:zz") == "" and oui_vendor(None) == "" and oui_vendor("de:ad:be:ef:00:0a") == ""
+    # An ARP-only host has a MAC and nothing else; enrichment must still type it.
+    inv = Inventory()
+    inv.touch_host("10.9.9.9", "arp", "00:50:56:11:22:33")
+    enrich_inventory(inv)
+    h = inv.hosts["10.9.9.9"]
+    assert h.vendor == "VMware" and h.role == "vm"
+
+
+def test_ipam_and_vlan_rows():
+    inv, _, _ = crawl()
+    build_graph(inv)  # fills subnet gateways
+    rows = {r["cidr"]: r for r in ipam_rows(inv)}
+    users = rows["10.1.0.0/24"]
+    assert users["size"] == 256 and users["usable"] == 254
+    # SW1 (10.1.0.1, deduped onto 10.0.0.2), SW2 and the ARP/LLDP hosts all count as in use
+    assert users["used"] >= 4 and users["free"] == users["usable"] - users["used"]
+    assert 0 < users["utilisation_pct"] < 100 and users["swept"] is False
+    assert "dist-sw1" in users["gateways"]
+    p2p = rows["10.0.0.0/30"]
+    assert p2p["usable"] == 2 and p2p["used"] == 2 and p2p["utilisation_pct"] == 100.0
+    vl = vlan_rows(inv)
+    assert vl[10][0] == {"USERS"} and "dist-sw1" in vl[20][1]
+
+
+def test_xlsx_report(tmp_path):
+    from openpyxl import load_workbook
+
+    inv, _, _ = crawl()
+    g = build_graph(inv)
+    out = tmp_path / "acme.xlsx"
+    export_xlsx(inv, g, str(out))
+    wb = load_workbook(out)
+    assert wb.sheetnames == ["Summary", "Devices", "IPAM", "VLANs", "Links", "Hosts", "Interfaces", "Gaps"]
+    devices = list(wb["Devices"].values)
+    assert devices[0][0] == "IP" and any(r[1] == "core-rtr" for r in devices[1:])
+    assert any(r[0] == "10.0.0.0/30" for r in list(wb["IPAM"].values)[1:])
+    # the gaps sheet is the point of the pack: the firewall nobody gave us credentials for
+    assert any("branch-fw" in str(r[1]) for r in list(wb["Gaps"].values)[1:])
+    assert wb["Devices"].freeze_panes == "A2" and wb["Devices"].auto_filter.ref.startswith("A1:")
+
+
+def test_target_file_and_scope():
+    import tempfile
+
+    from netmap.cli import build_parser, read_target_file, scope_from, targets_from
+
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write("# ranges handed over by the target\n10.20.0.0/24\n10.21.0.0/24, 10.22.0.0/24\n\n192.168.5.10\nnot-a-subnet\n")
+        path = f.name
+    assert read_target_file(path) == ["10.20.0.0/24", "10.21.0.0/24", "10.22.0.0/24", "192.168.5.10/32"]
+    args = build_parser().parse_args(["crawl", "--target", "10.30.0.0/24", "--target-file", path])
+    targets = targets_from(args, {})
+    assert [str(t) for t in targets] == ["10.30.0.0/24", "10.20.0.0/24", "10.21.0.0/24", "10.22.0.0/24", "192.168.5.10/32"]
+    # no --scope: the targets are the scope, so nothing else is touched
+    scope, exclude = scope_from(args, {}, targets)
+    assert [str(s) for s in scope] == [str(t) for t in targets] and exclude == []
+    assert in_scope("10.30.0.5", scope, exclude) and not in_scope("10.31.0.5", scope, exclude)
+    # an explicit wider scope is kept, and a target outside it is still added rather than dropped
+    args2 = build_parser().parse_args(["crawl", "--target", "172.16.4.0/24", "--scope", "10.0.0.0/8", "--exclude", "10.30.0.0/24"])
+    t2 = targets_from(args2, {})
+    scope2, exclude2 = scope_from(args2, {}, t2)
+    assert [str(s) for s in scope2] == ["10.0.0.0/8", "172.16.4.0/24"]
+    assert in_scope("172.16.4.9", scope2, exclude2) and not in_scope("10.30.0.9", scope2, exclude2)
+    # config file can carry the same lists
+    t3 = targets_from(build_parser().parse_args(["crawl"]), {"crawl": {"targets": ["10.40.0.0/24"], "target_files": [path]}})
+    assert str(t3[0]) == "10.40.0.0/24" and len(t3) == 5
+    os.unlink(path)
+
+
+def test_probe_all_expands_targets_without_pinging():
+    import ipaddress as ia
+
+    from netmap.sweep import discover_targets
+
+    inv = Inventory()
+    scope = [ia.ip_network("10.50.0.0/24")]
+    ips = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [], probe_all=True, max_prefix=30))
+    assert ips == ["10.50.0.1", "10.50.0.2"]  # network and broadcast excluded
+    assert "10.50.0.0/30" in inv.subnets and "target" in inv.subnets["10.50.0.0/30"].sources
+    # a subnet wider than the guard is refused rather than turning into 65k probes
+    assert asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/24")], scope, [], probe_all=True, max_prefix=30)) == []
+    # exclusions win inside a target
+    ips2 = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [ia.ip_network("10.50.0.2/32")], probe_all=True, max_prefix=30))
+    assert ips2 == ["10.50.0.1"]
 
 
 def test_max_depth_and_resume(tmp_path):

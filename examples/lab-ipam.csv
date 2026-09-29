@@ -1,0 +1,6 @@
+cidr,size,usable,used,free,utilisation_pct,vlan,gateways,sources,swept
+10.0.0.0/30,4,2,2,0,100.0,,core-rtr dist-sw1,device,False
+10.1.0.0/24,256,254,6,248,2.4,10,dist-sw1 acc-sw2,device,False
+10.2.0.0/24,256,254,2,252,0.8,20,dist-sw1,device,False
+192.168.99.0/24,256,254,1,253,0.4,30,dist-sw1,device,False
+203.0.113.0/30,4,2,1,1,50.0,,core-rtr,device,False

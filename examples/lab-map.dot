@@ -1,0 +1,37 @@
+graph netmap {
+  overlap=false; splines=true; node [fontname=Helvetica, fontsize=9];
+  "10.0.0.1" [label="core-rtr\n10.0.0.1\nrouter", shape=box];
+  "10.0.0.2" [label="dist-sw1\n10.0.0.2\nl3switch", shape=box];
+  "10.1.0.2" [label="acc-sw2\n10.1.0.2\nswitch", shape=box];
+  "10.1.0.50" [label="10.1.0.50", shape=ellipse];
+  "10.1.0.51" [label="10.1.0.51", shape=ellipse];
+  "10.1.0.60" [label="ap-lobby", shape=ellipse];
+  "10.1.0.90" [label="SEPAABBCC000002", shape=ellipse];
+  "10.2.0.10" [label="srv-files", shape=ellipse];
+  "stub:branch-fw" [label="branch-fw\n192.168.99.2\nunpolled", shape=box];
+  "10.0.0.0/30" [label="10.0.0.0/30", shape=hexagon];
+  "203.0.113.0/30" [label="203.0.113.0/30", shape=hexagon];
+  "10.1.0.0/24" [label="10.1.0.0/24", shape=hexagon];
+  "10.2.0.0/24" [label="10.2.0.0/24", shape=hexagon];
+  "192.168.99.0/24" [label="192.168.99.0/24", shape=hexagon];
+  "10.0.0.1" -- "10.0.0.2" [label="Gi0/0/0 - GigabitEthernet1/0/1", style=solid];
+  "10.0.0.1" -- "10.0.0.0/30" [label="Gi0/0/0 10.0.0.1/30", style=dotted];
+  "10.0.0.1" -- "203.0.113.0/30" [label="Gi0/0/1 203.0.113.2/30", style=dotted];
+  "10.0.0.2" -- "10.1.0.2" [label="Gi1/0/2 - 24", style=solid];
+  "10.0.0.2" -- "10.1.0.60" [label="Gi1/0/24 - aa:bb:cc:00:00:01", style=solid];
+  "10.0.0.2" -- "stub:branch-fw" [label="Vlan30 - ge-0/0/0", style=solid];
+  "10.0.0.2" -- "10.0.0.0/30" [label="Gi1/0/1 10.0.0.2/30", style=dotted];
+  "10.0.0.2" -- "10.1.0.0/24" [label="Vlan10 10.1.0.1/24", style=dotted];
+  "10.0.0.2" -- "10.2.0.0/24" [label="Vlan20 10.2.0.1/24", style=dotted];
+  "10.0.0.2" -- "192.168.99.0/24" [label="Vlan30 192.168.99.1/24", style=dotted];
+  "10.0.0.2" -- "10.2.0.10" [label="Gi1/0/5", style=dotted];
+  "10.1.0.2" -- "10.1.0.90" [label="5 - aa:bb:cc:00:00:02", style=solid];
+  "10.1.0.2" -- "10.1.0.0/24" [label="VLAN10 10.1.0.2/24", style=dotted];
+  "10.1.0.2" -- "10.1.0.50" [label="3", style=dotted];
+  "10.1.0.2" -- "10.1.0.51" [label="4", style=dotted];
+  "10.1.0.50" -- "10.1.0.0/24" [label="", style=dotted];
+  "10.1.0.51" -- "10.1.0.0/24" [label="", style=dotted];
+  "10.1.0.60" -- "10.1.0.0/24" [label="", style=dotted];
+  "10.1.0.90" -- "10.1.0.0/24" [label="", style=dotted];
+  "10.2.0.10" -- "10.2.0.0/24" [label="", style=dotted];
+}

@@ -1,7 +1,16 @@
 import ipaddress
 import os
+import sys
 import re
 from typing import Iterable, Optional
+
+
+def resource_path(*parts: str) -> str:
+    """Path to a bundled data file, working both from source and from a PyInstaller
+    one-file binary (where data lives under sys._MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "netmap", *parts)
+    return os.path.join(os.path.dirname(__file__), *parts)
 
 RFC1918 = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
 ALWAYS_EXCLUDED = [
@@ -86,6 +95,36 @@ def short_name(name: str) -> str:
     n = (name or "").strip().lower()
     n = re.sub(r"\(.*?\)$", "", n)
     return n.split(".")[0] if n and not re.match(r"^\d+\.\d+\.\d+\.\d+$", n) else n
+
+
+_OUI: Optional[dict] = None
+
+
+def _load_oui() -> dict:
+    global _OUI
+    if _OUI is None:
+        _OUI = {}
+        path = resource_path("data", "oui.tsv")
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("#") or "\t" not in line:
+                        continue
+                    prefix, vendor = line.rstrip("\n").split("\t", 1)
+                    _OUI[prefix.upper()] = vendor
+        except OSError:
+            pass
+    return _OUI
+
+
+def oui_vendor(mac: Optional[str]) -> str:
+    """Organization that owns a MAC address's OUI, from the bundled IEEE table. '' if unknown."""
+    if not mac:
+        return ""
+    hexs = re.sub(r"[^0-9a-fA-F]", "", mac).upper()
+    if len(hexs) < 6:
+        return ""
+    return _load_oui().get(hexs[:6], "")
 
 
 def enterprise_from_sysobjectid(soid: str) -> Optional[int]:

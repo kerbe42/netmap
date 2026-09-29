@@ -1,0 +1,301 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d30" for="edge" attr.name="vlan" attr.type="long" />
+  <key id="d29" for="edge" attr.name="addr" attr.type="string" />
+  <key id="d28" for="edge" attr.name="port" attr.type="string" />
+  <key id="d27" for="edge" attr.name="label" attr.type="string" />
+  <key id="d26" for="edge" attr.name="dst_port" attr.type="string" />
+  <key id="d25" for="edge" attr.name="src_port" attr.type="string" />
+  <key id="d24" for="edge" attr.name="kind" attr.type="string" />
+  <key id="d23" for="node" attr.name="swept" attr.type="boolean" />
+  <key id="d22" for="node" attr.name="cidr" attr.type="string" />
+  <key id="d21" for="node" attr.name="caps" attr.type="string" />
+  <key id="d20" for="node" attr.name="chassis_id" attr.type="string" />
+  <key id="d19" for="node" attr.name="snmp_failed" attr.type="boolean" />
+  <key id="d18" for="node" attr.name="ports" attr.type="string" />
+  <key id="d17" for="node" attr.name="sources" attr.type="string" />
+  <key id="d16" for="node" attr.name="hostname" attr.type="string" />
+  <key id="d15" for="node" attr.name="mac" attr.type="string" />
+  <key id="d14" for="node" attr.name="errors" attr.type="long" />
+  <key id="d13" for="node" attr.name="vlans" attr.type="long" />
+  <key id="d12" for="node" attr.name="interfaces" attr.type="long" />
+  <key id="d11" for="node" attr.name="via" attr.type="string" />
+  <key id="d10" for="node" attr.name="depth" attr.type="long" />
+  <key id="d9" for="node" attr.name="location" attr.type="string" />
+  <key id="d8" for="node" attr.name="sysdescr" attr.type="string" />
+  <key id="d7" for="node" attr.name="serial" attr.type="string" />
+  <key id="d6" for="node" attr.name="model" attr.type="string" />
+  <key id="d5" for="node" attr.name="vendor" attr.type="string" />
+  <key id="d4" for="node" attr.name="role" attr.type="string" />
+  <key id="d3" for="node" attr.name="ips" attr.type="string" />
+  <key id="d2" for="node" attr.name="ip" attr.type="string" />
+  <key id="d1" for="node" attr.name="label" attr.type="string" />
+  <key id="d0" for="node" attr.name="kind" attr.type="string" />
+  <graph edgedefault="undirected">
+    <node id="10.0.0.1">
+      <data key="d0">device</data>
+      <data key="d1">core-rtr</data>
+      <data key="d2">10.0.0.1</data>
+      <data key="d3">["10.0.0.1", "203.0.113.2"]</data>
+      <data key="d4">router</data>
+      <data key="d5">Cisco</data>
+      <data key="d6">ISR4331/K9</data>
+      <data key="d7">FDO2222R1XX</data>
+      <data key="d8">Cisco IOS Software, ISR4300 Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.6.4</data>
+      <data key="d9">DC1</data>
+      <data key="d10">0</data>
+      <data key="d11">seed</data>
+      <data key="d12">2</data>
+      <data key="d13">0</data>
+      <data key="d14">0</data>
+    </node>
+    <node id="10.0.0.2">
+      <data key="d0">device</data>
+      <data key="d1">dist-sw1</data>
+      <data key="d2">10.0.0.2</data>
+      <data key="d3">["10.0.0.2", "10.1.0.1", "10.2.0.1", "192.168.99.1"]</data>
+      <data key="d4">l3switch</data>
+      <data key="d5">Cisco</data>
+      <data key="d6">WS-C3850-24T</data>
+      <data key="d7">FOC1234SW1X</data>
+      <data key="d8">Cisco IOS Software, IOS-XE Software, Catalyst L3 Switch Software (CAT3K_CAA-UNIVERSALK9-M), Version 16.12.4</data>
+      <data key="d9">DC1</data>
+      <data key="d10">1</data>
+      <data key="d11">cdp:core-rtr</data>
+      <data key="d12">7</data>
+      <data key="d13">3</data>
+      <data key="d14">0</data>
+    </node>
+    <node id="10.1.0.2">
+      <data key="d0">device</data>
+      <data key="d1">acc-sw2</data>
+      <data key="d2">10.1.0.2</data>
+      <data key="d3">["10.1.0.2"]</data>
+      <data key="d4">switch</data>
+      <data key="d5">HP</data>
+      <data key="d6">J9772A</data>
+      <data key="d7">CN51ABC123</data>
+      <data key="d8">HP J9772A 2530-48G-PoEP Switch, revision YA.16.10.0016, ROM YA.15.20</data>
+      <data key="d9">DC1</data>
+      <data key="d10">2</data>
+      <data key="d11">lldp:dist-sw1</data>
+      <data key="d12">6</data>
+      <data key="d13">0</data>
+      <data key="d14">0</data>
+    </node>
+    <node id="10.1.0.50">
+      <data key="d0">host</data>
+      <data key="d1">10.1.0.50</data>
+      <data key="d2">10.1.0.50</data>
+      <data key="d15">de:ad:be:ef:00:0a</data>
+      <data key="d5" />
+      <data key="d16" />
+      <data key="d4">host</data>
+      <data key="d17">["arp"]</data>
+      <data key="d18">[]</data>
+      <data key="d19">False</data>
+    </node>
+    <node id="10.1.0.51">
+      <data key="d0">host</data>
+      <data key="d1">10.1.0.51</data>
+      <data key="d2">10.1.0.51</data>
+      <data key="d15">de:ad:be:ef:00:0b</data>
+      <data key="d5" />
+      <data key="d16" />
+      <data key="d4">host</data>
+      <data key="d17">["arp"]</data>
+      <data key="d18">[]</data>
+      <data key="d19">False</data>
+    </node>
+    <node id="10.1.0.60">
+      <data key="d0">host</data>
+      <data key="d1">ap-lobby</data>
+      <data key="d2">10.1.0.60</data>
+      <data key="d15">aa:bb:cc:00:00:01</data>
+      <data key="d5">Ubiquiti UniFi AP U6-Pro</data>
+      <data key="d16">ap-lobby</data>
+      <data key="d4">wireless</data>
+      <data key="d17">["arp", "lldp-mac"]</data>
+      <data key="d18">[]</data>
+      <data key="d19">True</data>
+    </node>
+    <node id="10.1.0.90">
+      <data key="d0">host</data>
+      <data key="d1">SEPAABBCC000002</data>
+      <data key="d2">10.1.0.90</data>
+      <data key="d15">aa:bb:cc:00:00:02</data>
+      <data key="d5">Cisco IP Phone 8845</data>
+      <data key="d16">SEPAABBCC000002</data>
+      <data key="d4">phone</data>
+      <data key="d17">["arp", "lldp"]</data>
+      <data key="d18">[]</data>
+      <data key="d19">True</data>
+    </node>
+    <node id="10.2.0.10">
+      <data key="d0">host</data>
+      <data key="d1">srv-files</data>
+      <data key="d2">10.2.0.10</data>
+      <data key="d15">de:ad:be:ef:00:0c</data>
+      <data key="d5">Dell Inc.</data>
+      <data key="d16">srv-files</data>
+      <data key="d4">windows</data>
+      <data key="d17">["arp", "sweep"]</data>
+      <data key="d18">["445/tcp microsoft-ds Windows Server 2019", "3389/tcp ms-wbt-server"]</data>
+      <data key="d19">False</data>
+    </node>
+    <node id="stub:branch-fw">
+      <data key="d0">device</data>
+      <data key="d1">branch-fw</data>
+      <data key="d2">192.168.99.2</data>
+      <data key="d3">["192.168.99.2"]</data>
+      <data key="d4">unpolled</data>
+      <data key="d5" />
+      <data key="d6">Juniper SRX300</data>
+      <data key="d20">00:11:22:33:44:99</data>
+      <data key="d21">router</data>
+    </node>
+    <node id="10.0.0.0/30">
+      <data key="d0">subnet</data>
+      <data key="d1">10.0.0.0/30</data>
+      <data key="d22">10.0.0.0/30</data>
+      <data key="d17">["device"]</data>
+      <data key="d23">False</data>
+    </node>
+    <node id="203.0.113.0/30">
+      <data key="d0">subnet</data>
+      <data key="d1">203.0.113.0/30</data>
+      <data key="d22">203.0.113.0/30</data>
+      <data key="d17">["device"]</data>
+      <data key="d23">False</data>
+    </node>
+    <node id="10.1.0.0/24">
+      <data key="d0">subnet</data>
+      <data key="d1">10.1.0.0/24</data>
+      <data key="d22">10.1.0.0/24</data>
+      <data key="d17">["device"]</data>
+      <data key="d23">False</data>
+    </node>
+    <node id="10.2.0.0/24">
+      <data key="d0">subnet</data>
+      <data key="d1">10.2.0.0/24</data>
+      <data key="d22">10.2.0.0/24</data>
+      <data key="d17">["device"]</data>
+      <data key="d23">False</data>
+    </node>
+    <node id="192.168.99.0/24">
+      <data key="d0">subnet</data>
+      <data key="d1">192.168.99.0/24</data>
+      <data key="d22">192.168.99.0/24</data>
+      <data key="d17">["device"]</data>
+      <data key="d23">False</data>
+    </node>
+    <edge source="10.0.0.1" target="10.0.0.2" id="0">
+      <data key="d24">cdp</data>
+      <data key="d25">Gi0/0/0</data>
+      <data key="d26">GigabitEthernet1/0/1</data>
+      <data key="d27">Gi0/0/0 - GigabitEthernet1/0/1</data>
+    </edge>
+    <edge source="10.0.0.1" target="10.0.0.0/30" id="0">
+      <data key="d24">member</data>
+      <data key="d27">Gi0/0/0 10.0.0.1/30</data>
+      <data key="d28">Gi0/0/0</data>
+      <data key="d29">10.0.0.1/30</data>
+    </edge>
+    <edge source="10.0.0.1" target="203.0.113.0/30" id="0">
+      <data key="d24">member</data>
+      <data key="d27">Gi0/0/1 203.0.113.2/30</data>
+      <data key="d28">Gi0/0/1</data>
+      <data key="d29">203.0.113.2/30</data>
+    </edge>
+    <edge source="10.0.0.2" target="10.1.0.2" id="0">
+      <data key="d24">lldp</data>
+      <data key="d25">Gi1/0/2</data>
+      <data key="d26">24</data>
+      <data key="d27">Gi1/0/2 - 24</data>
+    </edge>
+    <edge source="10.0.0.2" target="10.1.0.60" id="0">
+      <data key="d24">lldp</data>
+      <data key="d25">Gi1/0/24</data>
+      <data key="d26">aa:bb:cc:00:00:01</data>
+      <data key="d27">Gi1/0/24 - aa:bb:cc:00:00:01</data>
+    </edge>
+    <edge source="10.0.0.2" target="stub:branch-fw" id="0">
+      <data key="d24">lldp</data>
+      <data key="d25">Vlan30</data>
+      <data key="d26">ge-0/0/0</data>
+      <data key="d27">Vlan30 - ge-0/0/0</data>
+    </edge>
+    <edge source="10.0.0.2" target="10.0.0.0/30" id="0">
+      <data key="d24">member</data>
+      <data key="d27">Gi1/0/1 10.0.0.2/30</data>
+      <data key="d28">Gi1/0/1</data>
+      <data key="d29">10.0.0.2/30</data>
+    </edge>
+    <edge source="10.0.0.2" target="10.1.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27">Vlan10 10.1.0.1/24</data>
+      <data key="d28">Vlan10</data>
+      <data key="d29">10.1.0.1/24</data>
+    </edge>
+    <edge source="10.0.0.2" target="10.2.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27">Vlan20 10.2.0.1/24</data>
+      <data key="d28">Vlan20</data>
+      <data key="d29">10.2.0.1/24</data>
+    </edge>
+    <edge source="10.0.0.2" target="192.168.99.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27">Vlan30 192.168.99.1/24</data>
+      <data key="d28">Vlan30</data>
+      <data key="d29">192.168.99.1/24</data>
+    </edge>
+    <edge source="10.0.0.2" target="10.2.0.10" id="0">
+      <data key="d24">fdb</data>
+      <data key="d27">Gi1/0/5</data>
+      <data key="d28">Gi1/0/5</data>
+      <data key="d30">20</data>
+    </edge>
+    <edge source="10.1.0.2" target="10.1.0.90" id="0">
+      <data key="d24">lldp</data>
+      <data key="d25">5</data>
+      <data key="d26">aa:bb:cc:00:00:02</data>
+      <data key="d27">5 - aa:bb:cc:00:00:02</data>
+    </edge>
+    <edge source="10.1.0.2" target="10.1.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27">VLAN10 10.1.0.2/24</data>
+      <data key="d28">VLAN10</data>
+      <data key="d29">10.1.0.2/24</data>
+    </edge>
+    <edge source="10.1.0.2" target="10.1.0.50" id="0">
+      <data key="d24">fdb</data>
+      <data key="d27">3</data>
+      <data key="d28">3</data>
+    </edge>
+    <edge source="10.1.0.2" target="10.1.0.51" id="0">
+      <data key="d24">fdb</data>
+      <data key="d27">4</data>
+      <data key="d28">4</data>
+    </edge>
+    <edge source="10.1.0.50" target="10.1.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27" />
+    </edge>
+    <edge source="10.1.0.51" target="10.1.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27" />
+    </edge>
+    <edge source="10.1.0.60" target="10.1.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27" />
+    </edge>
+    <edge source="10.1.0.90" target="10.1.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27" />
+    </edge>
+    <edge source="10.2.0.10" target="10.2.0.0/24" id="0">
+      <data key="d24">member</data>
+      <data key="d27" />
+    </edge>
+  </graph>
+</graphml>

@@ -99,6 +99,34 @@ def test_cli_crawl_v2c(agents, tmp_path):
     assert r2.returncode == 0 and "Links (L2/L3)" in r2.stdout
 
 
+def test_cli_target_subnets_without_seeds(agents, tmp_path):
+    """The operator names the ranges and gives no seed: --probe-all finds the kit anyway.
+
+    --probe-all is the ICMP-filtered case, so this also proves discovery does not depend on
+    ping or on nmap being installed.
+    """
+    (tmp_path / "ranges.txt").write_text("# ranges from the target\n127.0.0.0/30\n127.1.0.0/30, 127.1.0.0/30\n")
+    r = _run_cli(
+        ["crawl", "--target-file", "ranges.txt", "--probe-all", "--sweep-max-size", "30", "--port", str(PORT),
+         "-C", "lab", "--timeout", "1", "--retries", "0", "--out", "t.json", "--xlsx", "t.xlsx", "--csv", "t-", "--no-summary"],
+        cwd=tmp_path,
+    )
+    assert r.returncode == 0, r.stderr[-3000:]
+    inv = json.loads((tmp_path / "t.json").read_text())
+    # 127.0.0.1 and 127.0.0.2 are inside the first target; 127.1.0.2 inside the second.
+    assert set(inv["devices"]) == {"127.0.0.1", "127.0.0.2", "127.1.0.2"}
+    assert all(d["discovered_via"] == "seed" for d in inv["devices"].values())
+    # scope came from the targets, so the out-of-scope firewall and WAN next-hop were never probed
+    assert not any(ip.startswith("192.168.") or ip.startswith("203.0.113.") for ip in inv["unreachable"])
+    ipam = (tmp_path / "t-ipam.csv").read_text()
+    assert "utilisation_pct" in ipam and "127.0.0.0/30" in ipam
+    assert (tmp_path / "t.xlsx").stat().st_size > 5000
+    # a named range that answers nothing is reported rather than silently dropped
+    r2 = _run_cli(["crawl", "--target", "127.9.9.0/30", "--probe-all", "--sweep-max-size", "30", "--port", str(PORT),
+                   "-C", "lab", "--timeout", "1", "--retries", "0", "--out", "empty.json", "--no-summary"], cwd=tmp_path)
+    assert r2.returncode == 0 and "none replied" in r2.stderr
+
+
 def test_cli_crawl_v3_fallback(agents, tmp_path):
     cfg = tmp_path / "netmap.toml"
     cfg.write_text(

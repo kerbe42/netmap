@@ -1,0 +1,4 @@
+vlan,name,devices,device_names
+10,USERS,1,dist-sw1
+20,SERVERS,1,dist-sw1
+30,BRANCH,1,dist-sw1

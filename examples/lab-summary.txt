@@ -19,9 +19,14 @@ Links (L2/L3):
   dist-sw1                     Vlan30                 <-lldp-> branch-fw                    ge-0/0/0
   acc-sw2                      5                      <-lldp-> SEPAABBCC000002              aa:bb:cc:00:00:02
 
-Subnets:
-  10.0.0.0/30          gw: core-rtr, dist-sw1                       hosts: 0
-  10.1.0.0/24          gw: dist-sw1, acc-sw2                        hosts: 4
-  10.2.0.0/24          gw: dist-sw1                                 hosts: 1
-  192.168.99.0/24      gw: dist-sw1                                 hosts: 0
-  203.0.113.0/30       gw: core-rtr                                 hosts: 0
+VLANs (3):
+  10     USERS                                on 1 device(s)
+  20     SERVERS                              on 1 device(s)
+  30     BRANCH                               on 1 device(s)
+
+SUBNET                 USED    FREE   UTIL VLAN   GATEWAY
+  10.0.0.0/30             2       0 100.0%        core-rtr dist-sw1  (not swept)
+  10.1.0.0/24             6     248   2.4% 10     dist-sw1 acc-sw2  (not swept)
+  10.2.0.0/24             2     252   0.8% 20     dist-sw1  (not swept)
+  192.168.99.0/24         1     253   0.4% 30     dist-sw1  (not swept)
+  203.0.113.0/30          1       1  50.0%        core-rtr  (not swept)

@@ -6,6 +6,7 @@ import asyncio
 import ipaddress
 import logging
 import os
+import re
 import sys
 import tomllib
 
@@ -15,8 +16,9 @@ from .crawl import CrawlConfig, Crawler
 from .graph import build_graph, export_csv, export_dot, export_graphml, text_summary
 from .model import Inventory
 from .render import render_html
+from .report import export_xlsx
 from .snmp import Credential
-from .sweep import sweep
+from .sweep import discover_targets, sweep
 from .util import RFC1918
 
 log = logging.getLogger("netmap")
@@ -49,13 +51,52 @@ def build_credentials(args, cfg) -> list[Credential]:
     return creds
 
 
-def scope_from(args, cfg):
+def read_target_file(path):
+    """One subnet or address per line; '#' comments and blank lines ignored.
+
+    Written for the range list a target hands over: paste it into a text file as-is.
+    Commas and whitespace separate entries on a line, so a copied spreadsheet row works.
+    """
+    out = []
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            for item in re.split(r"[,\s]+", line):
+                if not item:
+                    continue
+                try:
+                    out.append(str(ipaddress.ip_network(item, strict=False)))
+                except ValueError:
+                    log.warning("%s line %d: %r is not a subnet or address, ignoring", path, n, item)
+    return out
+
+
+def targets_from(args, cfg):
+    """Subnets the operator explicitly asked to inventory (--target / --target-file / config)."""
+    c = cfg.get("crawl", {})
+    items = list(getattr(args, "target", None) or []) + list(c.get("targets", []))
+    for path in (getattr(args, "target_file", None) or []) + list(c.get("target_files", [])):
+        items += read_target_file(path)
+    return _nets(items)
+
+
+def scope_from(args, cfg, targets=None):
     c = cfg.get("crawl", {})
     scope = _nets(args.scope or c.get("scope"))
+    exclude = _nets((args.exclude or []) + c.get("exclude", []))
+    if targets:
+        # Explicit targets are the scope unless a wider one was asked for; either way they
+        # are inside it, so a subnet you named is never skipped as "out of scope".
+        if not scope:
+            scope = list(targets)
+            log.info("scope taken from the %d target subnet(s) given", len(targets))
+        else:
+            scope = scope + [t for t in targets if not any(t.subnet_of(s) for s in scope if t.version == s.version)]
     if not scope:
         scope = list(RFC1918)
-        log.warning("no --scope given; limiting crawl to RFC1918 space (10/8, 172.16/12, 192.168/16)")
-    exclude = _nets((args.exclude or []) + c.get("exclude", []))
+        log.warning("no --scope or --target given; limiting crawl to RFC1918 space (10/8, 172.16/12, 192.168/16)")
     return scope, exclude
 
 
@@ -70,6 +111,8 @@ def _outputs(inv: Inventory, args) -> None:
     if getattr(args, "dot", None):
         export_dot(g, args.dot)
         log.info("wrote %s", args.dot)
+    if getattr(args, "xlsx", None):
+        export_xlsx(inv, g, args.xlsx)
     if getattr(args, "csv", None):
         for p in export_csv(inv, g, args.csv):
             log.info("wrote %s", p)
@@ -81,13 +124,29 @@ async def cmd_crawl(args) -> int:
     cfg = load_config(args.config)
     c = cfg.get("crawl", {})
     seeds = list(args.seed or []) + list(c.get("seeds", []))
-    if not seeds:
-        log.error("no seeds: pass --seed IP (repeatable) or seeds=[...] in the config")
+    targets = targets_from(args, cfg)
+    if not seeds and not targets:
+        log.error("nothing to do: pass --seed IP to spider from a device, or --target CIDR / --target-file to inventory named subnets")
         return 2
-    scope, exclude = scope_from(args, cfg)
+    scope, exclude = scope_from(args, cfg, targets)
     inv = Inventory.load(args.out) if args.resume and os.path.exists(args.out) else Inventory()
     if args.resume and inv.devices:
         log.info("resuming from %s: %s", args.out, inv.summary())
+    if targets:
+        log.info("targets: %s", [str(t) for t in targets])
+        found = await discover_targets(
+            inv,
+            targets,
+            scope,
+            exclude,
+            fingerprint=args.fingerprint,
+            probe_all=args.probe_all or c.get("probe_all", False),
+            max_prefix=args.sweep_max_size,
+        )
+        seeds = seeds + [ip for ip in found if ip not in seeds]
+        inv.save(args.out)
+        if not seeds:
+            log.warning("nothing answered a ping in the target subnets; check the ranges, or use --probe-all if ICMP is filtered")
     ccfg = CrawlConfig(
         seeds=seeds,
         credentials=build_credentials(args, cfg),
@@ -111,6 +170,12 @@ async def cmd_crawl(args) -> int:
         n = await sweep(inv, list(inv.subnets), scope, exclude, fingerprint=args.fingerprint, max_prefix=args.sweep_max_size, resweep=args.resweep)
         log.info("sweep found %d hosts", n)
         inv.save(args.out)
+    if targets and not inv.devices:
+        log.warning(
+            "no device in the target subnets answered SNMP: %d address(es) were probed and none replied. "
+            "Check that the community/v3 user is right, that SNMP is permitted from this host, and that the ranges are the managed ones",
+            len(inv.unreachable),
+        )
     log.info("saved %s (%s)", args.out, inv.summary())
     _outputs(inv, args)
     return 0
@@ -118,7 +183,8 @@ async def cmd_crawl(args) -> int:
 
 async def cmd_sweep(args) -> int:
     cfg = load_config(args.config)
-    scope, exclude = scope_from(args, cfg)
+    named = _nets(args.subnet)
+    scope, exclude = scope_from(args, cfg, named)
     inv = Inventory.load(args.map) if os.path.exists(args.map) else Inventory()
     subnets = list(args.subnet or []) or list(inv.subnets)
     if not subnets:
@@ -142,6 +208,7 @@ def _add_output_args(p, html_default=None):
     p.add_argument("--graphml", help="write GraphML (yEd, Gephi, Cytoscape)")
     p.add_argument("--dot", help="write Graphviz DOT")
     p.add_argument("--csv", help="write CSV inventory files with this prefix, e.g. out/mna-")
+    p.add_argument("--xlsx", help="write a multi-sheet Excel inventory workbook (devices, IPAM, VLANs, links, hosts, gaps)")
     p.add_argument("--no-summary", dest="summary", action="store_false", help="don't print the text summary")
 
 
@@ -149,6 +216,21 @@ def _add_scope_args(p):
     p.add_argument("--scope", action="append", metavar="CIDR", help="only touch addresses inside these networks (repeatable). Default: RFC1918")
     p.add_argument("--exclude", action="append", metavar="CIDR", help="never touch these networks (repeatable)")
     p.add_argument("--config", "-c", help="TOML config file (see netmap.toml.example)")
+
+
+def _add_target_args(p):
+    p.add_argument(
+        "--target", "-t", action="append", metavar="CIDR",
+        help="subnet (or single address) to inventory directly: every live address in it is probed for SNMP. Repeatable. Implies scope unless --scope is given",
+    )
+    p.add_argument(
+        "--target-file", action="append", metavar="PATH",
+        help="file of subnets to inventory, one per line ('#' comments allowed) - e.g. the range list the target handed over. Repeatable",
+    )
+    p.add_argument(
+        "--probe-all", action="store_true",
+        help="with --target, skip the ping sweep and try SNMP on every address in the targets (for networks that drop ICMP but allow SNMP)",
+    )
 
 
 def _add_sweep_args(p):
@@ -164,7 +246,7 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     cr = sub.add_parser("crawl", help="spider the network starting from seed devices")
-    cr.add_argument("--seed", "-s", action="append", metavar="IP", help="starting device (core switch/router). Repeatable")
+    cr.add_argument("--seed", "-s", action="append", metavar="IP", help="starting device (core switch/router) to spider from. Repeatable. Optional if --target is given")
     cr.add_argument("--community", "-C", action="append", metavar="STR", help="SNMPv2c community to try (repeatable, tried in order)")
     cr.add_argument("--v3-user"), cr.add_argument("--v3-auth", default="SHA"), cr.add_argument("--v3-auth-key"), cr.add_argument("--v3-priv", default="AES"), cr.add_argument("--v3-priv-key")
     cr.add_argument("--port", type=int, default=161)
@@ -182,7 +264,7 @@ def build_parser():
     cr.add_argument("--resweep", action="store_true")
     cr.add_argument("--resume", action="store_true", help="load the existing map and skip devices already collected")
     cr.add_argument("--out", "-o", default="netmap.json", help="inventory JSON (written after every device)")
-    _add_scope_args(cr), _add_sweep_args(cr), _add_output_args(cr, html_default="netmap.html")
+    _add_target_args(cr), _add_scope_args(cr), _add_sweep_args(cr), _add_output_args(cr, html_default="netmap.html")
 
     sw = sub.add_parser("sweep", help="ping-sweep subnets (from the map, or given) and add hosts")
     sw.add_argument("--map", "-m", default="netmap.json")

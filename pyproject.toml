@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netmap"
-version = "0.1.0"
+version = "0.2.0"
 description = "SNMP/LLDP/CDP-driven network crawler that discovers devices, links and subnets and renders a topology map"
 requires-python = ">=3.11"
-dependencies = ["pysnmp>=7.1", "cryptography>=42", "networkx>=3.0"]
+dependencies = ["pysnmp>=7.1", "cryptography>=42", "networkx>=3.0", "openpyxl>=3.1"]
 
 [project.scripts]
 netmap = "netmap.cli:main"
@@ -16,4 +16,4 @@ netmap = "netmap.cli:main"
 include = ["netmap*"]
 
 [tool.setuptools.package-data]
-netmap = ["vendor/*.js"]
+netmap = ["vendor/*.js", "data/*.tsv"]
