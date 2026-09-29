@@ -1,0 +1,89 @@
+name: build
+
+# Tests on every push; single-file binaries for Windows and Linux on every push and tag.
+# The Windows .exe is the artefact that matters: it needs no Python on the machine that
+# runs it, which is the only thing you can count on when working inside someone else's
+# network. Tag a release (v0.2.0) and the binaries are attached to it.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pytest snmpsim pysmi
+      - run: python -m pytest -q tests
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: netmap-windows-x64
+            binary: dist/netmap.exe
+          - os: ubuntu-latest
+            artifact: netmap-linux-x64
+            binary: dist/netmap
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pyinstaller
+      - run: pyinstaller netmap.spec --noconfirm
+      # Smoke-test the frozen binary: --version proves it starts, and rendering the example
+      # map proves the bundled vis-network and OUI table came along and openpyxl works.
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          .\dist\netmap.exe --version
+          .\dist\netmap.exe render -m examples/lab-map.json --html smoke.html --xlsx smoke.xlsx --csv smoke- --no-summary
+          if ((Get-Item smoke.html).Length -lt 100000) { throw "vis-network was not embedded" }
+          if (!(Test-Path smoke.xlsx)) { throw "xlsx export failed" }
+          if (!(Select-String -Path smoke-hosts.csv -Pattern "." -Quiet)) { throw "csv export failed" }
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./dist/netmap --version
+          ./dist/netmap render -m examples/lab-map.json --html smoke.html --xlsx smoke.xlsx --csv smoke- --no-summary
+          test "$(stat -c%s smoke.html)" -gt 100000 || { echo "vis-network was not embedded"; exit 1; }
+          test -s smoke.xlsx || { echo "xlsx export failed"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Name the binaries after their platform
+        run: |
+          mkdir -p release
+          cp artifacts/netmap-windows-x64/netmap.exe release/netmap.exe
+          cp artifacts/netmap-linux-x64/netmap release/netmap-linux-x64
+          chmod +x release/netmap-linux-x64
+          (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
