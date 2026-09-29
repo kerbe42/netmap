@@ -345,21 +345,21 @@ def export_dot(g: nx.MultiGraph, path: str) -> None:
         lbl = str(a.get("label", "")).replace('"', "'")
         lines.append(f'  "{u}" -- "{v}" [label="{lbl}", style={styles.get(a.get("kind"), "solid")}];')
     lines.append("}")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 
 def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     files = []
     p = f"{prefix}devices.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["ip", "name", "role", "vendor", "model", "serial", "location", "contact", "all_ips", "interfaces", "vlans", "lldp_neighbors", "cdp_neighbors", "arp_entries", "routes", "fdb_entries", "uptime_days", "sysdescr", "discovered_via", "depth", "credential", "errors"])
         for d in inv.devices.values():
             w.writerow([d.id, d.name, d.role, d.vendor, d.model, d.serial, d.location, d.contact, " ".join(d.ips), len(d.interfaces), len(d.vlans), sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors), len(d.arp), len(d.routes), len(d.fdb), d.uptime_s // 86400, d.sysdescr[:200], d.discovered_via, d.depth, d.credential, "; ".join(d.errors)[:300]])
     files.append(p)
     p = f"{prefix}links.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["a", "a_name", "a_port", "b", "b_name", "b_port", "kind", "detail"])
         for u, v, a in g.edges(data=True):
@@ -367,7 +367,7 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
                 w.writerow([u, g.nodes[u].get("label"), a.get("src_port", ""), v, g.nodes[v].get("label"), a.get("dst_port", ""), a["kind"], a.get("label", "")])
     files.append(p)
     p = f"{prefix}hosts.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["ip", "hostname", "mac", "vendor", "role", "subnet", "sources", "switch", "port", "vlan", "open_ports"])
         for ip, h in sorted(inv.hosts.items(), key=lambda kv: ipaddress.ip_address(kv[0])):
@@ -378,7 +378,7 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
             w.writerow([ip, h.hostname, h.mac or "", h.vendor, h.role, inv.subnet_for_ip(ip) or "", " ".join(h.sources), sw, fdb["interface"] if fdb else "", fdb["vlan"] if fdb else "", " ".join(f"{x['port']}/{x['service']}" for x in h.ports)])
     files.append(p)
     p = f"{prefix}subnets.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["cidr", "size", "gateways", "hosts_seen", "sources", "swept"])
         for cidr, s in sorted(inv.subnets.items(), key=lambda kv: ipaddress.ip_network(kv[0])):
@@ -387,20 +387,20 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
             w.writerow([cidr, n.num_addresses, " ".join(inv.devices[gid].name or gid for gid in s.gateways if gid in inv.devices), hosts, " ".join(s.sources), s.swept])
     files.append(p)
     p = f"{prefix}ipam.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["cidr", "size", "usable", "used", "free", "utilisation_pct", "vlan", "gateways", "sources", "swept"])
         w.writeheader()
         w.writerows(ipam_rows(inv))
     files.append(p)
     p = f"{prefix}vlans.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["vlan", "name", "devices", "device_names"])
         for vid, (names, devs) in sorted(vlan_rows(inv).items()):
             w.writerow([vid, " / ".join(sorted(names)), len(devs), " ".join(sorted(devs))])
     files.append(p)
     p = f"{prefix}interfaces.csv"
-    with open(p, "w", newline="") as f:
+    with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["device", "device_name", "ifindex", "name", "descr", "alias", "mac", "speed_mbps", "admin", "oper", "ips"])
         for d in inv.devices.values():

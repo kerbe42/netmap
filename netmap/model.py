@@ -258,13 +258,13 @@ class Inventory:
     def save(self, path: str) -> None:
         self.meta["saved"] = time.time()
         tmp = f"{path}.tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=1, default=list)
         os.replace(tmp, path)
 
     @classmethod
     def load(cls, path: str) -> "Inventory":
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return cls.from_dict(json.load(f))
 
     def summary(self) -> str:

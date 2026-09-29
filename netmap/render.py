@@ -130,5 +130,5 @@ def _vis_tag(embed: bool) -> str:
 def render_html(g, path: str, embed_js: bool = True) -> None:
     data = json.dumps(graph_to_dict(g), default=list).replace("</", "<\\/")
     html = TEMPLATE.replace("__VIS__", _vis_tag(embed_js)).replace("__DATA__", data).replace("__COLORS__", json.dumps(ROLE_COLORS)).replace("__WHEN__", time.strftime("%Y-%m-%d %H:%M"))
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(html)

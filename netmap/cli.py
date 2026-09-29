@@ -58,7 +58,7 @@ def read_target_file(path):
     Commas and whitespace separate entries on a line, so a copied spreadsheet row works.
     """
     out = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for n, line in enumerate(f, 1):
             line = line.split("#")[0].strip()
             if not line:
@@ -281,6 +281,14 @@ def build_parser():
 
 
 def main(argv=None) -> None:
+    # A Windows console defaults to a legacy code page, and sysName/sysDescr/ifAlias come
+    # back as whatever the device was configured with. Never let an odd character in
+    # someone else's asset tag abort a crawl that already ran.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):  # not a reconfigurable stream (pipe, pytest capture)
+            pass
     args = build_parser().parse_args(argv)
     level = logging.WARNING if args.quiet else (logging.DEBUG if args.verbose >= 2 else logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)-5s %(name)s: %(message)s", datefmt="%H:%M:%S", stream=sys.stderr)

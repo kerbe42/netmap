@@ -2,13 +2,14 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import tempfile
 
 import pytest
 
 from netmap.crawl import CrawlConfig, Crawler
 from netmap.graph import build_graph, enrich_inventory, export_csv, export_dot, export_graphml, ipam_rows, text_summary, vlan_rows
-from netmap.model import Inventory
+from netmap.model import Device, Interface, Inventory
 from netmap.render import render_html
 from netmap.report import export_xlsx
 from netmap.snmp import Credential
@@ -206,6 +207,56 @@ def test_probe_all_expands_targets_without_pinging():
     # exclusions win inside a target
     ips2 = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [ia.ip_network("10.50.0.2/32")], probe_all=True, max_prefix=30))
     assert ips2 == ["10.50.0.1"]
+
+
+def test_outputs_are_utf8_regardless_of_locale(tmp_path):
+    """Device-supplied text must survive every export.
+
+    On Windows `open(path, "w")` encodes with the legacy code page, which cannot represent
+    the embedded map viewer or a sysDescr with an accent in it - the crawl would finish and
+    then die while writing the report. Every writer declares UTF-8; this holds it there.
+    """
+    inv = Inventory()
+    d = Device(id="10.0.0.1", name="sw-café-01", sysdescr="Rôle: distribution — 10 Gb/s ‑ tëst", location="Zürich, 3° étage", vendor="Cisco", role="switch")
+    d.interfaces.append(Interface(index=1, name="Gi1/0/1", alias="lien ↔ cœur", ips=["10.0.0.1/24"]))
+    d.ips.append("10.0.0.1")
+    inv.add_device(d)
+    inv.touch_host("10.0.0.50", "arp", "00:50:56:11:22:33")
+    g = build_graph(inv)
+    p = tmp_path / "u"
+    render_html(g, f"{p}.html")
+    export_dot(g, f"{p}.dot")
+    export_graphml(g, f"{p}.graphml")
+    export_xlsx(inv, g, f"{p}.xlsx")
+    files = export_csv(inv, g, f"{p}-")
+    inv.save(f"{p}.json")
+    for path in [f"{p}.dot", f"{p}.graphml", *files]:
+        open(path, encoding="utf-8").read()  # raises UnicodeDecodeError if mis-encoded
+    for path in [f"{p}.dot", f"{p}-devices.csv", f"{p}-interfaces.csv"]:
+        assert "sw-café-01" in open(path, encoding="utf-8").read(), path
+    # The map escapes the data as \uXXXX, so what made Windows fail is the embedded viewer:
+    # the file has to be written as UTF-8 whatever the console code page says.
+    html = open(f"{p}.html", encoding="utf-8").read()
+    assert "sw-caf\\u00e9-01" in html and any(ord(ch) > 127 for ch in html)
+    assert "Zürich" in open(f"{p}-devices.csv", encoding="utf-8").read()
+    assert "lien ↔ cœur" in open(f"{p}-interfaces.csv", encoding="utf-8").read()
+    assert Inventory.load(f"{p}.json").devices["10.0.0.1"].name == "sw-café-01"
+
+    from openpyxl import load_workbook
+
+    assert any(r[1] == "sw-café-01" for r in list(load_workbook(f"{p}.xlsx")["Devices"].values)[1:])
+
+
+def test_no_text_write_relies_on_the_platform_encoding():
+    """Guard the whole package, not just the paths the test above happens to exercise."""
+    import pathlib
+
+    offenders = []
+    for src in sorted(pathlib.Path(__file__).resolve().parent.parent.joinpath("netmap").glob("*.py")):
+        for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"\bopen\(", line) and '"rb"' not in line and "encoding=" not in line:
+                offenders.append(f"{src.name}:{n}: {line.strip()}")
+    assert not offenders, "text I/O without an explicit encoding breaks on a non-UTF-8 console:\n" + "\n".join(offenders)
 
 
 def test_max_depth_and_resume(tmp_path):
