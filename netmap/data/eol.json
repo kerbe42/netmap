@@ -1,0 +1,88 @@
+[
+  {"vendor": "Cisco", "match": "WS-C2960-", "family": "Catalyst 2960 (fixed)", "eos": "2013-10-31", "eol": "2018-10-31", "note": "Original 2960 line; dates approximate, verify with vendor."},
+  {"vendor": "Cisco", "match": "WS-C2960S", "family": "Catalyst 2960-S", "eos": "2015-10-30", "eol": "2020-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C2960\\+", "family": "Catalyst 2960 Plus", "eos": "2019-10-31", "eol": "2024-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C2960X", "family": "Catalyst 2960-X", "eos": "2020-10-31", "eol": "2025-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C2960XR", "family": "Catalyst 2960-XR", "eos": "2020-10-31", "eol": "2025-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C2960CX", "family": "Catalyst 2960-CX", "eos": "2023-10-31", "eol": "2028-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Cisco", "match": "WS-C2960", "family": "Catalyst 2960", "eos": "2013-10-31", "eol": "2018-10-31", "note": "Generic 2960 fallback; verify exact SKU with vendor."},
+
+  {"vendor": "Cisco", "match": "WS-C3560-", "family": "Catalyst 3560", "eos": "2013-01-31", "eol": "2018-01-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3560E", "family": "Catalyst 3560-E", "eos": "2011-11-04", "eol": "2016-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3560X", "family": "Catalyst 3560-X", "eos": "2016-10-30", "eol": "2021-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3560CX", "family": "Catalyst 3560-CX", "eos": "2023-10-31", "eol": "2028-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Cisco", "match": "WS-C3560", "family": "Catalyst 3560", "eos": "2013-01-31", "eol": "2018-01-31", "note": "Generic 3560 fallback."},
+
+  {"vendor": "Cisco", "match": "WS-C3750-", "family": "Catalyst 3750", "eos": "2013-01-31", "eol": "2018-01-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3750E", "family": "Catalyst 3750-E", "eos": "2011-11-04", "eol": "2016-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3750G", "family": "Catalyst 3750-G", "eos": "2012-01-31", "eol": "2017-01-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3750X", "family": "Catalyst 3750-X", "eos": "2016-10-30", "eol": "2021-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3750", "family": "Catalyst 3750", "eos": "2013-01-31", "eol": "2018-01-31", "note": "Generic 3750 fallback."},
+
+  {"vendor": "Cisco", "match": "WS-C3650", "family": "Catalyst 3650", "eos": "2020-10-30", "eol": "2025-10-31", "note": ""},
+  {"vendor": "Cisco", "match": "WS-C3850", "family": "Catalyst 3850", "eos": "2020-10-30", "eol": "2025-10-31", "note": ""},
+
+  {"vendor": "Cisco", "match": "C9200L", "family": "Catalyst 9200L", "eos": "", "eol": "", "note": "Current/active platform at time of writing; no EoS/EoL announced. Verify with vendor."},
+  {"vendor": "Cisco", "match": "C9200", "family": "Catalyst 9200", "eos": "", "eol": "", "note": "Current/active platform at time of writing; no EoS/EoL announced. Verify with vendor."},
+  {"vendor": "Cisco", "match": "C9300", "family": "Catalyst 9300", "eos": "", "eol": "", "note": "Current/active platform at time of writing; no EoS/EoL announced. Verify with vendor."},
+  {"vendor": "Cisco", "match": "C9400", "family": "Catalyst 9400", "eos": "", "eol": "", "note": "Current/active platform at time of writing; no EoS/EoL announced. Verify with vendor."},
+  {"vendor": "Cisco", "match": "C9500", "family": "Catalyst 9500", "eos": "", "eol": "", "note": "Current/active platform at time of writing; no EoS/EoL announced. Verify with vendor."},
+
+  {"vendor": "Cisco", "match": "N5K-C5010", "family": "Nexus 5010", "eos": "2013-05-31", "eol": "2018-05-31", "note": ""},
+  {"vendor": "Cisco", "match": "N5K-C5020", "family": "Nexus 5020", "eos": "2013-05-31", "eol": "2018-05-31", "note": ""},
+  {"vendor": "Cisco", "match": "N5K-C5548", "family": "Nexus 5548", "eos": "2017-11-30", "eol": "2022-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "N5K", "family": "Nexus 5000", "eos": "2013-05-31", "eol": "2018-05-31", "note": "Generic Nexus 5000 fallback; verify exact SKU."},
+  {"vendor": "Cisco", "match": "N7K-C7010", "family": "Nexus 7010", "eos": "2020-12-31", "eol": "2025-12-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Cisco", "match": "N7K", "family": "Nexus 7000", "eos": "2020-12-31", "eol": "2025-12-31", "note": "Generic Nexus 7000 fallback; verify exact SKU."},
+
+  {"vendor": "Cisco", "match": "CISCO1921", "family": "ISR 1921", "eos": "2017-11-08", "eol": "2022-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "CISCO1941", "family": "ISR 1941", "eos": "2017-11-08", "eol": "2022-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "CISCO19\\d\\d", "family": "ISR 1900", "eos": "2017-11-08", "eol": "2022-11-30", "note": "Generic 1900-series fallback."},
+  {"vendor": "Cisco", "match": "CISCO2901", "family": "ISR 2901", "eos": "2017-11-08", "eol": "2022-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "CISCO2911", "family": "ISR 2911", "eos": "2017-11-08", "eol": "2022-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "CISCO2921", "family": "ISR 2921", "eos": "2017-11-08", "eol": "2022-11-30", "note": ""},
+  {"vendor": "Cisco", "match": "CISCO29\\d\\d", "family": "ISR 2900", "eos": "2017-11-08", "eol": "2022-11-30", "note": "Generic 2900-series fallback."},
+  {"vendor": "Cisco", "match": "CISCO39\\d\\d", "family": "ISR 3900", "eos": "2017-11-08", "eol": "2022-11-30", "note": "Generic 3900-series fallback."},
+  {"vendor": "Cisco", "match": "ISR4321", "family": "ISR 4321", "eos": "", "eol": "", "note": "ISR 4000 series; check exact SKU and date with vendor."},
+  {"vendor": "Cisco", "match": "ISR4331", "family": "ISR 4331", "eos": "", "eol": "", "note": "ISR 4000 series; check exact SKU and date with vendor."},
+  {"vendor": "Cisco", "match": "ISR4431", "family": "ISR 4431", "eos": "", "eol": "", "note": "ISR 4000 series; check exact SKU and date with vendor."},
+  {"vendor": "Cisco", "match": "ISR44\\d\\d", "family": "ISR 4400", "eos": "", "eol": "", "note": "ISR 4000 series fallback; check exact SKU and date with vendor."},
+
+  {"vendor": "Cisco", "match": "ASR1001-X", "family": "ASR 1001-X", "eos": "", "eol": "", "note": "ASR 1000 series; check exact SKU and date with vendor."},
+  {"vendor": "Cisco", "match": "ASR1002", "family": "ASR 1002", "eos": "2017-12-01", "eol": "2022-12-31", "note": "Original ASR 1002; verify with vendor."},
+  {"vendor": "Cisco", "match": "ASR100\\d", "family": "ASR 1000", "eos": "", "eol": "", "note": "ASR 1000 series fallback; check exact SKU and date with vendor."},
+
+  {"vendor": "Cisco", "match": "SG300", "family": "Small Business SG300", "eos": "2017-04-30", "eol": "2022-04-30", "note": "Approximate; verify with vendor."},
+  {"vendor": "Cisco", "match": "SG500", "family": "Small Business SG500", "eos": "2018-10-31", "eol": "2023-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Cisco", "match": "SG350", "family": "Small Business SG350", "eos": "", "eol": "", "note": "Check exact SKU and date with vendor."},
+
+  {"vendor": "HP", "match": "ProCurve.*2510", "family": "ProCurve 2510", "eos": "2013-11-01", "eol": "2018-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "HP", "match": "J9\\d{3}A.*2520|2520", "family": "ProCurve/Aruba 2520", "eos": "2015-11-01", "eol": "2020-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "HP", "match": "\\b2530\\b|J9\\d{3}A", "family": "Aruba 2530", "eos": "2022-10-31", "eol": "2027-10-31", "note": "Approximate; 2530 series broad match, verify SKU with vendor."},
+  {"vendor": "HP", "match": "\\b2910al\\b|J9\\d{3}A.*2910", "family": "ProCurve 2910al", "eos": "2015-11-01", "eol": "2020-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "HP", "match": "\\b2920\\b", "family": "Aruba/HP 2920", "eos": "2018-11-01", "eol": "2023-10-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "HP", "match": "2930F|JL\\d{3}A", "family": "Aruba 2930F", "eos": "", "eol": "", "note": "Check exact SKU and date with vendor."},
+  {"vendor": "HP", "match": "2930M", "family": "Aruba 2930M", "eos": "", "eol": "", "note": "Check exact SKU and date with vendor."},
+  {"vendor": "HP", "match": "\\b5406\\b|5406zl|5406R", "family": "ProCurve/Aruba 5406zl", "eos": "2016-11-01", "eol": "2021-10-31", "note": "Approximate; 5406zl, verify SKU (zl vs R) with vendor."},
+
+  {"vendor": "Fortinet", "match": "FortiGate-60D|FGT60D|FG-60D", "family": "FortiGate 60D", "eos": "2019-08-31", "eol": "2024-09-30", "note": "Approximate; verify with vendor."},
+  {"vendor": "Fortinet", "match": "FortiGate-90D|FGT90D|FG-90D", "family": "FortiGate 90D", "eos": "2019-11-30", "eol": "2024-12-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Fortinet", "match": "FortiGate-100D|FGT100D|FG-100D", "family": "FortiGate 100D", "eos": "2020-06-30", "eol": "2025-06-30", "note": "Approximate; verify with vendor."},
+  {"vendor": "Fortinet", "match": "FortiGate-200D|FGT200D|FG-200D", "family": "FortiGate 200D", "eos": "2019-08-31", "eol": "2024-09-30", "note": "Approximate; verify with vendor."},
+  {"vendor": "Fortinet", "match": "FortiGate-300D|FGT300D|FG-300D", "family": "FortiGate 300D", "eos": "2020-06-30", "eol": "2025-06-30", "note": "Approximate; verify with vendor."},
+
+  {"vendor": "Juniper", "match": "EX2200", "family": "EX2200", "eos": "2017-11-30", "eol": "2022-11-30", "note": "Approximate; verify with vendor."},
+  {"vendor": "Juniper", "match": "EX3300", "family": "EX3300", "eos": "2018-06-30", "eol": "2023-06-30", "note": "Approximate; verify with vendor."},
+  {"vendor": "Juniper", "match": "EX4200", "family": "EX4200", "eos": "2015-09-30", "eol": "2020-09-30", "note": "Approximate; verify with vendor."},
+
+  {"vendor": "Dell", "match": "PowerConnect 3\\d{3}", "family": "PowerConnect 3000", "eos": "2014-12-31", "eol": "2019-12-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Dell", "match": "PowerConnect 5\\d{3}", "family": "PowerConnect 5000", "eos": "2014-12-31", "eol": "2019-12-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Dell", "match": "PowerConnect 62\\d{2}", "family": "PowerConnect 6200", "eos": "2015-12-31", "eol": "2020-12-31", "note": "Approximate; verify with vendor."},
+  {"vendor": "Dell", "match": "PowerConnect", "family": "PowerConnect (generic)", "eos": "2015-12-31", "eol": "2020-12-31", "note": "Whole PowerConnect line is discontinued; date approximate, verify SKU with vendor."},
+
+  {"vendor": "Netgear", "match": "GS724T", "family": "ProSafe GS724T", "eos": "", "eol": "", "note": "Netgear ProSafe; consumer/SMB EoL varies, verify with vendor."},
+  {"vendor": "Netgear", "match": "FS7\\d\\d", "family": "ProSafe FS700 (fast ethernet)", "eos": "2013-01-01", "eol": "2018-01-01", "note": "Legacy 10/100 ProSafe; date approximate, verify with vendor."},
+
+  {"vendor": "Cisco", "match": "AIR-CAP\\d{4}", "family": "Aironet (CAP series AP)", "eos": "2018-10-31", "eol": "2023-10-31", "note": "Broad legacy Aironet match; verify exact AP model with vendor."},
+  {"vendor": "Cisco", "match": "AIR-AP1140|AIR-LAP1140", "family": "Aironet 1140", "eos": "2013-11-08", "eol": "2018-11-30", "note": "Approximate; verify with vendor."}
+]
