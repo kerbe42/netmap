@@ -199,6 +199,35 @@ def cmd_diff(args) -> int:
     return 0
 
 
+def cmd_check(args) -> int:
+    from .reconcile import guess_columns, read_table, reconcile, write_csv
+
+    inv = Inventory.load(args.map)
+    headers, rows = read_table(args.assets)
+    cols = guess_columns(headers)
+    if not cols:
+        log.error("%s: no column looks like an address, name, serial or MAC (headers: %s)", args.assets, headers)
+        return 2
+    log.info("matching on %s", ", ".join(f"{f}={headers[i]!r}" for f, i in cols.items()))
+    rec = reconcile(inv, rows, cols)
+    print(f"{len(rec.matches)} listed: {len(rec.found)} found, {len(rec.differ)} found but different, {len(rec.missing)} not found; "
+          f"{len(rec.unlisted)} devices on the network are not in the list")
+    for title, items in (("NOT FOUND", rec.missing), ("DIFFERENT", rec.differ)):
+        if items:
+            print(f"\n{title}")
+            for m in items:
+                print(f"  {m.listed.get('name') or m.listed.get('ip') or m.listed.get('serial', '')!s:30} {'; '.join(m.differences)}")
+    if rec.unlisted:
+        print("\nNOT IN THE LIST")
+        for did in rec.unlisted:
+            d = inv.devices[did]
+            print(f"  {did:16} {d.name:28} {d.vendor} {d.model} {d.serial}")
+    if args.csv:
+        write_csv(inv, rec, args.csv)
+        log.info("wrote %s", args.csv)
+    return 0
+
+
 def _add_output_args(p, html_default=None):
     p.add_argument("--html", default=html_default, help="write interactive HTML map")
     p.add_argument("--graphml", help="write GraphML (yEd, Gephi, Cytoscape)")
@@ -283,6 +312,11 @@ def build_parser():
     df.add_argument("new", help="later map / project")
     df.add_argument("--csv", help="also write the changes to this CSV file")
 
+    rc_ = sub.add_parser("check", help="compare a project with an asset list (CSV/XLSX) you were given")
+    rc_.add_argument("--map", "-m", default="netmap.json")
+    rc_.add_argument("assets", help="CSV or Excel file listing the devices that should be there")
+    rc_.add_argument("--csv", help="write the comparison to this CSV file")
+
     gu = sub.add_parser("gui", help="open the desktop app (needs the 'gui' extra: pip install netmap[gui])")
     gu.add_argument("project", nargs="?", help="project to open")
     return p
@@ -313,6 +347,8 @@ def main(argv=None) -> None:
         rc = 0
     elif args.cmd == "diff":
         rc = cmd_diff(args)
+    elif args.cmd == "check":
+        rc = cmd_check(args)
     elif args.cmd == "gui":
         try:
             from .gui.app import main as gui_main

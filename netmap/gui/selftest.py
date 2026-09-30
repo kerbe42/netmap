@@ -159,6 +159,23 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
         req, remember = dlg.request()
         (ok if req.targets and req.exclude else fail)(f"scan dialog builds a request: targets={req.targets}")
         dlg.close()
+        # asset-list check against a small list written from the project itself (plus one ghost)
+        from .reconciledlg import ReconcileDialog
+
+        lst = os.path.join(out, "assets.csv")
+        with open(lst, "w", encoding="utf-8") as f:
+            f.write("Hostname,IP Address,Serial Number,Location\n")
+            for d in list(win.inv.devices.values())[:4]:
+                f.write(f"{d.name},{d.id},{d.serial},Head office\n")
+            f.write("decommissioned-sw,10.254.254.254,FOC0000GONE,Basement\n")
+        rd = ReconcileDialog(win.inv, win)
+        rd.load(lst)
+        rd._run()
+        rd.show()
+        _pump(150)
+        (ok if rd.rec and len(rd.rec.missing) == 1 else fail)(f"asset list check: {len(rd.rec.found) if rd.rec else 0} found, {len(rd.rec.missing) if rd.rec else '?'} missing")
+        shot("42-asset-check", rd)
+        rd.reject()
         cd = CredentialsDialog(win.store, win)
         cd.show()
         _pump(100)

@@ -133,6 +133,7 @@ class Dashboard(QWidget):
     newScan = Signal()
     openProject = Signal()
     openSample = Signal()
+    openPath = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -200,6 +201,11 @@ class Dashboard(QWidget):
         wb.addWidget(b3)
         wb.addStretch(1)
         wl.addLayout(wb)
+        self.recent = QLabel()
+        self.recent.setTextFormat(Qt.RichText)
+        self.recent.linkActivated.connect(self.openPath)
+        self.recent.setWordWrap(True)
+        wl.addWidget(self.recent)
         self.lay.addWidget(self.welcome)
 
         self.cards_w = QWidget()
@@ -267,6 +273,17 @@ class Dashboard(QWidget):
         super().resizeEvent(e)
         w = e.size().width()
         self._reflow(3 if w >= 1080 else 2 if w >= 700 else 1)
+
+    def set_recent(self, paths: list[str]):
+        import os
+
+        if not paths:
+            self.recent.hide()
+            return
+        links = "<br>".join(f"<a href='{html.escape(p)}'>{html.escape(os.path.basename(p))}</a> "
+                            f"<span style='color:gray'>{html.escape(os.path.dirname(p))}</span>" for p in paths)
+        self.recent.setText(f"<br><b>Recent projects</b><br>{links}")
+        self.recent.show()
 
     def set_snapshot(self, s: Snapshot, project_name: str = ""):
         inv = s.inv

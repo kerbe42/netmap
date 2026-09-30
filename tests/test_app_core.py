@@ -241,3 +241,43 @@ def test_resolve_scope():
     assert [str(s) for s in scope] == ["10.1.0.0/24"] and [str(e) for e in exclude] == ["10.1.0.128/25"]
     scope, _ = resolve_scope([], [], [])
     assert {str(s) for s in scope} == {"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+
+
+def test_asset_list_check(campus, tmp_path):
+    from netmap.reconcile import guess_columns, read_table, reconcile, write_csv
+
+    p = tmp_path / "assets.csv"
+    p.write_text(
+        "Acme network assets (from the previous team)\n"
+        "Hostname;Mgmt IP;Serial Number;Model;Location\n"
+        "core-sw-01;10.99.0.2;FDO25330QX1;C9500-24Y4C;Comms A\n"   # wrong serial on the list
+        "core-sw-02;10.99.0.3;FDO25331QX;C9500-24Y4C;Comms A\n"    # hm, serial differs too (list typo)
+        "fw-edge-01;10.0.0.1;FG100FTK21009876;FG-100F;Comms A\n"   # exact
+        "old-core;10.99.0.9;FOX0000;WS-C3750X;Basement\n"          # gone
+        "wh-sw-01;;SG91KHM000;;Warehouse\n",                        # by name, the serial is wrong
+        encoding="utf-8",
+    )
+    headers, rows = read_table(str(p))
+    cols = guess_columns(headers)
+    assert set(cols) == {"name", "ip", "serial", "model", "site"} and len(rows) == 5
+    rec = reconcile(campus, rows, cols)
+    by = {m.listed.get("name"): m for m in rec.matches}
+    assert by["fw-edge-01"].node == "10.0.0.1" and not by["fw-edge-01"].differences
+    assert by["old-core"].node == "" and by["old-core"] in rec.missing
+    assert by["core-sw-01"].how == "address" and any(d.startswith("serial:") for d in by["core-sw-01"].differences)
+    assert by["wh-sw-01"].how == "name" and by["wh-sw-01"].node == "10.99.0.31"
+    assert "10.99.0.11" in rec.unlisted and "10.0.0.1" not in rec.unlisted
+    out = write_csv(campus, rec, str(tmp_path / "check.csv"))
+    text = open(out, encoding="utf-8-sig").read()
+    assert "not found" in text and "not in list" in text
+    # the same from an Excel file
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Device Name", "IP Address", "S/N"])
+    ws.append(["fw-edge-01", "10.0.0.1", "FG100FTK21009876"])
+    wb.save(tmp_path / "assets.xlsx")
+    h2, r2 = read_table(str(tmp_path / "assets.xlsx"))
+    rec2 = reconcile(campus, r2, guess_columns(h2))
+    assert len(rec2.found) == 1

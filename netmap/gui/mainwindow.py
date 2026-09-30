@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self.dashboard.newScan.connect(self.new_scan)
         self.dashboard.openProject.connect(lambda: self.open_project())
         self.dashboard.openSample.connect(self.open_sample)
+        self.dashboard.openPath.connect(lambda p: self.maybe_save() and self.open_project(p))
         self._add_page("overview", self.dashboard)
         self.topology = TopologyPage()
         self.topology.nodeSelected.connect(self.select_node)
@@ -322,10 +323,12 @@ class MainWindow(QMainWindow):
         tm = mb.addMenu("&Tools")
         self._act(tm, "Ping / traceroute / DNS / SNMP test", lambda: (self.tools_dock.show(), self.tools_dock.raise_(), self.tools.target.setFocus()))
         self._act(tm, "&Compare with another scan…", self.compare)
+        self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/Excel list of devices you were given")
 
         hm = mb.addMenu("&Help")
         self._act(hm, "&Quick guide", self.quick_guide, QKeySequence.HelpContents)
         self._act(hm, "Explore the &sample network", self.open_sample, tip="A simulated campus network, to see what NetMap does before scanning")
+        self._act(hm, "Check for &updates…", self.check_updates)
         self._act(hm, "Open the log folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self.log_path) or ".")))
         self._act(hm, "&About NetMap", self.about)
 
@@ -549,6 +552,7 @@ class MainWindow(QMainWindow):
             return
         w = self.pages[key]
         if key == "overview":
+            w.set_recent([p for p in (QSettings().value("ui/recent") or []) if isinstance(p, str) and os.path.exists(p)][:6])
             w.set_snapshot(s, self.project_name())
         elif key == "map":
             w.set_data(self.inv, s.g, keep_view=bool(w.nodes))
@@ -1087,6 +1091,55 @@ class MainWindow(QMainWindow):
         dlg = CompareDialog(d, os.path.basename(path), self.project_name(), self)
         dlg.openNode.connect(self.open_node)
         dlg.show()
+
+    def reconcile(self):
+        from .reconciledlg import ReconcileDialog
+
+        dlg = ReconcileDialog(self.inv, self)
+        dlg.openNode.connect(self.open_node)
+        dlg.applied.connect(lambda: (self.set_dirty(True), self.refresh()))
+        dlg.show()
+        dlg._pick()
+
+    def check_updates(self):
+        """Ask GitHub for the latest release (only when asked; nothing is sent automatically)."""
+        from PySide6.QtCore import QThread, Signal
+
+        class Fetch(QThread):
+            done = Signal(str, str)
+
+            def run(self):
+                import json
+                import urllib.request
+
+                try:
+                    req = urllib.request.Request("https://api.github.com/repos/kerbe42/netmap/releases/latest",
+                                                 headers={"Accept": "application/vnd.github+json", "User-Agent": f"NetMap/{__version__}"})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        tag = json.load(r).get("tag_name", "")
+                    self.done.emit(tag, "")
+                except Exception as e:  # noqa: BLE001
+                    self.done.emit("", str(e))
+
+        def shown(tag, err):
+            if err:
+                QMessageBox.information(self, "Check for updates", f"Could not reach GitHub: {err}")
+                return
+            latest = tag.lstrip("v")
+
+            def key(v):
+                return tuple(int(x) for x in v.split(".") if x.isdigit())
+
+            if latest and key(latest) > key(__version__):
+                r = QMessageBox.question(self, "Update available", f"NetMap {latest} is available (you have {__version__}). Open the download page?")
+                if r == QMessageBox.Yes:
+                    QDesktopServices.openUrl(QUrl("https://github.com/kerbe42/netmap/releases/latest"))
+            else:
+                QMessageBox.information(self, "Check for updates", f"You have the latest version ({__version__}).")
+
+        self._fetch = Fetch(self)
+        self._fetch.done.connect(shown)
+        self._fetch.start()
 
     def quick_guide(self):
         dlg = QDialog(self)
