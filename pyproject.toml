@@ -36,7 +36,7 @@ Issues = "https://github.com/kerbe42/netmap/issues"
 
 [project.optional-dependencies]
 gui = ["PySide6-Essentials>=6.7"]
-keyring = ["keyring>=25"]
+keyring = ["keyring>=25.7.0"]
 test = ["pytest", "snmpsim", "pysmi"]
 
 [project.scripts]
