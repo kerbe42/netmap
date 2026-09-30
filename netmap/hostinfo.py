@@ -518,11 +518,11 @@ def _winrm_run_ps(ip, username, password, transport, timeout, port: int = WINRM_
 
     Plain HTTP is only used with an authentication scheme that never sends the password in
     the clear (NTLM/Kerberos/CredSSP); ``basic``/``plaintext`` need ``use_ssl=True``."""
-    import winrm
-
     if transport in ("basic", "plaintext") and not use_ssl:
         raise ValueError("WinRM basic authentication over plain HTTP would send the password in clear; "
                          "use transport='ntlm' (default) or use_ssl=True (port 5986)")
+    import winrm
+
     scheme = "https" if use_ssl else "http"
     kwargs = {"transport": transport}
     if use_ssl:
