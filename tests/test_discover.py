@@ -329,9 +329,9 @@ def test_identify_hosts_netbios_mac_fills_missing_mac():
     assert inv.hosts["10.0.0.1"].mac is None
     _run(discover.identify_hosts(
         inv, do_mdns=False, do_ssdp=False, do_http=False,
-        probes={"netbios": lambda ip: {"hostname": "H", "mac": "aa:bb:cc:dd:ee:ff", "is_dc": False}},
+        probes={"netbios": lambda ip: {"hostname": "H", "mac": "3c:52:82:1a:2b:3c", "is_dc": False}},
     ))
-    assert inv.hosts["10.0.0.1"].mac == "aa:bb:cc:dd:ee:ff"
+    assert inv.hosts["10.0.0.1"].mac == "3c:52:82:1a:2b:3c"
     assert getattr(inv.hosts["10.0.0.1"], "mac_source") == "netbios"
 
 
@@ -341,7 +341,7 @@ def test_identify_hosts_does_not_clobber_strong_mac():
     setattr(h, "mac_source", "arp")   # a strong, on-link MAC
     _run(discover.identify_hosts(
         inv, do_mdns=False, do_ssdp=False, do_http=False,
-        probes={"netbios": lambda ip: {"hostname": "H", "mac": "aa:bb:cc:dd:ee:ff", "is_dc": False}},
+        probes={"netbios": lambda ip: {"hostname": "H", "mac": "3c:52:82:1a:2b:3c", "is_dc": False}},
     ))
     assert inv.hosts["10.0.0.1"].mac == "11:22:33:44:55:66"   # unchanged
     assert getattr(inv.hosts["10.0.0.1"], "mac_source") == "arp"
@@ -353,9 +353,9 @@ def test_identify_hosts_overwrites_weak_sweep_mac():
     setattr(h, "mac_source", "sweep")
     _run(discover.identify_hosts(
         inv, do_mdns=False, do_ssdp=False, do_http=False,
-        probes={"netbios": lambda ip: {"hostname": "H", "mac": "aa:bb:cc:dd:ee:ff", "is_dc": False}},
+        probes={"netbios": lambda ip: {"hostname": "H", "mac": "3c:52:82:1a:2b:3c", "is_dc": False}},
     ))
-    assert inv.hosts["10.0.0.1"].mac == "aa:bb:cc:dd:ee:ff"
+    assert inv.hosts["10.0.0.1"].mac == "3c:52:82:1a:2b:3c"
     assert getattr(inv.hosts["10.0.0.1"], "mac_source") == "netbios"
 
 

@@ -156,6 +156,9 @@ class ScanDialog(QDialog):
         self.sweep.setChecked(d.get("sweep", False))
         self.dns = QCheckBox("Name devices and hosts from reverse DNS")
         self.dns.setChecked(d.get("resolve_names", True))
+        self.identify = QCheckBox("Identify hosts actively (NetBIOS, mDNS/Bonjour, SSDP/UPnP, web/TLS) — profiles like Cisco ISE")
+        self.identify.setChecked(d.get("identify", True))
+        self.identify.setToolTip("Sends a few small read-only probes to each host to work out what it is, its OS and its name.\nWorks without Nmap or admin rights.")
         nmap = find_nmap()
         self.fingerprint = QCheckBox("Identify services on live hosts with Nmap" + ("" if nmap else "  (Nmap not found)"))
         self.fingerprint.setChecked(bool(nmap) and d.get("fingerprint", False))
@@ -163,7 +166,7 @@ class ScanDialog(QDialog):
         self.fingerprint.setToolTip(nmap or "Install Nmap (nmap.org) to enable service identification and MAC-level ping sweeps")
         self.cisco_vlan = QCheckBox("Read per-VLAN MAC tables on older Cisco IOS switches (community@vlan)")
         self.cisco_vlan.setChecked(d.get("cisco_vlan_fdb", False))
-        for w in (self.sweep, self.dns, self.fingerprint, self.cisco_vlan):
+        for w in (self.sweep, self.dns, self.identify, self.fingerprint, self.cisco_vlan):
             g2l.addWidget(w)
         ol.addWidget(g2)
         g3 = QGroupBox("This project already has data")
@@ -327,6 +330,7 @@ class ScanDialog(QDialog):
             fingerprint=self.fingerprint.isChecked(),
             probe_hosts=self.probe_hosts.isChecked(),
             resolve_names=self.dns.isChecked(),
+            identify=self.identify.isChecked(),
             follow_routes=self.follow.isChecked(),
             follow_gateways=self.follow.isChecked(),
             cisco_vlan_fdb=self.cisco_vlan.isChecked(),
@@ -342,7 +346,7 @@ class ScanDialog(QDialog):
         remember = {
             "targets": targets, "seeds": seeds, "scope": scope, "exclude": exclude, "credential_ids": ids,
             "probe_all": req.probe_all, "sweep": req.sweep, "fingerprint": req.fingerprint, "probe_hosts": req.probe_hosts,
-            "resolve_names": req.resolve_names, "cisco_vlan_fdb": req.cisco_vlan_fdb, "max_depth": req.max_depth,
+            "resolve_names": req.resolve_names, "identify": req.identify, "cisco_vlan_fdb": req.cisco_vlan_fdb, "max_depth": req.max_depth,
             "workers": req.workers, "timeout": req.timeout, "retries": req.retries, "port": req.port, "sweep_max_prefix": req.sweep_max_prefix,
         }
         return req, remember

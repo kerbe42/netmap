@@ -65,6 +65,7 @@ class ScanRequest:
     fingerprint: bool = False  # nmap service detection on live hosts
     probe_hosts: bool = False  # try SNMP on every ARP-learned address
     resolve_names: bool = False  # reverse DNS for devices and hosts
+    identify: bool = False  # active host identification (NetBIOS, mDNS, SSDP, HTTP/TLS)
     follow_routes: bool = True
     follow_gateways: bool = True
     arp: bool = True
@@ -183,6 +184,12 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
         if req.resolve_names:
             phase("Resolving names")
             await resolve_names(inv)
+        if req.identify:
+            from .discover import identify_hosts
+
+            phase("Identifying hosts", "NetBIOS, mDNS, SSDP and web probes")
+            n = await identify_hosts(inv)
+            log.info("active identification: %d host(s) answered a probe", n)
         if targets and not inv.devices:
             log.warning(
                 "no device in the target subnets answered SNMP: %d address(es) were probed and none replied. "

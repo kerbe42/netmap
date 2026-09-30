@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from .model import Inventory
-from .util import is_usable_ip, norm_mac
+from .util import is_usable_ip, norm_mac, plausible_mac
 
 log = logging.getLogger("netmap.discover")
 
@@ -54,11 +54,9 @@ NB_BROWSER_ELECTION = 0x1E
 
 
 def _plausible_mac(mac: Optional[str]) -> Optional[str]:
-    """Normalise a MAC and reject the obviously useless ones (all-zero / broadcast)."""
+    """Normalise a MAC and reject the ones that are not a real endpoint address."""
     m = norm_mac(mac)
-    if not m or m in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
-        return None
-    return m
+    return m if m and plausible_mac(m) else None
 
 
 # --------------------------------------------------------------------------- #

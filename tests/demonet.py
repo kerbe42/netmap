@@ -428,6 +428,7 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         await resolve_names(inv, lookup=lambda ip: ptr.get(ip))
 
     asyncio.run(go())
+    _inject_probes(inv, rng=random.Random(11))
     enrich_inventory(inv)
     inv.project = {
         "name": name,
@@ -446,6 +447,51 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
     if path:
         inv.save(path)
     return inv
+
+
+def _inject_probes(inv, rng):
+    """Give a slice of the hosts realistic active-probe results, as if NetBIOS/mDNS/SSDP/HTTP
+    had answered, so the sample shows off identification and its evidence. Shapes match
+    netmap.discover output."""
+    import ipaddress as _ip
+
+    hosts = [(ip, h) for ip, h in inv.hosts.items() if ip not in inv.ip_to_device]
+    for ip, h in hosts:
+        role = h.role
+        sub = inv.subnet_for_ip(ip) or ""
+        last = ip.rsplit(".", 1)[-1]
+        if role in ("workstation", "windows", "host") and sub.startswith(("10.10.", "10.20.", "10.30.")):
+            name = (h.hostname.split(".")[0] if h.hostname else f"WS-{last}").upper()[:15]
+            h.probes["netbios"] = {"hostname": name, "domain": "NORTHWIND", "user": rng.choice(["", "", "jsmith", "adesai"]),
+                                   "is_dc": False, "mac": h.mac, "names": []}
+            h.names["netbios"] = name
+            h.sources.append("netbios") if "netbios" not in h.sources else None
+            if rng.random() < 0.15:
+                h.probes["mdns"] = {"hostname": f"{name}.local", "services": ["_smb._tcp", "_device-info._tcp"], "model": "", "vendor": ""}
+        elif role == "printer":
+            h.probes["mdns"] = {"hostname": f"{(h.hostname or 'PRN'+last).split('.')[0]}.local",
+                                "services": ["_ipp._tcp", "_pdl-datastream._tcp", "_scanner._tcp"],
+                                "model": rng.choice(["MFC-L8900CDW", "LaserJet M507", "TASKalfa 3554ci"]), "vendor": h.vendor}
+            h.probes["http"] = {"80": {"port": 80, "tls": False, "server": "HP HTTP Server", "title": "HP LaserJet", "realm": "", "cert_cn": "", "cert_san": []}}
+            h.names["mdns"] = h.probes["mdns"]["hostname"]
+        elif role == "camera":
+            h.probes["http"] = {"443": {"port": 443, "tls": True, "server": "Boa/0.94", "title": "Web Service", "realm": "",
+                                        "cert_cn": h.vendor.split()[0].lower() + "-cam", "cert_san": [], "cert_issuer": h.vendor, "cert_expires": "2027-01-01"}}
+            h.probes["ssdp"] = {"server": f"{h.vendor} IP Camera", "st": "urn:schemas-upnp-org:device:Basic:1",
+                                "manufacturer": h.vendor.split()[0], "model": "IPC-" + last, "device_type": "urn:...:Basic:1"}
+        elif role == "phone":
+            h.names.setdefault("sweep", h.hostname)
+        elif role in ("nas",):
+            h.probes["ssdp"] = {"server": "Linux/3.10 UPnP/1.0 Synology/1.0", "manufacturer": "Synology", "model": "DS920+",
+                                "device_type": "urn:schemas-upnp-org:device:MediaServer:1", "friendly_name": h.hostname or "nas"}
+            h.probes["http"] = {"5000": {"port": 5000, "tls": False, "server": "nginx", "title": "Synology DiskStation", "realm": "", "cert_cn": "", "cert_san": []}}
+    # a Windows domain controller among the servers
+    for ip, h in hosts:
+        if (h.hostname or "").startswith("dc") or ip.endswith(".31"):
+            h.probes["netbios"] = {"hostname": (h.hostname or "DC01").split(".")[0].upper(), "domain": "NORTHWIND",
+                                   "user": "", "is_dc": True, "mac": h.mac, "names": []}
+            h.names["netbios"] = h.probes["netbios"]["hostname"]
+            break
 
 
 if __name__ == "__main__":

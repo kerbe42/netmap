@@ -136,6 +136,7 @@ async def cmd_crawl(args) -> int:
         fingerprint=args.fingerprint,
         probe_hosts=args.probe_hosts or c.get("probe_hosts", False),
         resolve_names=args.dns or c.get("resolve_names", False),
+        identify=args.identify or c.get("identify", False),
         follow_routes=not args.no_routes,
         follow_gateways=not args.no_gateways,
         arp=not args.no_arp,
@@ -292,6 +293,7 @@ def build_parser():
     cr.add_argument("--refresh", action="store_true", help="with --resume, poll devices already in the map again and replace what was collected (notes and layout are kept)")
     cr.add_argument("--retry-unreachable", action="store_true", help="with --resume, try again addresses that did not answer SNMP last time")
     cr.add_argument("--dns", action="store_true", help="name devices and hosts from reverse DNS (PTR) lookups")
+    cr.add_argument("--identify", action="store_true", help="actively identify hosts (NetBIOS, mDNS, SSDP, HTTP/TLS probes) - like Cisco ISE / Lansweeper profiling")
     cr.add_argument("--out", "-o", default="netmap.json", help="inventory JSON (written after every device)")
     _add_target_args(cr), _add_scope_args(cr), _add_sweep_args(cr), _add_output_args(cr, html_default="netmap.html")
 
