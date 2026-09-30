@@ -102,7 +102,8 @@ jobs:
           if (!(Test-Path smoke.xlsx)) { throw "xlsx export failed" }
           if (!(Test-Path smoke.drawio)) { throw "drawio export failed" }
           if (!(Select-String -Path smoke-hosts.csv -Pattern "." -Quiet)) { throw "csv export failed" }
-          $listing = python -m PyInstaller.utils.cliutils.archive_viewer -l dist\netmap.exe
+          # the archive lists Windows paths with backslashes; compare with one separator
+          $listing = (python -m PyInstaller.utils.cliutils.archive_viewer -l dist\netmap.exe) -replace '\\', '/'
           foreach ($f in "netmap/data/eol.json", "netmap/data/oui.tsv", "netmap/vendor/vis-network.min.js") {
             if (-not ($listing | Select-String -SimpleMatch -Quiet $f)) { throw "$f is not in the frozen binary" }
           }
