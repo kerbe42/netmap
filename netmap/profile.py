@@ -53,6 +53,95 @@ PORT_HINTS = [
     (80, "server", 1, "HTTP"),
 ]
 
+# --- server-function classification from open ports ----------------------------
+# A host can fill several roles at once (a box can be both a web and a database
+# server), so this is a *set of functions* layered on top of the single primary
+# role, the way asset-inventory tools tag what a server actually does. Each entry
+# is (label, {ports}); a match adds the label. Ordering only affects display.
+FUNCTION_PORTS = [
+    ("Web server", {80, 443, 8080, 8443, 8000, 8888, 4443, 8081}),
+    ("Database", {1433, 3306, 5432, 1521, 27017, 6379, 5984, 9042, 3050, 50000, 1583}),
+    ("File server", {2049, 548, 445, 139}),
+    ("Mail server", {25, 465, 587, 110, 143, 993, 995}),
+    ("DNS server", {53}),
+    ("DHCP server", {67}),
+    ("Directory (LDAP/AD)", {389, 636, 3268, 3269}),
+    ("Kerberos (AD)", {88}),
+    ("Time (NTP)", {123}),
+    ("Print server", {515, 631, 9100}),
+    ("FTP server", {21, 990}),
+    ("Proxy", {3128, 8118, 1080}),
+    ("VoIP", {5060, 5061}),
+    ("Remote access", {3389, 5900, 5985, 5986, 22}),
+    ("Virtualization host", {902, 903, 8006, 8697}),
+    ("Container/orchestration", {2375, 2376, 6443, 10250}),
+    ("Message queue", {5672, 15672, 9092, 61616}),
+    ("Monitoring", {9090, 3000, 19999}),
+    ("Backup", {9392, 8014, 13724}),
+]
+# database port -> product, so "Database" can be made specific (SQL Server, MySQL...)
+DB_PRODUCTS = {
+    1433: "SQL Server", 3306: "MySQL", 5432: "PostgreSQL", 1521: "Oracle",
+    27017: "MongoDB", 6379: "Redis", 5984: "CouchDB", 9042: "Cassandra",
+    3050: "Firebird", 50000: "DB2", 1583: "Pervasive",
+}
+# a specific function -> the primary role it should promote a generic server to,
+# in priority order (first match wins). Requires the host not already be a
+# clearly-typed appliance (printer/camera/phone/etc.).
+FUNCTION_ROLE = [
+    ("Directory (LDAP/AD)", "dc"),
+    ("Virtualization host", "hypervisor"),  # a hypervisor's 443 is a mgmt UI, not a web server
+    ("Database", "database"),
+    ("Mail server", "mailserver"),
+    ("Web server", "webserver"),
+    ("DNS server", "dnsserver"),
+    ("File server", "fileserver"),
+    ("Print server", "printer"),
+]
+# roles that are appliances or network gear, not general-purpose servers: their
+# open web/SMB ports are management UIs, not "server functions", so we don't list
+# functions for them at all (a printer isn't a "web server").
+_APPLIANCE_ROLES = {"printer", "camera", "phone", "ups", "plc", "bms", "ot", "bmc",
+                    "wireless", "switch", "router", "l3switch", "firewall", "subnet", "unpolled"}
+# database product labels, so a specialised "SQL Server" still counts as "Database"
+# when deciding the primary role.
+_DB_LABELS = set(DB_PRODUCTS.values()) | {"Database"}
+# roles that ARE general-purpose servers (so their function list is worth keeping
+# even when the only service is remote access).
+_SERVER_ROLES = {"server", "webserver", "fileserver", "mailserver", "dnsserver",
+                 "dc", "hypervisor", "database", "nas", "vm"}
+# functions that are only a way in, not a service offered - they don't make a host
+# a server on their own.
+_CLIENT_SURFACE = {"Remote access"}
+
+
+def server_functions(host) -> list[str]:
+    """Return the list of server functions a host fills, derived from its open
+    ports (and any nmap service banners). Purely additive - a host may fill
+    several. `Database` is specialised to the product where the port says so."""
+    ports = {p.get("port") for p in (host.ports or []) if p.get("port")}
+    if not ports:
+        return []
+    out: list[str] = []
+    for label, pset in FUNCTION_PORTS:
+        if ports & pset:
+            if label == "Database":
+                names = sorted({DB_PRODUCTS[p] for p in ports & pset if p in DB_PRODUCTS})
+                out.append(names[0] if len(names) == 1 else "Database")
+                for extra in names[1:]:
+                    out.append(extra)
+            else:
+                out.append(label)
+    # a Windows client also opens 445/139/3389 - don't call every desktop a file
+    # server. If the only "server" evidence is SMB + RDP and it looks like a
+    # workstation, drop File server / Remote access from the promotable set later.
+    seen: list[str] = []
+    for f in out:
+        if f not in seen:
+            seen.append(f)
+    return seen
+
+
 # mDNS service type -> (role, weight, os_family hint, note)
 MDNS_HINTS = {
     "_ipp": ("printer", 7, "printer", "advertises IPP printing over mDNS"),
@@ -143,6 +232,7 @@ class Profile:
     confidence: str = "low"
     hostname: str = ""
     evidence: list[dict] = field(default_factory=list)
+    functions: list[str] = field(default_factory=list)
 
 
 def _vote(scores: dict, role: str, weight: float):
@@ -291,13 +381,19 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
             if rx.search(nm):
                 add(f"{src} name", f"'{nm}' - {note}", role, role, weight, of=of or None)
 
+    # ---- server functions from open ports (additive) ----------------------
+    funcs = server_functions(host)
+    if funcs:
+        add("open ports", "serves " + ", ".join(funcs), ", ".join(funcs))
+
     # ---- decide -----------------------------------------------------------
     hostname = _best_name(host)
     if not scores:
         # nothing decisive: keep whatever role it already had, or fall back by OS family
         role = host.role if host.role not in ("", "host", None) else ROLE_FROM_FAMILY.get(os_family, "host")
         conf = "medium" if (vendor or hostname) else "low"
-        return Profile(role=role, os=os_text, os_family=os_family, vendor=vendor, model=model, confidence=conf, hostname=hostname, evidence=ev)
+        prof = Profile(role=role, os=os_text, os_family=os_family, vendor=vendor, model=model, confidence=conf, hostname=hostname, evidence=ev, functions=funcs)
+        return _promote_role(prof, host)
 
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     role, top = ranked[0]
@@ -311,7 +407,52 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
         conf = "low"
     if not os_family:
         os_family = ROLE_OS.get(role, "")
-    return Profile(role=role, os=os_text, os_family=os_family, vendor=vendor, model=model, confidence=conf, hostname=hostname, evidence=ev)
+    prof = Profile(role=role, os=os_text, os_family=os_family, vendor=vendor, model=model, confidence=conf, hostname=hostname, evidence=ev, functions=funcs)
+    return _promote_role(prof, host)
+
+
+def _promote_role(prof: Profile, host) -> Profile:
+    """Turn a generic role into a specific server type when the open ports say so
+    (a `server` that serves web -> `webserver`), without mis-typing ordinary
+    clients. Appliances and clients keep their role; their functions still show.
+
+    SMB (445/139) is on nearly every Windows machine, so it alone never makes a
+    host a file server - that needs NFS/AFP, or a server operating system. Every
+    box still gets `File server` in its function list; only the primary *role* is
+    held back."""
+    # a printer's web UI or a switch's SMB stack are management surfaces, not
+    # "server functions" - don't list them and don't reclassify the appliance.
+    if prof.role in _APPLIANCE_ROLES:
+        prof.functions = []
+        return prof
+    funcs = set(prof.functions)
+    if not funcs:
+        return prof
+    role = prof.role
+    # only refine hosts that are still generic servers/hosts/windows boxes
+    if role not in ("server", "host", "windows", "unknown", ""):
+        return prof
+    ports = {p.get("port") for p in (host.ports or []) if p.get("port")}
+    is_server_os = "server" in (prof.os or "").lower() or (prof.os_family or "") in ("linux", "esxi")
+    real_file_server = bool(ports & {2049, 548}) or ("File server" in funcs and is_server_os)
+    for label, promoted in FUNCTION_ROLE:
+        # a specialised DB product (SQL Server, MySQL...) still means "Database"
+        present = (funcs & _DB_LABELS) if label == "Database" else (label in funcs)
+        if not present:
+            continue
+        if label == "File server" and not real_file_server:
+            continue
+        prof.role = promoted
+        break
+
+    # Every Windows box exposes SMB (445) and usually RDP; those are client surfaces,
+    # not services it *offers*. SMB alone is never "File server" (that needs NFS/AFP
+    # or a server OS), and a host that offers no real service isn't reported as a
+    # server at all - otherwise a floor of desktops would swamp the overview.
+    fns = [f for f in prof.functions if not (f == "File server" and not real_file_server)]
+    strong = [f for f in fns if f not in _CLIENT_SURFACE]
+    prof.functions = fns if (prof.role in _SERVER_ROLES or strong) else []
+    return prof
 
 
 ROLE_FROM_FAMILY = {"windows": "windows", "macos": "workstation", "android": "host", "printer": "printer", "network": "switch", "linux": "server"}
@@ -365,6 +506,7 @@ def profile_inventory(inv) -> None:
     for dev in inv.devices.values():
         if not dev.os_family:
             dev.os_family = device_os_family(dev)
+        dev.functions = server_functions(dev)
     for ip, h in inv.hosts.items():
         if ip in inv.ip_to_device:
             continue
@@ -381,5 +523,6 @@ def profile_inventory(inv) -> None:
             h.model = p.model
         h.confidence = p.confidence
         h.evidence = p.evidence
+        h.functions = p.functions
         if p.hostname and not h.hostname:
             h.hostname = p.hostname

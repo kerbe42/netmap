@@ -16,6 +16,12 @@ ROLE_COLORS = {
     "switch": "#2563eb",
     "wireless": "#7c3aed",
     "server": "#059669",
+    "webserver": "#0d9488",
+    "fileserver": "#0e7490",
+    "mailserver": "#7c3aed",
+    "dnsserver": "#4f46e5",
+    "dc": "#1d4ed8",
+    "hypervisor": "#16a34a",
     "vm": "#10b981",
     "database": "#b45309",
     "windows": "#0284c7",
@@ -42,6 +48,12 @@ ROLE_LABELS = {
     "switch": "Switch",
     "wireless": "Wireless",
     "server": "Server",
+    "webserver": "Web server",
+    "fileserver": "File server",
+    "mailserver": "Mail server",
+    "dnsserver": "DNS server",
+    "dc": "Domain controller",
+    "hypervisor": "Hypervisor",
     "vm": "Virtual machine",
     "database": "Database",
     "windows": "Windows host",
@@ -115,13 +127,36 @@ def _glyph(role: str) -> tuple[QPainterPath, QPainterPath]:
         for r in (0.16, 0.28, 0.40):
             s.arcMoveTo(QRectF(0.5 - r, 0.66 - r, 2 * r, 2 * r), 45)
             s.arcTo(QRectF(0.5 - r, 0.66 - r, 2 * r, 2 * r), 45, 90)
-    elif role in ("server", "nas"):
+    elif role in ("server", "nas", "hypervisor"):
         for i in range(3):
             y = 0.22 + i * 0.19
             s.addRoundedRect(QRectF(0.26, y, 0.48, 0.15), 0.03, 0.03)
             f.addEllipse(QPointF(0.66, y + 0.075), 0.025, 0.025)
             if role == "nas":
                 s.moveTo(0.33, y + 0.075), s.lineTo(0.52, y + 0.075)
+            if role == "hypervisor":  # a small play-triangle marks the guests it runs
+                f.moveTo(0.33, y + 0.04), f.lineTo(0.33, y + 0.11), f.lineTo(0.40, y + 0.075), f.closeSubpath()
+    elif role == "webserver":  # globe
+        s.addEllipse(QRectF(0.24, 0.24, 0.52, 0.52))
+        s.moveTo(0.24, 0.50), s.lineTo(0.76, 0.50)
+        s.addEllipse(QRectF(0.40, 0.24, 0.20, 0.52))
+        s.moveTo(0.30, 0.36), s.lineTo(0.70, 0.36)
+        s.moveTo(0.30, 0.64), s.lineTo(0.70, 0.64)
+    elif role == "fileserver":  # folder
+        s.moveTo(0.22, 0.34), s.lineTo(0.44, 0.34), s.lineTo(0.50, 0.42), s.lineTo(0.78, 0.42)
+        s.lineTo(0.78, 0.72), s.lineTo(0.22, 0.72), s.closeSubpath()
+    elif role == "mailserver":  # envelope
+        s.addRect(QRectF(0.22, 0.32, 0.56, 0.36))
+        s.moveTo(0.22, 0.32), s.lineTo(0.50, 0.54), s.lineTo(0.78, 0.32)
+    elif role == "dnsserver":  # signpost
+        s.moveTo(0.50, 0.22), s.lineTo(0.50, 0.78)
+        s.moveTo(0.30, 0.34), s.lineTo(0.66, 0.34), s.lineTo(0.74, 0.42), s.lineTo(0.66, 0.50), s.lineTo(0.30, 0.50), s.closeSubpath()
+        s.moveTo(0.70, 0.56), s.lineTo(0.34, 0.56), s.lineTo(0.26, 0.64), s.lineTo(0.34, 0.72), s.lineTo(0.70, 0.72), s.closeSubpath()
+    elif role == "dc":  # AD building with columns
+        f.moveTo(0.50, 0.20), f.lineTo(0.78, 0.34), f.lineTo(0.22, 0.34), f.closeSubpath()
+        for x in (0.30, 0.44, 0.58, 0.70):
+            s.addRect(QRectF(x, 0.38, 0.045, 0.30))
+        f.addRect(QRectF(0.22, 0.70, 0.56, 0.06))
     elif role == "vm":
         s.addRoundedRect(QRectF(0.22, 0.22, 0.38, 0.38), 0.04, 0.04)
         s.addRoundedRect(QRectF(0.40, 0.40, 0.38, 0.38), 0.04, 0.04)

@@ -192,6 +192,30 @@ carry a **Why** tab listing each signal, what was seen, and what it implies — 
 the verdict. The best name is chosen from DNS, NetBIOS, mDNS, SSDP and LLDP, and every other name it goes by
 is kept as "also known as".
 
+### Server functions from open ports
+
+On top of the single role, NetMap reads a server's **open ports** to work out what it actually *does* — a
+box can fill several jobs at once, so these are listed as **functions** (a column on the Hosts list, a row in
+the details panel, and a **Server functions** breakdown on the overview):
+
+| Ports | Function |
+|---|---|
+| 80 / 443 / 8080 / 8443 | Web server |
+| 1433 / 3306 / 5432 / 1521 / 27017 / 6379 … | Database — named specifically (SQL Server, MySQL, PostgreSQL, Oracle, MongoDB, Redis …) |
+| 2049 / 548 (or SMB on a server OS) | File server |
+| 25 / 465 / 587 / 143 / 993 / 995 | Mail server |
+| 53 · 67 · 123 | DNS · DHCP · NTP |
+| 389 / 636 / 3268 (+88) | Directory / domain controller |
+| 515 / 631 / 9100 | Print server |
+| 902 / 8006 / 6443 · 2375 | Virtualization host · containers |
+
+Where the ports make it unambiguous, the primary **role** is sharpened too — a plain `server` becomes a
+**web server, database, mail server, DNS server, domain controller, hypervisor** or **file server**, each with
+its own icon on the map and lists. Client machines are not mistyped: every Windows PC exposes SMB and RDP, so
+those alone never make it a "file server" — that needs NFS/AFP or a server operating system, and a host that
+offers no real service is left as a plain endpoint. Filter or query on it like anything else, e.g.
+`hosts where functions ~ "SQL Server"` or `type:database` in the Hosts search box.
+
 ## Routed topology
 
 Beyond cabling, NetMap reads the things that decide how the network actually forwards, so you can

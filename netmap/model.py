@@ -147,6 +147,7 @@ class Device:
     peers: list = field(default_factory=list)  # routing adjacencies: {proto:ospf|bgp, addr, state, extra}
     stp: dict = field(default_factory=dict)  # {root, root_port, priority, is_root}
     ports: list = field(default_factory=list)  # open ports from an nmap scan: {port, proto, service, product}
+    functions: list = field(default_factory=list)  # server functions inferred from open ports
     os_detail: str = ""  # OS guess from nmap -O (SNMP sysDescr still wins for os_version)
     poe_budget_w: float = 0.0  # total PoE the switch can supply (watts)
     poe_used_w: float = 0.0  # PoE currently drawn (watts)
@@ -211,6 +212,7 @@ class Host:
     connections: list[dict] = field(default_factory=list)  # [{proto, laddr, lport, raddr, rport, state, process}]
     inspected_at: float = 0.0
     inspect_source: str = ""  # ssh | winrm
+    functions: list = field(default_factory=list)  # server functions from open ports: web, SQL Server, file, mail, DNS, ....
     snmp_failed: bool = False
     first_seen: float = 0.0
     last_seen: float = 0.0

@@ -21,6 +21,16 @@ from PySide6.QtWidgets import (
 from ..views import Snapshot, finding_rows, fmt_time
 from .icons import ROLE_LABELS, role_color, role_pixmap
 
+# a distinct hue per server function for the overview bar list
+_FUNC_COLOR = {
+    "Web": "#14b8a6", "Database": "#b45309", "SQL": "#b45309", "MySQL": "#b45309",
+    "PostgreSQL": "#b45309", "Oracle": "#b45309", "MongoDB": "#b45309", "Redis": "#b45309",
+    "File": "#0891b2", "Mail": "#a78bfa", "DNS": "#6366f1", "DHCP": "#0ea5e9",
+    "Directory": "#3b82f6", "Kerberos": "#3b82f6", "Print": "#a16207", "FTP": "#0e7490",
+    "Proxy": "#f59e0b", "VoIP": "#9333ea", "Remote": "#64748b", "Virtualization": "#16a34a",
+    "Container/orchestration": "#22c55e", "Message": "#d97706", "Monitoring": "#0d9488", "Backup": "#7c3aed", "Time": "#94a3b8",
+}
+
 
 class Card(QFrame):
     clicked = Signal()
@@ -240,12 +250,15 @@ class Dashboard(QWidget):
         self.b_find.rowClicked.connect(lambda k: self.navigate.emit("findings", f'finding:"{k}"'))
         self.b_os = BarList(0.5)
         self.b_os.rowClicked.connect(lambda k: self.navigate.emit("devices", f'os:"{k}"'))
+        self.b_funcs = BarList(0.5)
+        self.b_funcs.rowClicked.connect(lambda k: self.navigate.emit("hosts", f'functions:"{k}"'))
         self.grid = grid
         self.boxes = [
             _box("Devices by role", self.b_roles),
             _box("Devices by vendor", self.b_vendors),
             _box("Endpoints by type", self.b_hosts, "From MAC vendor, open ports and LLDP; correct any in the Hosts list."),
             _box("Busiest subnets", self.b_subnets, "Addresses seen in use. Unswept subnets can only undercount."),
+            _box("Server functions", self.b_funcs, "What servers actually do, inferred from their open ports (web, database, file, mail, DNS…). A host can fill several."),
             _box("Needs attention", self.b_find, "Things to check before you rely on this inventory."),
             _box("Software versions", self.b_os, "OS versions reported by the devices."),
         ]
@@ -331,3 +344,9 @@ class Dashboard(QWidget):
         self.b_find.set_rows([(c, c, n, color[sev[c]], "", "", "") for c, n in sorted(cats.items(), key=lambda kv: (order[sev[kv[0]]], -kv[1]))[:8]])
         osv = Counter(f"{d.vendor} {d.os_version}".strip() for d in devices if d.os_version)
         self.b_os.set_rows([(k.split(" ", 1)[-1], k, n, "#8b5cf6", "", "", "") for k, n in osv.most_common(8)])
+        funcs = Counter()
+        for h in hosts:
+            funcs.update(getattr(h, "functions", None) or [])
+        for d in devices:
+            funcs.update(getattr(d, "functions", None) or [])
+        self.b_funcs.set_rows([(k, k, n, _FUNC_COLOR.get(k.split()[0], "#0d9488"), "", "", "") for k, n in funcs.most_common(12)])

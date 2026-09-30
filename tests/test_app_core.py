@@ -363,6 +363,46 @@ def test_profile_identifies_from_multiple_signals():
     assert pb.vendor.startswith("Raspberry") and pb.confidence in ("low", "medium")
 
 
+def test_server_functions_from_ports():
+    from netmap.model import Host
+    from netmap.profile import profile_host, server_functions
+
+    def mk(ports, os="", fam=""):
+        h = Host(ip="10.0.0.1", os=os, os_family=fam)
+        h.ports = [{"port": p, "proto": "tcp", "service": "", "product": ""} for p in ports]
+        return h
+
+    # a Linux box serving web + SSH -> webserver role, functions listed
+    p = profile_host(mk([22, 80, 443], "Ubuntu 22.04", "linux"))
+    assert p.role == "webserver" and "Web server" in p.functions
+
+    # SQL Server box -> database role, product named specifically
+    p = profile_host(mk([80, 443, 1433, 445, 3389], "Windows Server 2019", "windows"))
+    assert p.role == "database" and "SQL Server" in p.functions
+
+    # a plain Windows 10 desktop opens SMB+RDP but is NOT a file server, and offers
+    # no real service - so it reports no server functions and stays a client role
+    p = profile_host(mk([135, 139, 445, 3389, 5985], "Windows 10", "windows"))
+    assert p.role == "windows" and p.functions == []
+
+    # NFS/AFP makes a real file server (nas role already covers storage)
+    assert "File server" in profile_host(mk([22, 2049, 548], "Ubuntu", "linux")).functions
+
+    # domain controller: directory wins over the other services it runs
+    p = profile_host(mk([53, 88, 389, 636, 3268, 445, 135], "Windows Server", "windows"))
+    assert p.role == "dc" and "Directory (LDAP/AD)" in p.functions
+
+    # ESXi: virtualization outranks its management web UI
+    assert profile_host(mk([22, 443, 902], "VMware ESXi", "esxi")).role == "hypervisor"
+
+    # a printer's web UI is a management surface, not a "web server" function
+    p = profile_host(mk([80, 515, 631, 9100]))
+    assert p.role == "printer" and p.functions == []
+
+    # no ports -> no functions, role unchanged
+    assert server_functions(Host(ip="10.0.0.2")) == []
+
+
 def test_device_os_family():
     from netmap.profile import device_os_family
     from netmap.model import Device

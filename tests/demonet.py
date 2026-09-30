@@ -533,8 +533,22 @@ def _inject_probes(inv, rng):
         elif role == "phone":
             h.names.setdefault("sweep", h.hostname)
         elif role in ("server", "vm") and sub.startswith("10.30."):
-            h.probes["nmap"] = {"os": rng.choice(["VMware ESXi 7.0", "Ubuntu 22.04 (Linux 5.15)", "Windows Server 2019"]),
-                                "os_accuracy": rng.randint(90, 97), "os_family": rng.choice(["VMware ESXi", "Linux", "Windows"]), "os_vendor": ""}
+            # give each server a realistic service profile so it classifies as a
+            # specific type (web / SQL / mail / DNS / file / hypervisor) from its
+            # open ports, the way a real port scan would reveal.
+            profiles = [
+                ("web", "Ubuntu 22.04 (Linux 5.15)", "Linux", [22, 80, 443]),
+                ("web", "Ubuntu 22.04 (Linux 5.15)", "Linux", [22, 80, 443, 8080]),
+                ("mssql", "Windows Server 2019", "Windows", [135, 139, 445, 1433, 3389]),
+                ("postgres", "Ubuntu 22.04 (Linux 5.15)", "Linux", [22, 5432]),
+                ("mail", "Ubuntu 22.04 (Linux 5.15)", "Linux", [22, 25, 465, 587, 143, 993, 995]),
+                ("dns", "Ubuntu 22.04 (Linux 5.15)", "Linux", [22, 53]),
+                ("file", "Ubuntu 22.04 (Linux 5.15)", "Linux", [22, 111, 2049, 548, 445]),
+                ("esxi", "VMware ESXi 7.0", "VMware ESXi", [22, 443, 902]),
+            ]
+            kind, osname, fam, sports = profiles[int(last) % len(profiles)]
+            h.probes["nmap"] = {"os": osname, "os_accuracy": rng.randint(90, 97), "os_family": fam, "os_vendor": ""}
+            h.ports = [{"port": p, "proto": "tcp", "service": "", "product": ""} for p in sports]
             if "nmap" not in h.sources:
                 h.sources.append("nmap")
         elif role in ("nas",):
@@ -574,6 +588,11 @@ def _inject_probes(inv, rng):
             h.probes["netbios"] = {"hostname": (h.hostname or "DC01").split(".")[0].upper(), "domain": "NORTHWIND",
                                    "user": "", "is_dc": True, "mac": h.mac, "names": []}
             h.names["netbios"] = h.probes["netbios"]["hostname"]
+            h.probes["nmap"] = {"os": "Windows Server 2019", "os_accuracy": 96, "os_family": "Windows", "os_vendor": "Microsoft"}
+            h.ports = [{"port": p, "proto": "tcp", "service": "", "product": ""}
+                       for p in (53, 88, 135, 139, 389, 445, 636, 3268, 3269, 3389)]
+            if "nmap" not in h.sources:
+                h.sources.append("nmap")
             break
 
 
