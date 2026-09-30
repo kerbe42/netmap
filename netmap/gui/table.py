@@ -6,10 +6,10 @@ import re
 from typing import Callable, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, QSettings, QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QGuiApplication, QKeySequence, QPalette
+from PySide6.QtGui import QAction, QBrush, QColor, QGuiApplication, QKeySequence, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QFileDialog,
+    QCheckBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -25,14 +25,37 @@ from PySide6.QtWidgets import (
 )
 
 from ..views import Column, fmt_duration, fmt_time, sort_key
-from .icons import role_icon
+from .fileutil import ask_save_path
+from .icons import ROLE_LABELS, role_icon
 
 ID_ROLE = Qt.UserRole + 1
 ROW_ROLE = Qt.UserRole + 2
 SORT_ROLE = Qt.UserRole + 3
 
-SEVERITY_COLORS = {"attention": "#dc2626", "check": "#d97706", "info": "#64748b"}
+SEVERITY_COLORS = {"attention": "#dc2626", "check": "#d97706", "info": "#64748b", "high": "#dc2626", "medium": "#d97706", "low": "#64748b"}
 ICON_COLUMNS = {"name", "cidr", "a", "device", "ip"}
+ROLE_COLUMNS = {"role"}  # raw role keys shown as their labels (workstation -> Workstation)
+DASH = "—"
+
+# the column a fresh list is sorted by when the user has not chosen one (else column 0)
+DEFAULT_SORT = {"hosts": "ip"}
+# pages whose rows can be acknowledged (hidden until "Show acknowledged" is ticked)
+ACK_PAGES = {"findings", "compliance"}
+
+EMPTY_TEXT = {
+    "devices": "No network devices yet — run a scan (Scan ▸ New scan) or open a project.",
+    "hosts": "No hosts yet — run a scan (Scan ▸ New scan) or open a project.",
+    "subnets": "No subnets yet — they appear as soon as a scan finds a device with an address.",
+    "vlans": "No VLANs yet — they come from the switches a scan polls.",
+    "links": "No links yet — a scan learns them from LLDP/CDP and routing tables.",
+    "interfaces": "No interfaces yet — run a scan to poll the devices.",
+    "hardware": "No hardware inventory yet — run a scan to poll the devices.",
+    "dependencies": "No dependencies yet — Tools ▸ Inspect servers collects the connections they are built from.",
+    "findings": "Nothing needs attention — or nothing has been scanned yet.",
+    "compliance": "No compliance findings — or nothing has been scanned yet.",
+    "history": "No scans yet — Scan ▸ New scan records one here.",
+}
+FILTERED_TEXT = "Nothing matches the filter."
 
 
 def display(col: Column, v) -> str:
@@ -41,25 +64,62 @@ def display(col: Column, v) -> str:
     if col.kind == "time":
         return fmt_time(v)
     if col.kind == "duration":
-        return fmt_duration(v)
+        return fmt_duration(v) or DASH
     if col.kind == "pct":
         return f"{float(v):.1f}%"
     if col.kind == "bool":
         return "yes" if v else "no"
+    if col.key in ROLE_COLUMNS:
+        return ROLE_LABELS.get(str(v), str(v))
     return str(v)
 
 
+def _row_sort_key(kind: str, key: str, row: dict):
+    return sort_key(kind, row.get(key))
+
+
 class RowsModel(QAbstractTableModel):
+    """Rows as dicts. Sorting happens here, once per sort, with a precomputed key per row:
+    at 14,000 rows this is ~200x cheaper than the proxy comparing cells through lessThan."""
+
     def __init__(self, columns: list[Column], parent=None):
         super().__init__(parent)
         self.columns = columns
         self.rows: list[dict] = []
         self._icons: dict = {}
+        self._sort_col = -1
+        self._sort_order = Qt.AscendingOrder
 
     def set_rows(self, rows: list[dict]) -> None:
         self.beginResetModel()
-        self.rows = rows
+        self.rows = list(rows)
+        if 0 <= self._sort_col < len(self.columns):
+            self._sort_rows(self._sort_col, self._sort_order)
         self.endResetModel()
+
+    def _sort_rows(self, column: int, order) -> None:
+        col = self.columns[column]
+        kind, key = col.kind, col.key
+        rev = order == Qt.DescendingOrder
+        try:
+            self.rows.sort(key=lambda r: _row_sort_key(kind, key, r), reverse=rev)
+        except TypeError:  # mixed key shapes: fall back to their text
+            self.rows.sort(key=lambda r: str(_row_sort_key(kind, key, r)), reverse=rev)
+
+    def sort(self, column: int, order=Qt.AscendingOrder) -> None:  # noqa: D401 - Qt API
+        if column < 0 or column >= len(self.columns):
+            self._sort_col = -1
+            return
+        self._sort_col = column
+        self._sort_order = order
+        if not self.rows:
+            return
+        self.layoutAboutToBeChanged.emit()
+        self._sort_rows(column, order)
+        self.layoutChanged.emit()
+
+    def sort_state(self) -> tuple[int, Qt.SortOrder]:
+        return self._sort_col, self._sort_order
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -102,17 +162,20 @@ class RowsModel(QAbstractTableModel):
             s = display(col, v)
             return s if len(s) > 30 else None
         if role == Qt.ForegroundRole:
+            if row.get("_ack"):
+                return QBrush(QColor("#94a3b8"))
             if col.key == "severity":
                 return QBrush(QColor(SEVERITY_COLORS.get(str(v).lower(), "#64748b")))
             if col.key == "status" and v in ("down", "disabled"):
                 return QBrush(QColor("#94a3b8"))
             if (col.key == "speed" and row.get("_mismatch")) or (col.key == "names" and row.get("_conflict")):
                 return QBrush(QColor("#d97706"))
-        if role == Qt.FontRole and col.key == "severity":
+        if role == Qt.FontRole and (col.key == "severity" or row.get("_ack")):
             from PySide6.QtGui import QFont
 
             f = QFont()
-            f.setBold(True)
+            f.setBold(col.key == "severity" and not row.get("_ack"))
+            f.setStrikeOut(bool(row.get("_ack")))
             return f
         if role == Qt.TextAlignmentRole and col.kind in ("int", "pct", "duration"):
             return int(Qt.AlignRight | Qt.AlignVCenter)
@@ -121,13 +184,25 @@ class RowsModel(QAbstractTableModel):
 
 class FilterProxy(QSortFilterProxyModel):
     """Every word must match some visible column; `column:text` narrows a word to one column
-    (by key or by the start of its title), e.g. ``role:switch vendor:cisco``."""
+    (by key or by the start of its title), e.g. ``role:switch vendor:cisco``.
+
+    Sorting is delegated to the source RowsModel (one pass with precomputed keys) instead of
+    the proxy's per-comparison lessThan; dynamic re-sorting is off, the model re-sorts when
+    its rows are replaced."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.terms: list[tuple[Optional[int], str]] = []
         self.hidden: set[int] = set()
         self.setSortRole(SORT_ROLE)
+        self.setDynamicSortFilter(False)
+
+    def sort(self, column: int, order=Qt.AscendingOrder) -> None:  # noqa: D401 - Qt API
+        src = self.sourceModel()
+        if isinstance(src, RowsModel):
+            src.sort(column, order)
+        else:
+            super().sort(column, order)
 
     def set_filter(self, text: str) -> None:
         model: RowsModel = self.sourceModel()
@@ -158,7 +233,12 @@ class FilterProxy(QSortFilterProxyModel):
         # The cache lives on the row dict, which is rebuilt on every set_rows.
         texts = row.get("_disp")
         if texts is None:
-            texts = [display(c, row.get(c.key)).lower() for c in model.columns]
+            texts = []
+            for c in model.columns:
+                t = display(c, row.get(c.key)).lower()
+                if c.key in ROLE_COLUMNS and row.get(c.key):
+                    t += " " + str(row.get(c.key)).lower()  # role:dc still finds "Domain controller"
+                texts.append(t)
             row["_disp"] = texts
         for col, word in self.terms:
             if col is not None:
@@ -175,6 +255,15 @@ class FilterProxy(QSortFilterProxyModel):
             return a < b
         except TypeError:
             return str(a) < str(b)
+
+
+def bar_text_color(pct: float, bar_rect: QRect, text_width: int, text_pad: int = 4) -> str:
+    """'white' when the filled part of the bar covers the (right-aligned) percentage text,
+    else 'text' (the palette's text colour). A half-full bar leaves the number over the
+    unfilled track, where white would be unreadable."""
+    fill_end = bar_rect.left() + int(bar_rect.width() * min(max(pct, 0.0), 100.0) / 100)
+    text_left = bar_rect.right() - text_pad - text_width
+    return "white" if fill_end >= bar_rect.right() - text_pad - 1 or (fill_end >= text_left + text_width) else "text"
 
 
 class BarDelegate(QStyledItemDelegate):
@@ -203,9 +292,43 @@ class BarDelegate(QStyledItemDelegate):
         if w > 0:
             painter.setBrush(color)
             painter.drawRoundedRect(QRect(r.left(), r.top(), w, r.height()), 3, 3)
-        painter.setPen(pal.color(QPalette.Text) if pct < 50 else QColor("white"))
+        tw = painter.fontMetrics().horizontalAdvance(text)
+        painter.setPen(QColor("white") if bar_text_color(pct, r, tw) == "white" else pal.color(QPalette.Text))
         painter.drawText(r.adjusted(4, 0, -4, 0), Qt.AlignVCenter | Qt.AlignRight, text)
         painter.restore()
+
+
+class PlaceholderTableView(QTableView):
+    """A table that says why it is empty instead of showing a blank grid."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.placeholder = ""
+        self.filtered_placeholder = FILTERED_TEXT
+
+    def set_placeholder(self, text: str) -> None:
+        self.placeholder = text
+        self.viewport().update()
+
+    def _empty_text(self) -> str:
+        m = self.model()
+        if m is None or m.rowCount() > 0:
+            return ""
+        src = m.sourceModel() if isinstance(m, QSortFilterProxyModel) else None
+        if src is not None and src.rowCount() > 0:
+            return self.filtered_placeholder
+        return self.placeholder
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        text = self._empty_text()
+        if not text:
+            return
+        p = QPainter(self.viewport())
+        p.setPen(self.palette().color(QPalette.PlaceholderText))
+        r = self.viewport().rect().adjusted(24, 24, -24, -24)
+        p.drawText(r, Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, text)
+        p.end()
 
 
 class DataPage(QWidget):
@@ -214,6 +337,7 @@ class DataPage(QWidget):
     nodeSelected = Signal(str)
     nodeActivated = Signal(str)
     contextRequested = Signal(object, object)  # (row dict, global QPoint)
+    showAcknowledgedChanged = Signal(bool)
 
     def __init__(self, key: str, title: str, columns: list[Column], hint: str = "", parent=None):
         super().__init__(parent)
@@ -239,6 +363,10 @@ class DataPage(QWidget):
         self._filter_timer.timeout.connect(lambda: self._on_filter(self.filter.text()))
         self.filter.textChanged.connect(lambda _: self._filter_timer.start())
         self.filter.returnPressed.connect(lambda: (self._filter_timer.stop(), self._on_filter(self.filter.text())))
+        self.show_ack = QCheckBox("Show acknowledged")
+        self.show_ack.setToolTip("Rows you acknowledged (right-click ▸ Acknowledge) are hidden unless this is ticked")
+        self.show_ack.setVisible(key in ACK_PAGES)
+        self.show_ack.toggled.connect(self.showAcknowledgedChanged)
         self.columns_btn = QToolButton()
         self.columns_btn.setText("Columns")
         self.columns_btn.setPopupMode(QToolButton.InstantPopup)
@@ -254,10 +382,12 @@ class DataPage(QWidget):
         top.addWidget(self.count)
         top.addStretch(1)
         top.addWidget(self.filter, 3)
+        top.addWidget(self.show_ack)
         top.addWidget(self.columns_btn)
         top.addWidget(self.export_btn)
 
-        self.view = QTableView()
+        self.view = PlaceholderTableView()
+        self.view.set_placeholder(EMPTY_TEXT.get(key, f"No {title.lower()} yet — run a scan or open a project."))
         self.view.setModel(self.proxy)
         self.view.setSortingEnabled(True)
         self.view.setAlternatingRowColors(True)
@@ -298,19 +428,26 @@ class DataPage(QWidget):
         self._sorted_once = False
 
     # ---- data ----
+    def _default_sort_column(self) -> int:
+        want = DEFAULT_SORT.get(self.key)
+        if want:
+            for i, c in enumerate(self.model.columns):
+                if c.key == want:
+                    return i
+        return 0
+
     def set_rows(self, rows: list[dict]) -> None:
         """Replace the rows, keeping selection, scroll position and sort."""
         keep = self.selected_ids()
         scroll = self.view.verticalScrollBar().value()
-        self.model.set_rows(rows)
+        hdr = self.view.horizontalHeader()
         if not self._sorted_once and rows:
             self._sorted_once = True
-            hdr = self.view.horizontalHeader()
             if not self._restored or hdr.sortIndicatorSection() >= self.model.columnCount():
-                # Qt's default indicator is descending; a fresh list reads A-Z by its first column
-                self.view.sortByColumn(0, Qt.AscendingOrder)
-            else:
-                self.view.sortByColumn(hdr.sortIndicatorSection(), hdr.sortIndicatorOrder())
+                # Qt's default indicator is descending; a fresh list reads A-Z (or by address)
+                hdr.setSortIndicator(self._default_sort_column(), Qt.AscendingOrder)
+            self.model.sort(hdr.sortIndicatorSection(), hdr.sortIndicatorOrder())
+        self.model.set_rows(rows)  # re-applies the remembered sort in one pass
         if keep:
             self.select_ids(keep, scroll=False)
         self.view.verticalScrollBar().setValue(scroll)
@@ -347,6 +484,7 @@ class DataPage(QWidget):
         self.proxy.hidden = {i for i in range(self.model.columnCount()) if self.view.isColumnHidden(i)}
         self.proxy.set_filter(text)
         self._update_count()
+        self.view.viewport().update()
 
     def _update_count(self):
         total = self.model.rowCount()
@@ -438,7 +576,7 @@ class DataPage(QWidget):
 
     def export_csv(self, path: str = ""):
         if not path:
-            path, _ = QFileDialog.getSaveFileName(self, f"Export {self.title}", f"{self.key}.csv", "CSV files (*.csv)")
+            path = ask_save_path(self, f"Export {self.title}", f"{self.key}.csv", "CSV files (*.csv)")
         if not path:
             return
         headers, rows = self.visible_table()

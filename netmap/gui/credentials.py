@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -184,12 +185,30 @@ def describe_sysinfo(info: dict) -> str:
     return "\n".join(lines)
 
 
+class _CredentialList(QListWidget):
+    """The saved-credential list, with a hint while it is empty."""
+
+    PLACEHOLDER = "No credentials yet.\n\nAdd your first read-only community or SNMPv3 user with Add…\nNetMap only reads (SNMP GET/GETBULK); a read-only credential is all it needs."
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self.count():
+            return
+        from PySide6.QtGui import QPainter
+
+        p = QPainter(self.viewport())
+        p.setPen(self.palette().color(QPalette.PlaceholderText))
+        p.drawText(self.viewport().rect().adjusted(20, 20, -20, -20), Qt.AlignCenter | Qt.TextWordWrap, self.PLACEHOLDER)
+        p.end()
+
+
 class CredentialEditor(QDialog):
-    def __init__(self, store: CredentialStore, cred: Optional[SavedCredential] = None, parent=None):
+    def __init__(self, store: CredentialStore, cred: Optional[SavedCredential] = None, parent=None, ordinal: int = 1):
         super().__init__(parent)
         self.setWindowTitle("SNMP credential")
         self.store = store
         self.cred = cred or SavedCredential()
+        self.ordinal = ordinal  # for the default label of a new credential
         self.label = QLineEdit(self.cred.label)
         self.label.setPlaceholderText("e.g. Head office read-only")
         self.v2 = QRadioButton("SNMP v2c (community)")
@@ -283,7 +302,8 @@ class CredentialEditor(QDialog):
     def _apply(self) -> Optional[SavedCredential]:
         c = self.cred
         c.kind = "v2c" if self.v2.isChecked() else "v3"
-        c.label = self.label.text().strip() or (f"v2c {self.community.text()[:2]}…" if c.kind == "v2c" else f"v3 {self.user.text().strip()}")
+        # never derive the label from the community: labels go into project files as Device.credential
+        c.label = self.label.text().strip() or (f"v2c credential {self.ordinal}" if c.kind == "v2c" else (f"v3 {self.user.text().strip()}".strip() or f"v3 credential {self.ordinal}"))
         c.user = self.user.text().strip()
         c.auth = self.auth.currentText()
         c.priv = self.priv.currentText()
@@ -336,7 +356,7 @@ class CredentialsDialog(QDialog):
         self.setWindowTitle("SNMP credentials")
         self.store = store
         self.creds = store.load()
-        self.list = QListWidget()
+        self.list = _CredentialList()
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.list.setDragDropMode(QAbstractItemView.InternalMove)
         self.list.itemDoubleClicked.connect(lambda _: self._edit())
@@ -391,7 +411,7 @@ class CredentialsDialog(QDialog):
         self._save()
 
     def _add(self):
-        dlg = CredentialEditor(self.store, None, self)
+        dlg = CredentialEditor(self.store, None, self, ordinal=len(self.creds) + 1)
         if dlg.exec():
             self.creds.append(dlg.cred)
             self._save()

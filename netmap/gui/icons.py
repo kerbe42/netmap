@@ -30,6 +30,7 @@ ROLE_COLORS = {
     "printer": "#a16207",
     "phone": "#9333ea",
     "camera": "#e11d48",
+    "media": "#be185d",
     "nas": "#0891b2",
     "ups": "#d97706",
     "plc": "#0d9488",
@@ -62,6 +63,7 @@ ROLE_LABELS = {
     "printer": "Printer",
     "phone": "Phone",
     "camera": "Camera",
+    "media": "Media / AV",
     "nas": "Storage / NAS",
     "ups": "UPS / power",
     "plc": "PLC / controller",
@@ -78,6 +80,11 @@ ROLES = list(ROLE_LABELS)
 
 def role_color(role: str) -> QColor:
     return QColor(ROLE_COLORS.get(role or "unknown", ROLE_COLORS["unknown"]))
+
+
+def role_label(role: str) -> str:
+    """The label for a role key; an unknown key reads as itself, never breaks a view."""
+    return ROLE_LABELS.get(role or "unknown", role or ROLE_LABELS["unknown"])
 
 
 def _arrow(path: QPainterPath, x1, y1, x2, y2, head=0.09):
@@ -190,6 +197,11 @@ def _glyph(role: str) -> tuple[QPainterPath, QPainterPath]:
         s.addRoundedRect(QRectF(0.20, 0.34, 0.44, 0.32), 0.05, 0.05)
         s.moveTo(0.64, 0.44), s.lineTo(0.80, 0.36), s.lineTo(0.80, 0.64), s.lineTo(0.64, 0.56)
         f.addEllipse(QPointF(0.42, 0.50), 0.07, 0.07)
+    elif role == "media":  # a screen with a play triangle: TVs, signage, conferencing, streaming boxes
+        s.addRoundedRect(QRectF(0.20, 0.24, 0.60, 0.40), 0.04, 0.04)
+        s.moveTo(0.50, 0.64), s.lineTo(0.50, 0.72)
+        s.moveTo(0.34, 0.76), s.lineTo(0.66, 0.76)
+        f.moveTo(0.43, 0.33), f.lineTo(0.43, 0.55), f.lineTo(0.61, 0.44), f.closeSubpath()
     elif role == "ups":
         s.addRoundedRect(QRectF(0.24, 0.30, 0.48, 0.40), 0.04, 0.04)
         s.addRect(QRectF(0.72, 0.42, 0.05, 0.16))

@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import QRect, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPalette, QPen
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QLabel, QSizePolicy, QToolTip, QVBoxLayout, QWidget
+
+from ..views import short_port
 
 UP = QColor("#16a34a")
 DOWN = QColor("#94a3b8")
@@ -20,6 +22,25 @@ def _port_sort_key(name: str):
     return (nums, name or "")
 
 
+# logical interfaces that have no place on a faceplate. Anchored so that "Port 1" / "Port24"
+# (many small switches name their physical ports so) is not mistaken for a port-channel.
+_LOGICAL_RE = re.compile(r"^(vlan|vl|po|port-channel|lo|loopback|tunnel|tu|null|nu|mgmt)(\d|[-_ ./:]|$)")
+
+
+def is_logical_interface(name: str) -> bool:
+    return bool(_LOGICAL_RE.match((name or "").strip().lower()))
+
+
+def port_label(port: dict) -> str:
+    """What is written in a port's cell: its number, or for a port with a neighbour (an
+    uplink, another switch, an AP) the whole short name so Te1/1/1 is not just another "1"."""
+    name = port.get("name", "")
+    if port.get("neighbor"):
+        return short_port(name) or name
+    num = re.findall(r"\d+", name)
+    return num[-1] if num else "?"
+
+
 class _Faceplate(QWidget):
     portClicked = Signal(str)  # neighbour node id, if any
 
@@ -27,8 +48,10 @@ class _Faceplate(QWidget):
         super().__init__(parent)
         self.ports: list[dict] = []
         self.cell = 26
+        self.cell_w = 26
         self.gap = 3
         self.cols = 24
+        self.rows = 1
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -36,28 +59,34 @@ class _Faceplate(QWidget):
         self.ports = ports
         n = len(ports)
         # two rows like a real switch when there are many access ports
-        self.cols = max(1, (n + 1) // 2) if n > 12 else n
+        self.rows = 2 if n > 12 else 1
+        self.cols = max(1, (n + 1) // 2) if self.rows == 2 else max(n, 1)
+        # cells widen to fit the longest label (a full "Te1/1/1" on an uplink)
+        f = self.font()
+        f.setPointSizeF(6.5)
+        fm = QFontMetrics(f)
+        widest = max((fm.horizontalAdvance(port_label(p)) for p in ports), default=0)
+        self.cell_w = max(self.cell, widest + 6)
         self.updateGeometry()
         self.update()
 
     def _grid_pos(self, i):
         # fill top row even ports / bottom odd, as on a switch: port1 top-left, port2 below it
-        col = i // 2
-        row = i % 2
-        return col, row
+        if self.rows == 1:
+            return i, 0
+        return i // 2, i % 2
 
     def sizeHint(self):
-        rows = 2 if len(self.ports) > 12 else 1
-        step = self.cell + self.gap
-        return QSize(self.cols * step + 4, rows * step + 24)
+        step_x = self.cell_w + self.gap
+        step_y = self.cell + self.gap
+        return QSize(self.cols * step_x + 4, self.rows * step_y + 24)
 
     def minimumSizeHint(self):
         return self.sizeHint()
 
     def _rect(self, i):
-        step = self.cell + self.gap
         col, row = self._grid_pos(i)
-        return QRect(2 + col * step, 2 + row * step, self.cell, self.cell)
+        return QRect(2 + col * (self.cell_w + self.gap), 2 + row * (self.cell + self.gap), self.cell_w, self.cell)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -80,10 +109,8 @@ class _Faceplate(QWidget):
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor("#f59e0b"))
                 p.drawEllipse(r.right() - 6, r.top() + 2, 4, 4)
-            # short label (last number of the port name)
             p.setPen(QColor("white") if color.lightness() < 150 else QColor("#111827"))
-            num = re.findall(r"\d+", port.get("name", ""))
-            p.drawText(r, Qt.AlignCenter, num[-1] if num else "?")
+            p.drawText(r, Qt.AlignCenter, port_label(port))
 
     def _color(self, port):
         if port.get("err"):
@@ -160,7 +187,7 @@ class PortPanel(QWidget):
         if dev is None:
             return
         # physical ports only (skip SVIs / port-channels / loopbacks), ordered like a faceplate
-        phys = [i for i in dev.interfaces if not re.match(r"(vlan|vl|po|port-channel|lo|loopback|tunnel|null|mgmt)", (i.name or i.descr or "").lower())]
+        phys = [i for i in dev.interfaces if not is_logical_interface(i.name or i.descr or "")]
         phys.sort(key=lambda i: _port_sort_key(i.name or i.descr))
         ports = []
         up = 0

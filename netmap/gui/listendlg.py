@@ -30,7 +30,9 @@ class ListenDialog(QDialog):
         self.setWindowTitle("Listen for syslog / SNMP traps")
         self.snapshot = snapshot
         self.collector: EventCollector | None = None
-        self._seen = 0
+        self._seen = 0  # events shown so far (a running total, not an index into the buffer)
+        self._last_seq = None  # Event.seq of the last shown event, when events carry one
+        self._last_obj = None  # else the last shown event object itself
         self.syslog_port = QSpinBox()
         self.syslog_port.setRange(1, 65535)
         self.syslog_port.setValue(514)
@@ -98,13 +100,34 @@ class ListenDialog(QDialog):
         else:
             self.stop()
 
+    def _new_events(self, evs: list) -> list:
+        """The events not shown yet. The collector's buffer is a bounded deque, so an index
+        into it is meaningless once it wraps: track by Event.seq when there is one, else by
+        the identity of the last event shown."""
+        if not evs:
+            return []
+        if getattr(evs[-1], "seq", None) is not None:
+            if self._last_seq is None:
+                return evs
+            return [e for e in evs if getattr(e, "seq", None) is not None and e.seq > self._last_seq]
+        if self._last_obj is None:
+            return evs
+        for i in range(len(evs) - 1, -1, -1):
+            if evs[i] is self._last_obj:
+                return evs[i + 1:]
+        return evs  # everything shown before has been evicted: all of these are new
+
     def _drain(self):
         if self.collector is None:
             return
         evs = list(self.collector.events)
-        for ev in evs[self._seen:]:
+        new = self._new_events(evs)
+        for ev in new:
             self._add(ev)
-        self._seen = len(evs)
+        if new:
+            self._last_obj = new[-1]
+            self._last_seq = getattr(new[-1], "seq", None)
+            self._seen += len(new)
         self.count.setText(f"{self._seen} events")
 
     def _add(self, ev):
