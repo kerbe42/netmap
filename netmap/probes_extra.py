@@ -1,0 +1,645 @@
+"""Additional unauthenticated discovery probes - broad protocol fingerprinting, stdlib only.
+
+Where `discover.py` covers the general-IT discovery protocols (NetBIOS, mDNS, SSDP, HTTP/TLS),
+this module knocks on the protocols that identify the harder devices: OT/ICS controllers and
+lights-out server management. The style is runZero/rumble-flavoured - send one small, well-formed
+request to a protocol's port, read whatever the device volunteers, and never write or change
+anything on the target. A probe that cannot answer returns None and never raises out of the
+orchestrator.
+
+Like `discover.py`, each protocol is a *pure parser* over captured bytes plus a thin socket
+wrapper, so the wire format can be unit-tested without touching the network:
+
+    WS-Discovery  (UDP 3702)  parse_wsd          / wsd_probe     printers, ONVIF cameras, Windows
+    IPMI / RMCP   (UDP 623)   parse_ipmi         / ipmi_probe    BMC / lights-out controllers
+    Modbus/TCP    (TCP 502)   parse_modbus_id    / modbus_probe  PLCs / industrial controllers
+    BACnet/IP     (UDP 47808) parse_bacnet       / bacnet_probe  building-automation controllers
+    EtherNet/IP   (UDP 44818) parse_enip_identity/ enip_probe    Rockwell/Allen-Bradley-style CIP
+
+`probe_extra` runs the enabled probes concurrently over the inventory and records the raw signals
+on each Host. Like `identify_hosts`, it does not decide role/os - a separate profiling module
+reads what this one records under host.probes.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import socket
+import struct
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
+
+from .model import Inventory
+from .util import is_usable_ip
+
+log = logging.getLogger("netmap.probes_extra")
+
+
+# --------------------------------------------------------------------------- #
+# 1. WS-Discovery (UDP 3702)
+# --------------------------------------------------------------------------- #
+# A minimal SOAP-over-UDP Probe. The MessageID only needs to be a URI; a fixed one is fine for a
+# single unicast round-trip. We ask for no specific Types so every WSD responder matches.
+_WSD_PROBE = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<soap:Envelope '
+    'xmlns:soap="http://www.w3.org/2003/05/soap-envelope" '
+    'xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" '
+    'xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery">'
+    "<soap:Header>"
+    "<wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>"
+    "<wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>"
+    "<wsa:MessageID>urn:uuid:2a4e6b18-4f3c-4b7a-9c1e-000000000001</wsa:MessageID>"
+    "</soap:Header>"
+    "<soap:Body><wsd:Probe/></soap:Body>"
+    "</soap:Envelope>"
+)
+
+
+def _wsd_kind(types_text: str) -> str:
+    """Guess a device class from the WS-Discovery Types list."""
+    t = (types_text or "").lower()
+    if "networkvideotransmitter" in t or "onvif" in t:
+        return "camera"
+    if "print" in t:
+        return "printer"
+    if "computer" in t or "pnpx" in t or "wsdp:device" in t or ":device" in t:
+        return "windows"
+    return "device"
+
+
+def parse_wsd(data: bytes) -> dict:
+    """Decode a WS-Discovery ProbeMatch(es) SOAP reply.
+
+    Returns {"types":[...], "xaddrs":[...], "scopes":[...], "kind": "printer|camera|windows|device"}
+    or {} if the bytes are not a usable ProbeMatch.
+    """
+    if not data:
+        return {}
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else data
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return {}
+
+    types: list[str] = []
+    xaddrs: list[str] = []
+    scopes: list[str] = []
+    saw_match = False
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1]  # drop the XML namespace
+        low = tag.lower()
+        if low == "probematch":
+            saw_match = True
+            continue
+        val = (el.text or "").strip()
+        if not val:
+            continue
+        if low == "types":
+            types.extend(v for v in val.split() if v)
+        elif low == "xaddrs":
+            xaddrs.extend(v for v in val.split() if v)
+        elif low == "scopes":
+            scopes.extend(v for v in val.split() if v)
+
+    if not (saw_match or types or xaddrs):
+        return {}
+    return {
+        "types": types,
+        "xaddrs": xaddrs,
+        "scopes": scopes,
+        "kind": _wsd_kind(" ".join(types)),
+    }
+
+
+def wsd_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Unicast a WS-Discovery Probe to UDP/3702 and parse the ProbeMatch. None on any failure."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(_WSD_PROBE.encode("utf-8"), (ip, 3702))
+        data, _ = sock.recvfrom(9000)
+        res = parse_wsd(data)
+        return res or None
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# 2. IPMI / RMCP (UDP 623)
+# --------------------------------------------------------------------------- #
+def _build_ipmi_request() -> bytes:
+    """RMCP-wrapped IPMI 'Get Channel Authentication Capabilities' (netFn App, cmd 0x38)."""
+    rmcp = bytes([0x06, 0x00, 0xFF, 0x07])              # version 6, reserved, seq 0xFF, class IPMI
+    session = bytes([0x00]) + b"\x00" * 4 + b"\x00" * 4  # auth none, seq 0, session id 0
+    rs_addr, net_fn = 0x20, 0x18                          # BMC, App request (0x06 << 2)
+    csum1 = (-(rs_addr + net_fn)) & 0xFF
+    rq_addr, rq_seq, cmd = 0x81, 0x00, 0x38              # remote console, seq 0, Get Chan Auth Cap
+    d1, d2 = 0x0E, 0x04                                  # current channel, request admin privilege
+    body = bytes([rq_addr, rq_seq, cmd, d1, d2])
+    csum2 = (-sum(body)) & 0xFF
+    msg = bytes([rs_addr, net_fn, csum1]) + body + bytes([csum2])
+    return rmcp + session + bytes([len(msg)]) + msg
+
+
+def parse_ipmi(data: bytes) -> Optional[dict]:
+    """Confirm an RMCP/IPMI response and pull the version and supported auth types.
+
+    Returns {"ipmi": True, "version": "1.5|2.0", "auth": [...], "channel": int|None} or None if
+    the bytes are not an RMCP IPMI-class message.
+    """
+    if not data or len(data) < 8:
+        return None
+    try:
+        if data[0] != 0x06 or data[3] != 0x07:  # RMCP version 6, message class 0x07 = IPMI
+            return None
+        off = 4
+        auth_type = data[off]
+        off += 1
+        off += 4  # session sequence number
+        off += 4  # session id
+        if auth_type != 0x00:
+            off += 16  # 16-byte auth code when the session is authenticated
+        if off >= len(data):
+            return None
+        msg_len = data[off]
+        off += 1
+        msg = data[off:off + msg_len] if msg_len else data[off:]
+    except (IndexError, struct.error):
+        return None
+
+    result: dict = {"ipmi": True, "version": "1.5", "auth": [], "channel": None}
+    # IPMI message: rqAddr, netFn/LUN, csum1, rsAddr, seq/LUN, cmd, completion, [data...]
+    if len(msg) >= 10 and msg[5] == 0x38 and msg[6] == 0x00:
+        result["channel"] = msg[7] & 0x0F
+        auth_support = msg[8]
+        names: list[str] = []
+        if auth_support & 0x01:
+            names.append("none")
+        if auth_support & 0x02:
+            names.append("md2")
+        if auth_support & 0x04:
+            names.append("md5")
+        if auth_support & 0x10:
+            names.append("password")
+        if auth_support & 0x20:
+            names.append("oem")
+        result["auth"] = names
+        v20 = bool(auth_support & 0x80)  # bit 7: IPMI v2.0+ extended capabilities available
+        if len(msg) >= 11 and (msg[10] & 0x02):  # extended-cap byte, bit1: v2.0 connections
+            v20 = True
+        result["version"] = "2.0" if v20 else "1.5"
+    return result
+
+
+def ipmi_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Send one RMCP Get-Channel-Auth request to UDP/623 and parse the reply. None on failure."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(_build_ipmi_request(), (ip, 623))
+        data, _ = sock.recvfrom(1024)
+        return parse_ipmi(data)
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# 3. Modbus/TCP (TCP 502)
+# --------------------------------------------------------------------------- #
+# Read Device Identification object IDs (function 0x2B / MEI type 0x0E).
+_MODBUS_OBJ = {
+    0x00: "vendor", 0x01: "product_code", 0x02: "version",
+    0x03: "vendor_url", 0x04: "product_name", 0x05: "model", 0x06: "app_name",
+}
+
+
+def _build_modbus_request(unit: int = 0x01, txid: int = 0x0001) -> bytes:
+    """MBAP + Read Device Identification (basic, object 0x00) request."""
+    pdu = bytes([0x2B, 0x0E, 0x01, 0x00])  # fn 0x2B, MEI 0x0E, read basic, start object 0
+    # MBAP: transaction id, protocol id 0, length (unit + pdu), unit id
+    mbap = struct.pack(">HHHB", txid, 0x0000, len(pdu) + 1, unit)
+    return mbap + pdu
+
+
+def parse_modbus_id(data: bytes) -> dict:
+    """Confirm a Modbus/TCP response and decode any Read-Device-Identification objects.
+
+    Returns {"modbus": True, "vendor":..., "product":..., "version":..., "objects": {...}} when the
+    bytes are a valid Modbus response (even an exception reply confirms the protocol), else {}.
+    """
+    if not data or len(data) < 8:
+        return {}
+    try:
+        _txid, pid, _length, _uid = struct.unpack(">HHHB", data[:7])
+    except struct.error:
+        return {}
+    if pid != 0x0000:  # Modbus/TCP protocol identifier is always 0
+        return {}
+    pdu = data[7:]
+    if not pdu:
+        return {}
+
+    empty = {"modbus": True, "vendor": None, "product": None, "version": None, "objects": {}}
+    fn = pdu[0]
+    if fn & 0x80:          # exception response - still speaks Modbus, just not this function
+        return empty
+    if fn != 0x2B or len(pdu) < 8 or pdu[1] != 0x0E:
+        return empty      # some other Modbus function answered; confirmed Modbus, no ID objects
+
+    num = pdu[6]
+    off = 7
+    objects: dict[int, str] = {}
+    for _ in range(num):
+        if off + 2 > len(pdu):
+            break
+        oid, olen = pdu[off], pdu[off + 1]
+        off += 2
+        objects[oid] = pdu[off:off + olen].decode("iso-8859-1", "replace")
+        off += olen
+
+    named = {_MODBUS_OBJ[k]: v for k, v in objects.items() if k in _MODBUS_OBJ}
+    return {
+        "modbus": True,
+        "vendor": named.get("vendor"),
+        "product": named.get("product_name") or named.get("product_code") or named.get("model"),
+        "version": named.get("version"),
+        "objects": named,
+    }
+
+
+def modbus_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Connect to TCP/502, send a Read-Device-ID request, parse the reply. None on failure."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.create_connection((ip, 502), timeout=timeout)
+        sock.settimeout(timeout)
+        sock.sendall(_build_modbus_request())
+        chunks = bytearray()
+        while len(chunks) < 4096:
+            buf = sock.recv(2048)
+            if not buf:
+                break
+            chunks += buf
+            if len(chunks) >= 7:  # once the MBAP length is known we have enough to parse
+                break
+        res = parse_modbus_id(bytes(chunks))
+        return res or None
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# 4. BACnet/IP (UDP 47808)
+# --------------------------------------------------------------------------- #
+def _build_bacnet_whois() -> bytes:
+    """A BACnet/IP Who-Is (unicast). BVLC + NPDU + unconfirmed-request APDU."""
+    apdu = bytes([0x10, 0x08])                 # unconfirmed request (0x1_), service Who-Is (0x08)
+    npdu = bytes([0x01, 0x00])                 # version 1, control 0
+    body = npdu + apdu
+    bvlc = bytes([0x81, 0x0A]) + struct.pack(">H", 4 + len(body))  # type 0x81, Original-Unicast
+    return bvlc + body
+
+
+def _bacnet_tags(data: bytes, off: int) -> list:
+    """Walk BACnet application/context tags from `off`. Returns [(tag_number, is_context, value)]."""
+    tags: list = []
+    n = len(data)
+    while off < n:
+        tag = data[off]
+        off += 1
+        tag_num = (tag >> 4) & 0x0F
+        is_context = bool(tag & 0x08)
+        lvt = tag & 0x07
+        if tag_num == 0x0F:              # extended tag number
+            if off >= n:
+                break
+            tag_num = data[off]
+            off += 1
+        if lvt == 6 or lvt == 7:         # opening / closing context tag - no value payload
+            tags.append((tag_num, is_context, b""))
+            continue
+        if lvt == 5:                     # extended length
+            if off >= n:
+                break
+            length = data[off]
+            off += 1
+            if length == 254:
+                length = struct.unpack(">H", data[off:off + 2])[0]
+                off += 2
+            elif length == 255:
+                length = struct.unpack(">I", data[off:off + 4])[0]
+                off += 4
+        else:
+            length = lvt
+        tags.append((tag_num, is_context, data[off:off + length]))
+        off += length
+    return tags
+
+
+def parse_bacnet(data: bytes) -> Optional[dict]:
+    """Decode a BACnet/IP I-Am and pull the device instance and vendor id.
+
+    Returns {"bacnet": True, "device_id": int, "vendor_id": int|None} or None if the bytes are not
+    a usable I-Am.
+    """
+    if not data or len(data) < 6 or data[0] != 0x81:  # BVLC type BACnet/IP
+        return None
+    try:
+        off = 4                              # skip BVLC type, function, length
+        off += 1                             # NPDU version
+        control = data[off]
+        off += 1
+        if control & 0x20:                   # destination specifier present
+            off += 2                         # DNET
+            dlen = data[off]
+            off += 1 + dlen                  # DLEN + DADR
+        if control & 0x08:                   # source specifier present
+            off += 2                         # SNET
+            slen = data[off]
+            off += 1 + slen                  # SLEN + SADR
+        if control & 0x20:
+            off += 1                         # hop count (only with a destination)
+        if off + 2 > len(data):
+            return None
+        if (data[off] & 0xF0) != 0x10:       # unconfirmed-request PDU
+            return None
+        off += 1
+        if data[off] != 0x00:                # service choice 0x00 = I-Am
+            return None
+        off += 1
+
+        device_id = None
+        unsigned_vals: list[int] = []
+        for tag_num, is_context, val in _bacnet_tags(data, off):
+            if is_context:
+                continue
+            if tag_num == 12 and len(val) == 4:              # BACnetObjectIdentifier
+                objid = struct.unpack(">I", val)[0]
+                device_id = objid & 0x3FFFFF                  # low 22 bits = instance number
+            elif tag_num == 2 and val:                       # application unsigned integer
+                unsigned_vals.append(int.from_bytes(val, "big"))
+    except (IndexError, struct.error):
+        return None
+
+    if device_id is None:
+        return None
+    # In an I-Am the unsigned tags are max-APDU then vendor-id; vendor is the last one.
+    vendor_id = unsigned_vals[-1] if unsigned_vals else None
+    return {"bacnet": True, "device_id": device_id, "vendor_id": vendor_id}
+
+
+def bacnet_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Send a BACnet Who-Is to UDP/47808 and parse the I-Am reply. None on failure."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(_build_bacnet_whois(), (ip, 47808))
+        data, _ = sock.recvfrom(1500)
+        return parse_bacnet(data)
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# 5. EtherNet/IP (UDP 44818)
+# --------------------------------------------------------------------------- #
+_ENIP_LIST_IDENTITY = 0x0063
+
+
+def _build_enip_list_identity() -> bytes:
+    """A 24-byte EtherNet/IP encapsulation header for List Identity (command 0x0063, no data)."""
+    return struct.pack(
+        "<HHII8sI",
+        _ENIP_LIST_IDENTITY,   # command
+        0,                     # length of the (empty) command-specific data
+        0,                     # session handle
+        0,                     # status
+        b"netmap\x00\x00",     # sender context (8 bytes)
+        0,                     # options
+    )
+
+
+def parse_enip_identity(data: bytes) -> Optional[dict]:
+    """Decode an EtherNet/IP List Identity reply's CIP Identity item.
+
+    Returns {"enip": True, "product":..., "vendor_id":..., "device_type":..., "product_code":...,
+    "revision":..., "serial":...} or None if the bytes are not a List Identity reply.
+    """
+    if not data or len(data) < 24:
+        return None
+    try:
+        command, length = struct.unpack("<HH", data[0:4])
+        if command != _ENIP_LIST_IDENTITY:
+            return None
+        payload = data[24:24 + length] if length else data[24:]
+        if len(payload) < 4:
+            return None
+        item_count = struct.unpack("<H", payload[0:2])[0]
+        if item_count < 1:
+            return None
+        item_type, item_len = struct.unpack("<HH", payload[2:6])
+        item = payload[6:6 + item_len]
+        if item_type != 0x000C or len(item) < 33:  # 0x000C = CIP Identity item
+            return None
+
+        p = 2                                        # skip encapsulation protocol version
+        p += 16                                      # skip the sockaddr structure
+        vendor_id, device_type, product_code = struct.unpack("<HHH", item[p:p + 6])
+        p += 6
+        rev_major, rev_minor = item[p], item[p + 1]
+        p += 2
+        _status = struct.unpack("<H", item[p:p + 2])[0]
+        p += 2
+        serial = struct.unpack("<I", item[p:p + 4])[0]
+        p += 4
+        name_len = item[p]
+        p += 1
+        product = item[p:p + name_len].decode("iso-8859-1", "replace").strip()
+    except (struct.error, IndexError):
+        return None
+
+    return {
+        "enip": True,
+        "product": product or None,
+        "vendor_id": vendor_id,
+        "device_type": device_type,
+        "product_code": product_code,
+        "revision": f"{rev_major}.{rev_minor}",
+        "serial": serial,
+    }
+
+
+def enip_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Send a CIP List Identity to UDP/44818 and parse the Identity item. None on failure."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(_build_enip_list_identity(), (ip, 44818))
+        data, _ = sock.recvfrom(4096)
+        return parse_enip_identity(data)
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# Orchestrator
+# --------------------------------------------------------------------------- #
+def _set_dict_attr(host, attr: str, key: str, value) -> None:
+    """Store value under host.<attr>[key], creating the dict if the field is absent/blank."""
+    d = getattr(host, attr, None)
+    if not isinstance(d, dict):
+        d = {}
+        setattr(host, attr, d)
+    d[key] = value
+
+
+def _add_name(host, source: str, name: Optional[str]) -> None:
+    if name:
+        _set_dict_attr(host, "names", source, name)
+
+
+def _add_source(host, source: str) -> None:
+    srcs = getattr(host, "sources", None)
+    if isinstance(srcs, list):
+        if source not in srcs:
+            srcs.append(source)
+    else:
+        setattr(host, "sources", [source])
+
+
+async def probe_extra(
+    inv: Inventory,
+    hosts: Optional[list] = None,
+    do_wsd: bool = True,
+    do_ipmi: bool = True,
+    do_ot: bool = True,
+    workers: int = 48,
+    timeout: float = 2.0,
+    probes: Optional[dict] = None,
+) -> int:
+    """Run the enabled broad-fingerprinting probes over the inventory's hosts, concurrently.
+
+    For each targeted host each enabled probe runs in a thread (the sockets block), bounded by a
+    semaphore. What answers is recorded on the Host: the raw dict under host.probes[name] (name is
+    one of wsd/ipmi/modbus/bacnet/enip); the probe name in host.sources; and, for WS-Discovery, the
+    management URL under host.names["wsd"] when one is offered. Role/OS are deliberately not set -
+    a separate profiling module reads what this records.
+
+    `do_wsd` and `do_ipmi` toggle those probes; `do_ot` toggles the three OT/ICS probes (Modbus,
+    BACnet, EtherNet/IP) together. `probes` may map a probe name to a callable(ip)->dict|None to
+    bypass real network I/O in tests. Returns the number of hosts that answered any probe.
+    """
+    if hosts is None:
+        targets = [ip for ip in list(inv.hosts) if ip not in inv.ip_to_device]
+    else:
+        targets = list(hosts)
+    targets = [ip for ip in targets if is_usable_ip(ip) and ip in inv.hosts]
+    if not targets:
+        return 0
+
+    enabled = []
+    if do_wsd:
+        enabled.append("wsd")
+    if do_ipmi:
+        enabled.append("ipmi")
+    if do_ot:
+        enabled.extend(("modbus", "bacnet", "enip"))
+    if not enabled:
+        return 0
+
+    _fetchers = {
+        "wsd": wsd_probe, "ipmi": ipmi_probe, "modbus": modbus_probe,
+        "bacnet": bacnet_probe, "enip": enip_probe,
+    }
+
+    log.info("extra-probing %d hosts with: %s", len(targets), ", ".join(enabled))
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="netmap-xid")
+    sem = asyncio.Semaphore(workers)
+    answered = 0
+
+    def _call_for(name: str, ip: str):
+        if probes and name in probes:
+            fn = probes[name]
+            return lambda: fn(ip)
+        fetch = _fetchers[name]
+        return lambda: fetch(ip, timeout)
+
+    async def _run(name: str, ip: str):
+        call = _call_for(name, ip)
+        try:
+            return await asyncio.wait_for(loop.run_in_executor(pool, call), timeout + 1.0)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
+            return None
+
+    async def one(ip: str):
+        nonlocal answered
+        host = inv.hosts[ip]
+        async with sem:
+            results = await asyncio.gather(*(_run(name, ip) for name in enabled))
+        got = False
+        for name, res in zip(enabled, results):
+            if not res or not isinstance(res, dict):
+                continue
+            got = True
+            _set_dict_attr(host, "probes", name, res)
+            _add_source(host, name)
+            if name == "wsd":
+                xaddrs = res.get("xaddrs") or []
+                if xaddrs:
+                    _add_name(host, "wsd", xaddrs[0])  # a management URL for the device
+        if got:
+            answered += 1
+
+    try:
+        await asyncio.gather(*(one(ip) for ip in targets))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    log.info("extra probes: %d of %d hosts answered", answered, len(targets))
+    return answered
