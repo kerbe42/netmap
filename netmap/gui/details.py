@@ -45,6 +45,8 @@ from .icons import ROLE_LABELS, ROLES, role_pixmap
 from .ipgrid import IpGrid
 from .table import ID_ROLE, FilterProxy, RowsModel
 
+ADDRESS_ROWS_MAX = 4096  # the Addresses tab of a huge subnet is capped; the Hosts page has the rest
+
 ROUTE_PROTO = {1: "other", 2: "connected", 3: "static", 4: "icmp", 8: "rip", 9: "is-is", 13: "ospf", 14: "bgp", 16: "eigrp", 11: "igrp"}
 
 
@@ -176,6 +178,7 @@ class DocForm(QWidget):
         self.status.currentTextChanged.connect(lambda _: None if self._loading else self._timer.start())
 
     def load(self, node_id: str, note: dict, kind: str):
+        self.flush()  # a note typed in the last half-second belongs to the previous item
         self._loading = True
         self._timer.stop()
         self.node_id = node_id
@@ -195,6 +198,15 @@ class DocForm(QWidget):
         if self._timer.isActive():
             self._timer.stop()
             self._emit()
+
+    def flush(self) -> bool:
+        """Deliver a pending (debounced) edit now. True if something was delivered."""
+        if self._timer.isActive() and not self._loading and self.node_id:
+            self._timer.stop()
+            self._emit()
+            return True
+        self._timer.stop()
+        return False
 
     def _emit(self):
         if self._loading or not self.node_id:
@@ -290,7 +302,13 @@ class DetailsPanel(QWidget):
         self._last_tab: dict[str, str] = {}
 
     # ------------------------------------------------------------ entry
+    def flush(self) -> bool:
+        """Deliver any pending Notes edit (before a save, a selection change, or closing)."""
+        return self.doc.flush()
+
     def clear(self):
+        self.doc.flush()
+        self.doc.node_id = ""
         self.node_id = ""
         self._clear_tabs()
         self.body.hide()
@@ -422,8 +440,8 @@ class DetailsPanel(QWidget):
             ("Redundancy", "; ".join(f"{g['proto'].upper()} grp {g['group']} {g['state']} for {g['vip']}" + (f" on {g['interface']}" if g.get('interface') else "") for g in getattr(d, "redundancy", []))),
             ("Routing peers", _peers_summary(getattr(d, "peers", []))),
             ("Spanning tree", _stp_summary(getattr(d, "stp", {}))),
-            ("Found", f"{d.discovered_via} (depth {d.depth})"),
-            ("Credential", d.credential),
+            ("Found", f"{d.discovered_via} (depth {d.depth})" if d.discovered_via else "—"),
+            ("Credential", d.credential or "—"),
             ("First seen", fmt_time(d.first_seen)),
             ("Last polled", fmt_time(d.collected_at) + (f" in {d.collect_seconds:.1f}s" if d.collect_seconds else "")),
             ("Problems", "; ".join(d.errors)),
@@ -634,8 +652,11 @@ class DetailsPanel(QWidget):
         self._head("subnet", "subnet", note.get("name") or cidr,
                    " · ".join(x for x in (cidr if note.get("name") else "", f"VLAN {vlan}" if vlan else "",
                                           f"{r.get('used', 0)} of {r.get('usable', 0)} in use ({r.get('utilisation_pct', 0)}%)") if x))
+        net = ipaddress.ip_network(cidr)
+        # one pass over the addresses feeds both the IP map and the Addresses table
+        cells = subnet_addresses(s, cidr, limit=min(net.num_addresses, 65536))
         grid = IpGrid()
-        grid.set_subnet(s, cidr)
+        grid.set_cells(s, cidr, cells)
         grid.nodeClicked.connect(self.openNode)
         gws = []
         sub = inv.subnets.get(cidr)
@@ -653,15 +674,17 @@ class DetailsPanel(QWidget):
             ("Free", r.get("free")),
             ("Found via", r.get("sources")),
         ]
-        net = ipaddress.ip_network(cidr)
         if net.num_addresses <= 65536:
             self.tabs.addTab(self._facts(pairs, grid), "Overview")
         else:
             self.tabs.addTab(self._facts(pairs), "Overview")
-        used = [c for c in subnet_addresses(s, cidr, limit=65536) if c["state"] not in ("free", "reserved")]
+        used = [c for c in cells if c["state"] not in ("free", "reserved")]
         rows = [{"_id": c.get("node", ""), "_role": c.get("role", ""), "_kind": "host", "ip": c["ip"], "what": c["state"], "name": c.get("label", "")} for c in used]
-        self.tabs.addTab(_table(_cols(("ip", "Address", "ip", 110), ("what", "What", "text", 90), ("name", "Name", "text", 200)), rows, self.openNode),
-                         "Addresses")
+        title = "Addresses"
+        if len(rows) > ADDRESS_ROWS_MAX:
+            title = f"Addresses (first {ADDRESS_ROWS_MAX:,} of {len(rows):,})"
+            rows = rows[:ADDRESS_ROWS_MAX]
+        self.tabs.addTab(_table(_cols(("ip", "Address", "ip", 110), ("what", "What", "text", 90), ("name", "Name", "text", 200)), rows, self.openNode), title)
 
     def _vlan(self, s: Snapshot, vid_id: str):
         vid = int(vid_id.split(":", 1)[1])

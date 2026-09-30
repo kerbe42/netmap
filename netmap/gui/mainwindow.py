@@ -12,7 +12,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -49,17 +49,22 @@ from .compare import CompareDialog
 from .credentials import CredentialsDialog, CredentialStore
 from .dashboard import Dashboard
 from .details import DetailsPanel
+from .fileutil import ask_save_path, backup_paths, clear_recovery, read_recovery, recovery_paths, rotate_backups, write_recovery_meta
 from .icons import app_icon, role_icon
+from .jobs import JobRegistry, copy_inventory, run_blocking, with_retry
 from .scandialog import ScanDialog
-from .table import DataPage
+from .table import ACK_PAGES, DataPage
 from .theme import apply_theme
 from .tools import ToolsPanel
 from .topology import TopologyPage
-from .worker import LogBridge, ScanWorker
+from .undo import AnnotateCommand, ForgetCommand, RelayoutCommand
+from .worker import LogBridge, ScanWorker, SnapshotBuilder
 
 log = logging.getLogger("netmap.gui")
 
 FILE_FILTER = "NetMap projects (*.netmap *.json);;All files (*)"
+RECOVERY_INTERVAL_MS = 120_000  # while the project is dirty, a recovery copy this often
+CLOSE_WAIT_MS = 3000  # how long a close request waits for stopped workers before deferring
 
 NAV = [
     ("overview", "Overview", None),
@@ -94,10 +99,31 @@ PAGE_TITLES = {
 }
 
 
+def _host_key_lines(result: dict, inv) -> list[str]:
+    """Hosts whose SSH host key changed since the last inspection: called out one per line,
+    with the message the inspector wrote (it names the known_hosts file). Reads both the
+    result summary and the per-host facts, whichever the core provides."""
+    out = []
+    seen = set()
+    for ip, msg in (result.get("host_key_changed") or {}).items() if isinstance(result.get("host_key_changed"), dict) else ():
+        seen.add(ip)
+        out.append(f"HOST KEY CHANGED for {ip}: {msg}")
+    for ip, h in inv.hosts.items():
+        if ip in seen:
+            continue
+        facts = getattr(h, "system", None) or {}
+        flag = facts.get("host_key_changed") if isinstance(facts, dict) else None
+        if flag:
+            out.append(f"HOST KEY CHANGED for {ip}: {flag if isinstance(flag, str) else 'the SSH host key differs from the one recorded earlier'}")
+    return out
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, log_path: str = ""):
+    def __init__(self, log_path: str = "", recovery_dir: Optional[str] = None):
         super().__init__()
         self.log_path = log_path
+        # where the crash-recovery copy lives: beside the log unless told otherwise; None disables it
+        self.recovery_dir = recovery_dir if recovery_dir is not None else (os.path.dirname(log_path) if log_path else None)
         self.inv = Inventory()
         self.path: Optional[str] = None
         self.dirty = False
@@ -110,6 +136,16 @@ class MainWindow(QMainWindow):
         self.logbridge.record.connect(self._on_log)
         self._stale: set[str] = set()
         self._scan_started = 0.0
+        # every thread the window starts: one place to ask "busy?", to stop, and to wait on close
+        self._jobs = JobRegistry(self)
+        self._jobs.idle.connect(self._on_jobs_idle)
+        self._closing = False
+        self._saving = False
+        self._saved_this_session = False  # an explicit or completed-scan save happened (gates autosave of cancelled scans)
+        self._live_builder: Optional[SnapshotBuilder] = None
+        self._recovery_thread = None
+        self.undo_stack = QUndoStack(self)
+        self.undo_stack.setUndoLimit(200)
         self.setWindowIcon(app_icon())
         self.setAcceptDrops(True)
         self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowTabbedDocks)
@@ -123,13 +159,14 @@ class MainWindow(QMainWindow):
         self.dashboard.newScan.connect(self.new_scan)
         self.dashboard.openProject.connect(lambda: self.open_project())
         self.dashboard.openSample.connect(self.open_sample)
-        self.dashboard.openPath.connect(lambda p: self.maybe_save() and self.open_project(p))
+        self.dashboard.openPath.connect(lambda p: self.open_project(p))
         self._add_page("overview", self.dashboard)
         self.topology = TopologyPage()
         self.topology.nodeSelected.connect(self.select_node)
         self.topology.nodeActivated.connect(self.open_node)
         self.topology.contextRequested.connect(lambda nid, pos: self.node_menu(nid, pos, from_map=True))
         self.topology.layoutChanged.connect(lambda: self.set_dirty(True))
+        self.topology.layoutDiscarded.connect(lambda key, old: self.undo_stack.push(RelayoutCommand(self, key, old)))
         self._add_page("map", self.topology)
         for key, (cols, _fn) in PAGES.items():
             title, hint = PAGE_TITLES.get(key, (key.title(), ""))
@@ -138,7 +175,8 @@ class MainWindow(QMainWindow):
                 page.heading.setToolTip(hint)
             page.nodeSelected.connect(self.select_node)
             page.nodeActivated.connect(self.open_node)
-            page.contextRequested.connect(self._row_menu)
+            page.contextRequested.connect(lambda row, pos, key=key: self._row_menu(row, pos, key))
+            page.showAcknowledgedChanged.connect(lambda _on, key=key: self._load_page(key))
             self._add_page(key, page)
 
         self.nav = QTreeWidget()
@@ -170,13 +208,17 @@ class MainWindow(QMainWindow):
                 self.nav_items[key] = it
             self.nav.addTopLevelItem(it)
         self.nav.currentItemChanged.connect(lambda cur, _: cur and cur.data(0, Qt.UserRole) and self.show_page(cur.data(0, Qt.UserRole)))
-        self.nav.setMinimumWidth(190)
+        # wide enough for the longest entry with a five-digit count, so nothing is elided
+        fm = self.nav.fontMetrics()
+        longest = max(fm.horizontalAdvance(f"{title}  (99,999)") for key, title, _ in NAV if key)
+        nav_w = longest + self.nav.iconSize().width() + self.nav.indentation() + 30
+        self.nav.setMinimumWidth(max(190, nav_w))
 
         split = QSplitter()
         split.addWidget(self.nav)
         split.addWidget(self.stack)
         split.setStretchFactor(1, 1)
-        split.setSizes([210, 1000])
+        split.setSizes([max(210, nav_w), 1000])
         split.setChildrenCollapsible(False)
         self.setCentralWidget(split)
         self.splitter = split
@@ -202,7 +244,8 @@ class MainWindow(QMainWindow):
         self.scan_bar.setMaximumWidth(180)
         self.scan_bar.setTextVisible(False)
         self.scan_bar.hide()
-        self.stop_btn = QPushButton("Stop scan")
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setToolTip("Stop the running scan, capture or inspection; what was found so far is kept")
         self.stop_btn.clicked.connect(self.stop_scan)
         self.stop_btn.hide()
         row.addWidget(self.scan_phase)
@@ -218,7 +261,7 @@ class MainWindow(QMainWindow):
         self.log_view.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
         al.addWidget(self.log_view, 1)
         self.activity_dock = self._dock("Activity", act, Qt.BottomDockWidgetArea, "activity")
-        self.tools = ToolsPanel(self.store, self.scope_check)
+        self.tools = ToolsPanel(self.store, self.scope_check, jobs=self._jobs)
         self.tools_dock = self._dock("Tools", self.tools, Qt.BottomDockWidgetArea, "tools")
         self.tabifyDockWidget(self.activity_dock, self.tools_dock)
         self.activity_dock.raise_()
@@ -231,6 +274,12 @@ class MainWindow(QMainWindow):
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(700)
         self._refresh_timer.timeout.connect(lambda: self.refresh(keep_details=True))
+        self._jobs.changed.connect(self._update_job_chrome)
+        self._recovery_timer = QTimer(self)
+        self._recovery_timer.setInterval(RECOVERY_INTERVAL_MS)
+        self._recovery_timer.timeout.connect(self._recovery_tick)
+        if self.recovery_dir:
+            self._recovery_timer.start()
 
         self._restore_window()
         self.set_inventory(Inventory(), None)
@@ -274,16 +323,17 @@ class MainWindow(QMainWindow):
         self.recent_menu.aboutToShow.connect(self._fill_recent)
         self.a_save = self._act(fm, "&Save", self.save, QKeySequence.Save, icon=st.standardIcon(QStyle.SP_DialogSaveButton))
         self._act(fm, "Save &as…", self.save_as, QKeySequence.SaveAs)
+        self.a_revert = self._act(fm, "Re&vert to saved", self.revert_to_saved, tip="Throw away unsaved changes and reload the project file from disk")
         self._act(fm, "Project &properties…", self.project_properties)
         im = fm.addMenu("&Import")
         self._act(im, "DHCP leases / scopes…", self.import_dhcp, tip="Import a DHCP export (dhcpd.leases, Kea or Windows CSV) to name hosts and mark scopes")
         self._act(im, "VMware vCenter / ESXi…", self.import_vmware, tip="Read-only vSphere discovery: ESXi hosts, VMs, guest IPs/OS, port groups")
         fm.addSeparator()
         ex = fm.addMenu("&Export")
-        self._act(ex, "Excel workbook (.xlsx)…", self.export_xlsx, "Ctrl+E", "The whole inventory, one sheet per list")
+        self._act(ex, "Spreadsheet workbook (.xlsx)…", self.export_xlsx, "Ctrl+E", "The whole inventory, one sheet per list")
         self._act(ex, "CSV files…", self.export_csv)
         ex.addSeparator()
-        self._act(ex, "Diagram for draw.io / Visio (.drawio)…", self.export_drawio, tip="Physical and logical pages, with your layout")
+        self._act(ex, "Diagram (.drawio, opens in diagrams.net)…", self.export_drawio, tip="Physical and logical pages, with your layout")
         self._act(ex, "Map as PDF (A3)…", lambda: self.export_map("pdf"))
         self._act(ex, "Map as SVG…", lambda: self.export_map("svg"))
         self._act(ex, "Map as PNG…", lambda: self.export_map("png"))
@@ -298,6 +348,16 @@ class MainWindow(QMainWindow):
         self._act(fm, "E&xit", self.close, QKeySequence.Quit)
 
         em = mb.addMenu("&Edit")
+        self.a_undo = self._act(em, "&Undo", self.undo, "Ctrl+Z", "Undo the last edit: a note, a removal, a Re-arrange")
+        self.a_redo = self._act(em, "&Redo", self.redo, "Ctrl+Shift+Z")
+        self.a_redo.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
+        self.a_undo.setEnabled(False)
+        self.a_redo.setEnabled(False)
+        self.undo_stack.canUndoChanged.connect(self.a_undo.setEnabled)
+        self.undo_stack.canRedoChanged.connect(self.a_redo.setEnabled)
+        self.undo_stack.undoTextChanged.connect(lambda t: self.a_undo.setText(f"&Undo {t}" if t else "&Undo"))
+        self.undo_stack.redoTextChanged.connect(lambda t: self.a_redo.setText(f"&Redo {t}" if t else "&Redo"))
+        em.addSeparator()
         self._act(em, "&Find…", self.focus_filter, QKeySequence.Find)
         self._act(em, "Copy selected rows", self._copy_rows)
         em.addSeparator()
@@ -336,8 +396,10 @@ class MainWindow(QMainWindow):
         self._act(tm, "Ping / traceroute / DNS / SNMP test", lambda: (self.tools_dock.show(), self.tools_dock.raise_(), self.tools.target.setFocus()))
         self._act(tm, "&Query / search assets…", self.query_console, "Ctrl+Shift+F", "Search the inventory with a query language")
         self._act(tm, "Start &API server…", self.start_api, tip="Serve a read-only REST API of this project on localhost")
-        self._act(tm, "&Compare with another scan…", self.compare)
-        self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/Excel list of devices you were given")
+        self._act(tm, "&Compare with another scan…", lambda: self.compare())
+        self.a_compare_prev = self._act(tm, "Compare with the &previous saved version", self.compare_previous,
+                                        tip="Diff this project against the backup made the last time it was saved (name.netmap.bak1)")
+        self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/.xlsx list of devices you were given")
         self._act(tm, "&Inspect servers (SSH / WinRM)…", self.inspect_servers, tip="Collect OS, hardware, software, services and connections from hosts you have login for")
         self._act(tm, "Capture device &configs (SSH)…", self.capture_configs, tip="Log in read-only and save each device's running-config, to read and diff over time")
         self._act(tm, "&Listen for syslog / SNMP traps…", self.listen_events, tip="Watch messages devices send while you are on site")
@@ -361,7 +423,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.a_rescan)
         tb.addAction(self.a_stop)
         tb.addSeparator()
-        xl = QAction("Export to Excel", self)
+        xl = QAction("Export to spreadsheet", self)
         xl.setIcon(st.standardIcon(QStyle.SP_DialogApplyButton))
         xl.triggered.connect(self.export_xlsx)
         tb.addAction(xl)
@@ -378,6 +440,8 @@ class MainWindow(QMainWindow):
 
     # ================================================================ project
     def set_inventory(self, inv: Inventory, path: Optional[str]):
+        self.details.flush()
+        self.undo_stack.clear()
         self.inv = inv
         self.path = path
         self.current_node = ""
@@ -400,7 +464,24 @@ class MainWindow(QMainWindow):
         self.setWindowModified(dirty)
         self.setWindowTitle(f"{self.project_name()}[*] — NetMap")
 
+    def _flush_pending_edits(self) -> None:
+        """Debounced edits (a note being typed, a node just dragged) go into the inventory now."""
+        self.details.flush()
+        self.topology.flush_positions()
+
+    def busy(self) -> bool:
+        """True while any job that reads or writes the inventory is running."""
+        return self._jobs.busy()
+
+    def _busy_guard(self, title: str = "Busy") -> bool:
+        """Show why an action must wait and return True when it must."""
+        if not self._jobs.busy():
+            return False
+        QMessageBox.information(self, title, self._jobs.wait_message())
+        return True
+
     def maybe_save(self) -> bool:
+        self._flush_pending_edits()
         if not self.dirty:
             return True
         if not self.inv.devices and not self.inv.hosts and not self.inv.annotations:
@@ -414,20 +495,18 @@ class MainWindow(QMainWindow):
         return True
 
     def new_project(self):
-        if self.worker is not None:
-            QMessageBox.information(self, "Scan running", "Stop the running scan first.")
+        if self._busy_guard():
             return
         if self.maybe_save():
             self.set_inventory(Inventory(), None)
             self.navigate("overview")
 
     def open_project(self, path: Optional[str] = None):
-        if self.worker is not None:
-            QMessageBox.information(self, "Scan running", "Stop the running scan first.")
+        if self._busy_guard():
+            return
+        if not self.maybe_save():
             return
         if not path:
-            if not self.maybe_save():
-                return
             start = QSettings().value("ui/last_dir", os.path.expanduser("~"))
             path, _ = QFileDialog.getOpenFileName(self, "Open project", start, FILE_FILTER)
             if not path:
@@ -445,7 +524,7 @@ class MainWindow(QMainWindow):
     def open_sample(self):
         """The simulated campus that ships with the app. Opened without a path, so saving
         asks where to put it instead of writing into the program folder."""
-        if self.worker is not None or not self.maybe_save():
+        if self._busy_guard() or not self.maybe_save():
             return
         from ..util import resource_path
 
@@ -479,14 +558,111 @@ class MainWindow(QMainWindow):
         return ok
 
     def _write(self, path: str) -> bool:
+        """Save the project to `path`: pending edits first, then a rotating backup of the file
+        being overwritten, then the write itself - serialised on a thread while the window
+        keeps painting behind a wait cursor. Returns True when the file is on disk."""
+        if self._saving:
+            return False
+        self._flush_pending_edits()
+        inv = self.inv
+        self._saving = True
         try:
-            self.topology._save_timer.stop()
-            self.inv.save(path)
+            def work():
+                rotate_backups(path)
+                with_retry(lambda: inv.save(path))
+
+            run_blocking(self, "Saving the project", work)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Could not save", f"{path}\n\n{type(e).__name__}: {e}")
             return False
-        self.set_dirty(False)
+        finally:
+            self._saving = False
+        if inv is self.inv:
+            self.set_dirty(False)
+        self._saved_this_session = True
+        if self.recovery_dir:
+            clear_recovery(self.recovery_dir)
         self.statusBar().showMessage(f"Saved {path}", 4000)
+        return True
+
+    def revert_to_saved(self):
+        """Throw away unsaved changes and reload the project from its file."""
+        if self._busy_guard():
+            return
+        if not self.path or not os.path.exists(self.path):
+            QMessageBox.information(self, "Revert to saved", "This project has not been saved to a file yet.")
+            return
+        self._flush_pending_edits()
+        if self.dirty and QMessageBox.question(self, "Revert to saved",
+                                               f"Discard the unsaved changes and reload “{os.path.basename(self.path)}” from disk?") != QMessageBox.Yes:
+            return
+        try:
+            inv = Inventory.load(self.path)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Could not open", f"{self.path}\n\n{type(e).__name__}: {e}")
+            return
+        self.set_inventory(inv, self.path)
+        self.statusBar().showMessage(f"Reverted to {self.path}", 5000)
+
+    # ---- crash recovery
+    def _recovery_tick(self):
+        """Every couple of minutes while dirty: a copy of the project into the data folder,
+        written on a thread. Cleared by a real save and by a clean close."""
+        if not self.recovery_dir or not self.dirty or self._saving or self._closing:
+            return
+        if not (self.inv.devices or self.inv.hosts or self.inv.annotations):
+            return
+        if self._recovery_thread is not None and self._recovery_thread.isRunning():
+            return
+        import json
+        from PySide6.QtCore import QThread
+
+        inv = self.inv
+        path, _meta = recovery_paths(self.recovery_dir)
+        origin, name = self.path, self.project_name()
+
+        class Save(QThread):
+            def run(self_):
+                try:
+                    text = with_retry(lambda: json.dumps(inv.to_dict(), default=list))
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path + ".tmp", "w", encoding="utf-8") as f:
+                        f.write(text)
+                    os.replace(path + ".tmp", path)
+                    write_recovery_meta(os.path.dirname(path), origin, name)
+                except Exception:  # noqa: BLE001
+                    log.exception("recovery copy failed")
+
+        self._recovery_thread = Save(self)
+        self._jobs.add(self._recovery_thread, "the recovery copy", blocking=False)
+        self._recovery_thread.start()
+
+    def offer_recovery(self) -> bool:
+        """At start-up: if a recovery copy exists that is newer than the file it came from
+        (or came from an unsaved project), offer to restore it. True if restored."""
+        if not self.recovery_dir:
+            return False
+        rec = read_recovery(self.recovery_dir)
+        if not rec:
+            return False
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(rec["saved"]))
+        r = QMessageBox.question(self, "Restore unsaved work?",
+                                 f"NetMap did not close cleanly. A recovery copy of “{rec['name']}” from {when} has changes "
+                                 f"that were never saved{' to ' + rec['origin'] if rec['origin'] else ''}.\n\nRestore it?",
+                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if r != QMessageBox.Yes:
+            clear_recovery(self.recovery_dir)
+            return False
+        try:
+            inv = Inventory.load(rec["path"])
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Could not restore", f"{rec['path']}\n\n{type(e).__name__}: {e}")
+            clear_recovery(self.recovery_dir)
+            return False
+        origin = rec["origin"] if rec["origin"] and os.path.exists(rec["origin"]) else None
+        self.set_inventory(inv, origin)
+        self.set_dirty(True)
+        self.statusBar().showMessage("Restored the recovery copy - save it to keep it.", 10000)
         return True
 
     def _add_recent(self, path):
@@ -498,7 +674,7 @@ class MainWindow(QMainWindow):
         self.recent_menu.clear()
         rec = [p for p in (QSettings().value("ui/recent") or []) if isinstance(p, str)]
         for p in rec:
-            a = self.recent_menu.addAction(p, lambda p=p: (self.maybe_save() and self.open_project(p)))
+            a = self.recent_menu.addAction(p, lambda p=p: self.open_project(p))
             a.setEnabled(os.path.exists(p))
         if not rec:
             self.recent_menu.addAction("(none)").setEnabled(False)
@@ -574,8 +750,40 @@ class MainWindow(QMainWindow):
         elif key == "map":
             w.set_data(self.inv, s.g, keep_view=bool(w.nodes))
         else:
-            w.set_rows(PAGES[key][1](s))
+            w.set_rows(self._page_rows(key, PAGES[key][1](s)))
         self._stale.discard(key)
+
+    @staticmethod
+    def finding_key(page: str, row: dict) -> str:
+        """A stable key for a Needs-attention / Compliance row across scans: its category
+        and item (the detail text may carry counts that change)."""
+        return f"{page}:{row.get('category', '')}|{row.get('item', '')}"
+
+    def _page_rows(self, key: str, rows: list) -> list:
+        """Rows for a page after presentation rules: acknowledged findings are marked and,
+        unless the page shows them, dropped."""
+        if key not in ACK_PAGES:
+            return rows
+        page = self.pages[key]
+        show = page.show_ack.isChecked()
+        out = []
+        for r in rows:
+            ack = self.inv.note(self.finding_key(key, r)).get("acknowledged")
+            if ack:
+                if not show:
+                    continue
+                r["_ack"] = True
+            out.append(r)
+        return out
+
+    def acknowledge(self, page: str, row: dict, on: bool = True):
+        """Mark a finding as seen and accepted (kept in the project, hidden by default)."""
+        key = self.finding_key(page, row)
+        self.inv.annotate(key, acknowledged=time.time() if on else "", acknowledged_item=row.get("item", "") if on else "")
+        self.set_dirty(True)
+        self._stale.add(page)
+        if self.current_page() == page:
+            self._load_page(page)
 
     def show_page(self, key: str):
         w = self.pages.get(key)
@@ -710,12 +918,24 @@ class MainWindow(QMainWindow):
             w.copy_selection()
 
     # ================================================================ documentation
+    def undo(self):
+        """Ctrl+Z: a note still being typed lands first, then the last edit is undone."""
+        self._flush_pending_edits()
+        if self.undo_stack.canUndo():
+            self.undo_stack.undo()
+
+    def redo(self):
+        self._flush_pending_edits()
+        if self.undo_stack.canRedo():
+            self.undo_stack.redo()
+
     def annotate(self, node_id: str, fields: dict):
-        before = self.inv.note(node_id)
+        before = dict(self.inv.note(node_id))
         after = self.inv.annotate(node_id, **fields)
         if before != after:
             self.set_dirty(True)
             self._refresh_timer.start()
+            self.undo_stack.push(AnnotateCommand(self, node_id, before, after))
 
     # ================================================================ menus / actions
     def node_ip(self, node_id: str) -> str:
@@ -729,20 +949,33 @@ class MainWindow(QMainWindow):
         except ValueError:
             return ""
 
-    def _row_menu(self, row: dict, pos):
+    def _row_menu(self, row: dict, pos, page: str = ""):
         if not row:
             return
         nid = row.get("_id") or ""
         if row.get("_kind") == "history":
             return
+        if page in ACK_PAGES:
+            row = dict(row)
+            row["_page"] = page
         self.node_menu(nid, pos, extra_row=row)
 
     def node_menu(self, node_id: str, pos, from_map: bool = False, extra_row: Optional[dict] = None):
-        if not node_id:
+        page = (extra_row or {}).get("_page", "")
+        if not node_id and not page:
             return
         s = self.snapshot
-        kind = s.kind(node_id) if s else ""
+        kind = s.kind(node_id) if s and node_id else ""
         m = QMenu(self)
+        if page:
+            if extra_row.get("_ack"):
+                m.addAction("Un-acknowledge (show again)", lambda: self.acknowledge(page, extra_row, False))
+            else:
+                m.addAction("Acknowledge (hide from this list)", lambda: self.acknowledge(page, extra_row, True))
+            m.addSeparator()
+            if not node_id:
+                m.exec(pos)
+                return
         m.addAction("Details", lambda: self.open_node(node_id))
         if s and node_id in s.g:
             if not from_map:
@@ -816,20 +1049,41 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.warning(self, "SSH", f"Could not start an SSH client: {e}")
 
-    def forget(self, node_id: str):
+    def forget(self, node_id: str, confirm: bool = True) -> bool:
+        """Remove a device or host from the project (undoable). Refused while a scan or other
+        job is running: its results would bring the item straight back."""
+        if self._busy_guard("Remove from project"):
+            return False
+        if node_id not in self.inv.devices and node_id not in self.inv.hosts:
+            return False
         name = self.snapshot.name(node_id) if self.snapshot else node_id
-        if QMessageBox.question(self, "Remove from project",
-                                f"Remove “{name}” from this project?\n\nIt will come back if a later scan finds it again. Your notes on it are kept.") != QMessageBox.Yes:
-            return
-        if node_id in self.inv.devices:
-            self.inv.remove_device(node_id)
-        self.inv.hosts.pop(node_id, None)
-        self.inv.unreachable.pop(node_id, None)
+        if confirm and QMessageBox.question(self, "Remove from project",
+                                            f"Remove “{name}” from this project?\n\nIt will come back if a later scan finds it again. Your notes on it are kept.") != QMessageBox.Yes:
+            return False
+        dev = self.inv.devices.get(node_id)
+        host = self.inv.hosts.get(node_id)
+        via = self.inv.unreachable.get(node_id)
+        self._remove_node(node_id)
         self.set_dirty(True)
         if self.current_node == node_id:
             self.current_node = ""
             self.details.clear()
         self.refresh()
+        self.undo_stack.push(ForgetCommand(self, node_id, dev, host, via))
+        return True
+
+    def _remove_node(self, node_id: str) -> None:
+        inv = self.inv
+        if node_id in inv.devices:
+            inv.remove_device(node_id)
+        if node_id in inv.hosts:
+            remove_host = getattr(inv, "remove_host", None)
+            if callable(remove_host):
+                remove_host(node_id)
+            else:
+                inv.hosts.pop(node_id, None)
+                inv.reindex()
+        inv.unreachable.pop(node_id, None)
 
     def scope_check(self, target: str) -> tuple[bool, str]:
         try:
@@ -854,8 +1108,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Preferences saved. New scans use these defaults.", 6000)
 
     def new_scan(self):
-        if self.worker is not None:
-            QMessageBox.information(self, "Scan running", "A scan is already running.")
+        if self._busy_guard("Scan"):
             return
         from .prefs import scan_defaults
 
@@ -892,7 +1145,7 @@ class MainWindow(QMainWindow):
         return req
 
     def rescan_device(self, node_id: str):
-        if self.worker is not None or node_id not in self.inv.devices:
+        if node_id not in self.inv.devices or self._busy_guard("Rescan"):
             return
         req = self._defaults_request(seeds=[node_id], refresh=True, refresh_ids=[node_id], max_depth=0, resolve_names=False)
         if req is None:
@@ -923,12 +1176,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Automatic rescans every {mins} min while NetMap is open.", 8000)
 
     def _scheduled_tick(self):
-        if self.worker is None and getattr(self, "_cap_worker", None) is None and getattr(self, "_insp_worker", None) is None and self.inv.devices:
+        if not self._jobs.busy() and self.inv.devices:
             self.log_view.appendPlainText(f"\n=== Scheduled rescan — {time.strftime('%H:%M:%S')} ===")
             self.rescan_all()
 
     def rescan_all(self):
-        if self.worker is not None:
+        if self._busy_guard("Rescan"):
             return
         if not self.inv.devices:
             self.new_scan()
@@ -942,7 +1195,7 @@ class MainWindow(QMainWindow):
         self.start_scan(req, "Rescan of known devices")
 
     def sweep_subnet(self, cidr: str):
-        if self.worker is not None:
+        if self._busy_guard("Scan"):
             return
         req = self._defaults_request(targets=[cidr], max_depth=0, sweep=False)
         if req is None:
@@ -961,26 +1214,58 @@ class MainWindow(QMainWindow):
             self.resizeDocks([self.activity_dock], [max(110, min(190, int(self.height() * 0.2)))], Qt.Vertical)
         self.activity_dock.raise_()
         self.logbridge.attach()
-        work = self.inv.copy()
-        self.worker = ScanWorker(work, req, parent=self)
-        self.worker.phase.connect(self._on_phase)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.snapshot.connect(self._on_snapshot)
-        self.worker.finished_ok.connect(self._on_finished)
-        self.worker.failed.connect(self._on_failed)
-        self.worker.finished.connect(self._on_thread_done)
+        work = self._copy_inventory("Preparing the scan")
+        if work is None:
+            self.logbridge.detach()
+            return
+        worker = ScanWorker(work, req, parent=self)
+        self.worker = worker
+        self._jobs.add(worker, "the scan")
+        worker.phase.connect(self._on_phase)
+        worker.progress.connect(self._on_progress)
+        worker.snapshot.connect(self._on_snapshot)
+        # the result is taken from the worker object, so a queued signal and a synchronous
+        # take-over after wait() (closing the window) cannot both apply it
+        worker.finished_ok.connect(lambda _inv, _rec, w=worker: self._finish_scan(w))
+        worker.failed.connect(lambda _err, w=worker: self._finish_scan(w))
+        worker.finished.connect(lambda w=worker: self._on_thread_done(w))
         self.scan_bar.show()
         self.stop_btn.show()
         self.a_stop.setEnabled(True)
         self.a_scan.setEnabled(False)
         self.a_rescan.setEnabled(False)
         self.scan_phase.setText(f"<b>{html.escape(title)}</b>: starting…")
-        self.worker.start()
+        worker.start()
+
+    def _copy_inventory(self, title: str) -> Optional[Inventory]:
+        """A deep copy for a worker to use, made on a thread (a 14k-host project takes a
+        couple of seconds) while the window keeps painting."""
+        inv = self.inv
+        try:
+            return run_blocking(self, title, lambda: with_retry(lambda: copy_inventory(inv)), self._jobs)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, title, f"Could not prepare a working copy of the project:\n{type(e).__name__}: {e}")
+            return None
 
     def stop_scan(self):
-        if self.worker is not None:
+        """Stop the scan and any capture or inspection; what was collected so far is kept."""
+        if self._jobs.busy():
             self.scan_phase.setText("Stopping — keeping what was found so far…")
-            self.worker.stop()
+            self._jobs.stop_all()
+
+    def _finish_scan(self, worker: ScanWorker) -> None:
+        """Apply a scan worker's outcome exactly once - from its queued signal in normal use,
+        or synchronously after wait() when the window is closing."""
+        if worker.consumed or worker.outcome is None:
+            return
+        worker.consumed = True
+        if self._live_builder is not None:
+            self._live_builder = None  # a tick still being built is superseded by the result
+        kind = worker.outcome[0]
+        if kind == "ok":
+            self._on_finished(worker.outcome[1], worker.outcome[2])
+        else:
+            self._on_failed(worker.outcome[1])
 
     def _merge(self, d_or_inv) -> None:
         """Take scan results while keeping everything the user edited during the scan."""
@@ -1003,16 +1288,50 @@ class MainWindow(QMainWindow):
         self.scan_stats.setText(" · ".join(bits))
 
     def _on_snapshot(self, d: dict):
-        if self.worker is None:
+        """A live tick from the scan. The heavy part (rebuilding the inventory, the graph and
+        the rows of the page on screen) runs on a SnapshotBuilder thread; only swapping the
+        results in happens here. Ticks that arrive while one is being built are dropped."""
+        if self.worker is None or self._saving:
             return
-        # on a big network a refresh can take a while: never spend more than a quarter of
-        # the time redrawing, so the window stays responsive while a scan runs
+        if self._live_builder is not None and self._live_builder.isRunning():
+            return
+        # never spend more than a quarter of the time on the UI part of a refresh
         now = time.time()
         if now - getattr(self, "_last_live", 0.0) < 4 * getattr(self, "_refresh_cost", 0.0):
             return
         self._last_live = now
-        self._merge(d)
-        self.refresh(keep_details=True, live=True)
+        cur = self.current_page()
+        rows_fn = PAGES[cur][1] if cur in PAGES and cur not in ACK_PAGES else None
+        b = SnapshotBuilder(d, self.inv.annotations, self.inv.layout, self.inv.project, cur, rows_fn, parent=self)
+        self._live_builder = b
+        self._jobs.add(b, "the live refresh", blocking=False)
+        b.built.connect(lambda inv, snap, key, rows, b=b: self._on_live_built(b, inv, snap, key, rows))
+        b.start()
+
+    def _on_live_built(self, builder, inv: Inventory, snap: Snapshot, key: str, rows) -> None:
+        if builder is not self._live_builder:
+            return  # superseded (the scan finished meanwhile)
+        self._live_builder = None
+        if self.worker is None or self.worker.consumed:
+            return
+        t0 = time.time()
+        self._merge(inv)
+        self.snapshot = snap
+        self._stale = set(self.pages)
+        cur = self.current_page()
+        w = self.pages.get(cur)
+        if cur == key and rows is not None and isinstance(w, DataPage):
+            w.set_rows(self._page_rows(key, rows))
+            self._stale.discard(key)
+        elif cur == "map" and self.topology.nodes:
+            self.topology.info.setText("A scan is running: the map updates when it finishes, or when you come back to this page.")
+        elif cur:
+            self._load_page(cur)
+        self._update_nav_counts()
+        self._update_status()
+        if self.current_node:
+            self.details.snapshot = self.snapshot
+        self._refresh_cost = time.time() - t0
 
     def _on_finished(self, inv, record: dict):
         self._merge(inv)
@@ -1020,27 +1339,49 @@ class MainWindow(QMainWindow):
         self.refresh()
         found = record.get("found", {})
         took = fmt_duration(record.get("seconds", 0)) or "0s"
-        msg = ("Stopped" if record.get("cancelled") else "Finished") + f" in {took}: {len(found.get('new_devices', []))} new device(s), " \
+        cancelled = bool(record.get("cancelled"))
+        msg = ("Stopped" if cancelled else "Finished") + f" in {took}: {len(found.get('new_devices', []))} new device(s), " \
               f"{found.get('refreshed', 0)} re-polled, {found.get('new_hosts', 0)} new host(s). {self.inv.summary()}."
         self.scan_phase.setText(f"<b>{html.escape(getattr(self, '_scan_title', 'Scan'))}</b>: {html.escape(msg)}")
         self.log_view.appendPlainText(msg)
-        if self.path:
-            self._write(self.path)
+        self._autosave(cancelled)
         self.statusBar().showMessage(msg, 15000)
         QApplication.alert(self)
+
+    def _autosave(self, cancelled: bool = False) -> None:
+        """Write the project after a job: always for a completed one; for a stopped scan only
+        when the file was already written this session (a stop is often a "no, not that")."""
+        if not self.path or self._closing:
+            return
+        if cancelled and not self._saved_this_session:
+            self.statusBar().showMessage("Stopped scan: not saved automatically (Ctrl+S to keep it).", 8000)
+            return
+        self._write(self.path)
 
     def _on_failed(self, err: str):
         self.scan_phase.setText(f"<span style='color:#dc2626'>Scan failed: {html.escape(err)}</span>")
         QMessageBox.warning(self, "Scan failed", f"{err}\n\nDetails are in the log ({self.log_path}).")
 
-    def _on_thread_done(self):
+    def _on_thread_done(self, worker=None):
+        if worker is not None and worker is not self.worker:
+            return
         self.logbridge.detach()
         self.worker = None
-        self.scan_bar.hide()
-        self.stop_btn.hide()
-        self.a_stop.setEnabled(False)
-        self.a_scan.setEnabled(True)
-        self.a_rescan.setEnabled(True)
+        self._update_job_chrome()
+
+    def _update_job_chrome(self):
+        """Progress bar, Stop button and scan actions follow whether any job is running."""
+        busy = self._jobs.busy()
+        self.scan_bar.setVisible(busy)
+        self.stop_btn.setVisible(busy)
+        self.a_stop.setEnabled(busy)
+        self.a_scan.setEnabled(not busy)
+        self.a_rescan.setEnabled(not busy)
+
+    def _on_jobs_idle(self):
+        self._update_job_chrome()
+        if self._closing:
+            QTimer.singleShot(0, self.close)
 
     def _on_log(self, created, level, name, msg):
         stamp = time.strftime("%H:%M:%S", time.localtime(created))
@@ -1049,11 +1390,7 @@ class MainWindow(QMainWindow):
 
     # ================================================================ exports
     def _ask_path(self, title, default_name, filt) -> str:
-        start = os.path.join(QSettings().value("ui/export_dir", os.path.dirname(self.path) if self.path else os.path.expanduser("~")), default_name)
-        path, _ = QFileDialog.getSaveFileName(self, title, start, filt)
-        if path:
-            QSettings().setValue("ui/export_dir", os.path.dirname(path))
-        return path
+        return ask_save_path(self, title, default_name, filt, self.path)
 
     def _done(self, path):
         self.statusBar().showMessage(f"Wrote {path}", 6000)
@@ -1064,9 +1401,14 @@ class MainWindow(QMainWindow):
     def export_xlsx(self, path: str = ""):
         from ..report import export_xlsx
 
-        path = path or self._ask_path("Export Excel workbook", f"{self._base()}.xlsx", "Excel workbook (*.xlsx)")
+        path = path or self._ask_path("Export spreadsheet workbook", f"{self._base()}.xlsx", "Spreadsheet workbook (*.xlsx)")
         if path:
-            export_xlsx(self.inv, self.snapshot.g, path)
+            inv, g = self.inv, self.snapshot.g
+            try:
+                run_blocking(self, "Writing the workbook", lambda: export_xlsx(inv, g, path), self._jobs)
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.critical(self, "Export failed", f"{path}\n\n{type(e).__name__}: {e}")
+                return ""
             self._done(path)
         return path
 
@@ -1085,7 +1427,7 @@ class MainWindow(QMainWindow):
     def export_drawio(self, path: str = ""):
         from ..diagram import export_drawio
 
-        path = path or self._ask_path("Export diagram", f"{self._base()}.drawio", "draw.io diagram (*.drawio)")
+        path = path or self._ask_path("Export diagram", f"{self._base()}.drawio", "Diagram (*.drawio)")
         if path:
             live = {}
             if self.topology.nodes and not self.topology.focus and not self.topology.hidden_nodes:
@@ -1124,12 +1466,22 @@ class MainWindow(QMainWindow):
         if not path:
             return ""
         title = f"{self.project_name()} — {self.topology.preset_box.currentText()} — {time.strftime('%Y-%m-%d')}"
-        if kind == "png":
-            self.topology.render_image(2.0).save(path)
-        elif kind == "svg":
-            self.topology.export_svg(path, title)
-        else:
-            self.topology.export_pdf(path, title)
+        try:
+            if kind == "png":
+                img = self.topology.render_image(2.0)
+                if img.isNull():
+                    _, w, h = self.topology.render_size(2.0)
+                    raise RuntimeError(f"not enough memory for a {w}x{h} image; export the map as PDF or SVG instead")
+                if not img.save(path):
+                    raise RuntimeError("the image could not be written (is the folder writable and the extension .png?)")
+            elif kind == "svg":
+                self.topology.export_svg(path, title)
+            else:
+                self.topology.export_pdf(path, title)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", f"{path}\n\n{e}")
+            self.statusBar().showMessage(f"Export failed: {e}", 8000)
+            return ""
         self._done(path)
         return path
 
@@ -1177,11 +1529,23 @@ class MainWindow(QMainWindow):
                                "Try /summary, /devices, or /query?q=hosts where os ~ windows\n\n"
                                "Tools ▸ Start API server again to stop it.")
 
-    def compare(self):
+    def compare_previous(self):
+        """Diff against the backup written the last time this project was saved."""
+        if not self.path:
+            QMessageBox.information(self, "Compare", "Save the project first: the previous version is the backup made when it is saved again.")
+            return
+        bak = backup_paths(self.path)[0]
+        if not os.path.exists(bak):
+            QMessageBox.information(self, "Compare", f"No previous version yet. One is kept as {os.path.basename(bak)} each time the project is saved.")
+            return
+        self.compare(bak)
+
+    def compare(self, path: Optional[str] = None):
         from ..diff import compare
 
-        start = QSettings().value("ui/last_dir", os.path.expanduser("~"))
-        path, _ = QFileDialog.getOpenFileName(self, "Compare with an earlier scan", start, FILE_FILTER)
+        if not path:
+            start = QSettings().value("ui/last_dir", os.path.expanduser("~"))
+            path, _ = QFileDialog.getOpenFileName(self, "Compare with an earlier scan", start, FILE_FILTER)
         if not path:
             return
         try:
@@ -1201,8 +1565,7 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def import_vmware(self):
-        if self.worker is not None or getattr(self, "_vmw_worker", None) is not None:
-            QMessageBox.information(self, "Busy", "A scan or discovery is already running.")
+        if self._busy_guard():
             return
         from .vmwaredlg import VmwareDialog, VmwareWorker
 
@@ -1216,24 +1579,32 @@ class MainWindow(QMainWindow):
         self.activity_dock.show()
         self.activity_dock.raise_()
         self.scan_phase.setText(f"Discovering VMware on {v['host']}…")
-        self.scan_bar.show()
-        w = VmwareWorker(self.inv, v, self)
+        work = self._copy_inventory("Preparing the discovery")
+        if work is None:
+            return
+        w = VmwareWorker(work, v, self)
         self._vmw_worker = w
+        self._jobs.add(w, "the VMware discovery")
+        self._update_job_chrome()
 
         def finished(result):
             self._vmw_worker = None
-            self.scan_bar.hide()
+            if self._closing:
+                return
+            if result.get("cancelled"):
+                self.scan_phase.setText("VMware discovery stopped.")
+                return
             if result.get("error"):
                 self.scan_phase.setText(f"VMware discovery failed: {result['error']}")
                 QMessageBox.warning(self, "VMware discovery", result["error"])
                 return
+            self._merge(w.inv)  # the worker's copy, with what it added, becomes the project
             self.set_dirty(True)
             self.refresh()
             msg = f"VMware: {result.get('esxi_hosts', 0)} ESXi host(s), {result.get('vms', 0)} VM(s) ({result.get('vms_with_ip', 0)} with an IP), {result.get('portgroups', 0)} port groups."
             self.scan_phase.setText(msg)
             self.statusBar().showMessage(msg, 12000)
-            if self.path:
-                self._write(self.path)
+            self._autosave()
 
         w.done.connect(finished)
         w.start()
@@ -1241,6 +1612,8 @@ class MainWindow(QMainWindow):
     def import_dhcp(self):
         from .. import dhcp
 
+        if self._busy_guard("Import"):
+            return
         start = QSettings().value("ui/last_dir", os.path.expanduser("~"))
         path, _ = QFileDialog.getOpenFileName(self, "Import DHCP leases", start, "DHCP exports (*.csv *.txt *.leases);;All files (*)")
         if not path:
@@ -1262,8 +1635,7 @@ class MainWindow(QMainWindow):
                                f"added {summary['new_hosts']} host(s), marked {summary['scopes']} subnet(s) as DHCP scopes.")
 
     def inspect_servers(self):
-        if self.worker is not None or getattr(self, "_cap_worker", None) is not None or getattr(self, "_insp_worker", None) is not None:
-            QMessageBox.information(self, "Busy", "A scan, capture or inspection is already running.")
+        if self._busy_guard():
             return
         if not self.inv.hosts:
             QMessageBox.information(self, "No hosts", "Scan the network first; then inspect the hosts found.")
@@ -1281,30 +1653,43 @@ class MainWindow(QMainWindow):
         self.activity_dock.raise_()
         self.log_view.appendPlainText(f"\n=== Inspecting servers — {time.strftime('%H:%M:%S')} ===")
         self.scan_phase.setText("Inspecting servers over SSH / WinRM…")
-        self.scan_bar.show()
-        w = InspectWorker(self.inv, creds, self)
+        work = self._copy_inventory("Preparing the inspection")
+        if work is None:
+            return
+        # authenticated inspection stays inside the ranges the project was scanned with
+        scan = self.inv.project.get("scan", {})
+        scope = nets(list(scan.get("scope", [])) + list(scan.get("targets", []))) or None
+        exclude = nets(list(scan.get("exclude", []))) or None
+        w = InspectWorker(work, creds, self, scope=scope, exclude=exclude)
         self._insp_worker = w
+        self._jobs.add(w, "the server inspection")
+        self._update_job_chrome()
 
         def finished(result):
             self._insp_worker = None
-            self.scan_bar.hide()
-            self.set_dirty(True)
-            self.refresh()
+            if self._closing:
+                return
             if result.get("error"):
                 self.scan_phase.setText(f"Inspection failed: {result['error']}")
-            else:
-                msg = f"Inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed."
-                self.scan_phase.setText(msg)
-                self.statusBar().showMessage(msg, 12000)
-                if self.path:
-                    self._write(self.path)
+                return
+            self._merge(w.inv)  # facts were written onto the worker's copy; it becomes the project
+            self.set_dirty(True)
+            self.refresh()
+            for line in _host_key_lines(result, self.inv):
+                self.log_view.appendPlainText("  " + line)
+            if result.get("cancelled"):
+                self.scan_phase.setText("Inspection stopped - hosts inspected so far are kept.")
+                return
+            msg = f"Inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed."
+            self.scan_phase.setText(msg)
+            self.statusBar().showMessage(msg, 12000)
+            self._autosave()
 
         w.done.connect(finished)
         w.start()
 
     def capture_configs(self, node_id: str = ""):
-        if self.worker is not None or getattr(self, "_cap_worker", None) is not None:
-            QMessageBox.information(self, "Busy", "A scan or capture is already running.")
+        if self._busy_guard():
             return
         if not self.inv.devices:
             QMessageBox.information(self, "No devices", "Scan the network first, then capture configs from the devices found.")
@@ -1323,32 +1708,35 @@ class MainWindow(QMainWindow):
         self.activity_dock.raise_()
         self.log_view.appendPlainText(f"\n=== Capturing configs from {len(ids)} device(s) — {time.strftime('%H:%M:%S')} ===")
         self.scan_phase.setText(f"Capturing configs from {len(ids)} device(s)…")
-        self.scan_bar.show()
-        self.stop_btn.show()
-        w = CaptureWorker(self.inv, ids, v, self)
+        work = self._copy_inventory("Preparing the capture")
+        if work is None:
+            return
+        w = CaptureWorker(work, ids, v, self)
         self._cap_worker = w
+        self._jobs.add(w, "the config capture")
+        self._update_job_chrome()
         w.progress.connect(lambda did, ok, msg: self.log_view.appendPlainText(f"  {self.snapshot.name(did)}: {'ok - ' if ok else 'FAILED - '}{msg}"))
 
         def finished(ok, changed):
             self._cap_worker = None
-            self.scan_bar.hide()
-            self.stop_btn.hide()
+            if self._closing:
+                return
+            self.inv.configs = w.inv.configs  # captured revisions were stored on the worker's copy
+            self.inv.rev += 1
             self.set_dirty(True)
             self.refresh()
             msg = f"Captured {ok} config(s), {changed} changed."
             self.scan_phase.setText(msg)
             self.statusBar().showMessage(msg, 10000)
-            if self.path:
-                self._write(self.path)
+            self._autosave()
 
         w.done.connect(finished)
-        self.stop_btn.clicked.connect(w.stop)
-        w.start()
+        w.start()  # the Stop button reaches it through the job registry
 
     def reconcile(self):
         from .reconciledlg import ReconcileDialog
 
-        dlg = ReconcileDialog(self.inv, self)
+        dlg = ReconcileDialog(lambda: self.inv, self)
         dlg.openNode.connect(self.open_node)
         dlg.applied.connect(lambda: (self.set_dirty(True), self.refresh()))
         dlg.show()
@@ -1392,6 +1780,7 @@ class MainWindow(QMainWindow):
 
         self._fetch = Fetch(self)
         self._fetch.done.connect(shown)
+        self._jobs.add(self._fetch, "the update check", blocking=False)
         self._fetch.start()
 
     def quick_guide(self):
@@ -1435,8 +1824,7 @@ class MainWindow(QMainWindow):
         for u in e.mimeData().urls():
             p = u.toLocalFile()
             if p.lower().endswith((".netmap", ".json")):
-                if self.maybe_save():
-                    self.open_project(p)
+                self.open_project(p)
                 break
 
     def _restore_window(self):
@@ -1461,18 +1849,36 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.resizeDocks([self.details_dock], [max(300, min(440, int(self.width() * 0.28)))], Qt.Horizontal))
 
     def closeEvent(self, e):
-        if self.worker is not None:
-            if QMessageBox.question(self, "Scan running", "A scan is running. Stop it and quit?") != QMessageBox.Yes:
+        """Stop every worker, wait a bounded time, and only then ask about saving. A worker
+        that is still running defers the close: the window says so and closes itself when
+        the registry reports idle - Qt never sees a thread destroyed while running."""
+        if self._jobs.running():
+            if self._jobs.busy() and not self._closing:
+                if QMessageBox.question(self, "Work in progress", f"{self._jobs.describe().capitalize()} is still running. Stop it and quit?") != QMessageBox.Yes:
+                    e.ignore()
+                    return
+            self._closing = True
+            self._jobs.stop_all()
+            if not self._jobs.wait_all(CLOSE_WAIT_MS):
+                self.scan_phase.setText("Still stopping — the window closes when the work has ended.")
+                self.statusBar().showMessage("Still stopping…")
                 e.ignore()
                 return
-            self.worker.stop()
-            self.worker.wait(15000)
+        # the scan's result, if it just ended, is applied here and not inside the message box below
+        if self.worker is not None:
+            self._finish_scan(self.worker)
+            self._on_thread_done(self.worker)
         if not self.maybe_save():
+            self._closing = False
+            self._update_job_chrome()
             e.ignore()
             return
+        self._closing = True
         s = QSettings()
         s.setValue("ui/geometry", self.saveGeometry())
         s.setValue("ui/state", self.saveState())
+        if self.recovery_dir:
+            clear_recovery(self.recovery_dir)
         e.accept()
 
 
@@ -1502,12 +1908,12 @@ addresses with several MACs, subnets without a gateway, and addresses outside ev
 </ul>
 <h3>4. Document</h3>
 <p>Select anything and use the <b>Documentation</b> tab in the details panel: name, role, site, owner, asset tag, status, tags and
-notes. These are saved in the project and survive every rescan, and they appear in the Excel export.</p>
+notes. These are saved in the project and survive every rescan, and they appear in the spreadsheet export.</p>
 <h3>5. Keep it current</h3>
 <p><b>F5</b> re-polls every known device and follows new links. Right-click a device to rescan just that one, or a subnet to
 find every live address in it. <b>Tools ▸ Compare with another scan</b> lists what was added, removed or changed between two
 project files.</p>
 <h3>6. Share</h3>
-<p><b>File ▸ Export</b>: an Excel workbook of the whole inventory, CSV files, a draw.io diagram (opens in diagrams.net and converts
-to Visio), the map as PDF/SVG/PNG, or a single interactive HTML page.</p>
+<p><b>File ▸ Export</b>: a spreadsheet workbook (.xlsx) of the whole inventory, CSV files, a .drawio diagram (opens in diagrams.net),
+the map as PDF/SVG/PNG, or a single interactive HTML page.</p>
 """

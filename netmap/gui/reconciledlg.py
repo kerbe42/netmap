@@ -1,4 +1,4 @@
-"""Check the project against an asset list (CSV or Excel)."""
+"""Check the project against an asset list (CSV or .xlsx)."""
 from __future__ import annotations
 
 import os
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..reconcile import FIELDS, guess_columns, read_table, reconcile, write_csv
+from .fileutil import ask_save_path
 
 FIELD_TITLES = {"ip": "Address", "name": "Name", "serial": "Serial number", "mac": "MAC address", "model": "Model", "site": "Site / location"}
 
@@ -34,8 +35,12 @@ class ReconcileDialog(QDialog):
     applied = Signal()
 
     def __init__(self, inv, parent=None):
+        """`inv` is an Inventory or, better, a callable returning the window's current one:
+        the dialog stays open while scans finish and replace the inventory object, so it
+        re-resolves it on every run and apply instead of holding the one it was born with."""
         super().__init__(parent)
-        self.inv = inv
+        self._inv_fn = inv if callable(inv) else (lambda inv=inv: inv)
+        self._applied = False
         self.setWindowTitle("Check against an asset list")
         self.headers: list[str] = []
         self.rows: list[list[str]] = []
@@ -45,7 +50,7 @@ class ReconcileDialog(QDialog):
         # page 1: file and columns
         p1 = QWidget()
         l1 = QVBoxLayout(p1)
-        intro = QLabel("Compare what the scans found with the list of devices you were given (CSV or Excel). "
+        intro = QLabel("Compare what the scans found with the list of devices you were given (CSV or .xlsx). "
                        "Rows are matched by address, then serial number, then name, then MAC address.")
         intro.setWordWrap(True)
         l1.addWidget(intro)
@@ -102,6 +107,10 @@ class ReconcileDialog(QDialog):
         lay.addWidget(self.bb)
         self._page(0)
         self.resize(820, 560)
+
+    @property
+    def inv(self):
+        return self._inv_fn()
 
     def _page(self, i):
         self.stack.setCurrentIndex(i)
@@ -182,33 +191,52 @@ class ReconcileDialog(QDialog):
         self.summary.setText(f"<b>{len(rec.matches)}</b> rows compared: <b>{len(rec.found)}</b> found as listed, "
                              f"<b>{len(rec.differ)}</b> found but different, <b>{len(rec.missing)}</b> not found; "
                              f"<b>{len(rec.unlisted)}</b> network devices are not in the list. Double-click an item to open it.")
-        self.copy_notes.setVisible("name" in cols or "site" in cols)
+        self._notes_offered = "name" in cols or "site" in cols
+        self.copy_notes.setVisible(self._notes_offered)
         self._page(1)
 
     def _export(self):
         if not self.rec:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export comparison", "asset-list-check.csv", "CSV files (*.csv)")
+        path = ask_save_path(self, "Export comparison", "asset-list-check.csv", "CSV files (*.csv)")
         if path:
             write_csv(self.inv, self.rec, path)
 
     def apply_notes(self) -> int:
         """Names and sites from the list into Notes of matched items that have none yet."""
         n = 0
+        inv = self.inv  # the current inventory, resolved now
         for m in (self.rec.found + self.rec.differ) if self.rec else []:
-            note = self.inv.note(m.node)
+            if m.node not in inv.devices and m.node not in inv.hosts:
+                continue  # gone since the comparison ran
+            note = inv.note(m.node)
             fields = {}
             if m.listed.get("site") and not note.get("site"):
                 fields["site"] = m.listed["site"]
             if m.listed.get("name") and not note.get("name") and m.node not in self.inv.devices:
                 fields["name"] = m.listed["name"]
             if fields:
-                self.inv.annotate(m.node, **fields)
+                inv.annotate(m.node, **fields)
                 n += 1
         return n
 
-    def _close(self):
-        if self.rec and self.copy_notes.isVisible() and self.copy_notes.isChecked():
+    def _apply_if_ticked(self):
+        if self._applied:
+            return
+        self._applied = True
+        if self.rec and getattr(self, "_notes_offered", False) and self.copy_notes.isChecked():
             if self.apply_notes():
                 self.applied.emit()
+
+    def _close(self):
         self.reject()
+
+    def reject(self):
+        # Esc, the window's close button and the Close button all end here: a ticked
+        # "Copy names into Notes" is applied whichever way the dialog is dismissed
+        self._apply_if_ticked()
+        super().reject()
+
+    def accept(self):
+        self._apply_if_ticked()
+        super().accept()

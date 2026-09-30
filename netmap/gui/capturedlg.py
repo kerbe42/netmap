@@ -94,11 +94,17 @@ class CaptureWorker(QThread):
                                  vendor=dev.vendor, port=self.creds["port"], key_filename=self.creds["key"])
             if cap.ok:
                 ok += 1
-                if store_config(self.inv, did, cap):
+                this_changed = bool(store_config(self.inv, did, cap))
+                if this_changed:
                     changed += 1
-                self.progress.emit(did, True, "captured" + (" (changed)" if changed else ""))
+                self.progress.emit(did, True, "captured" + (" (changed)" if this_changed else " (unchanged)"))
             else:
-                self.progress.emit(did, False, cap.error)
+                # the error text as the capture layer wrote it; a changed SSH host key is
+                # called out plainly - it must be read before trusting that device again
+                msg = cap.error or "failed"
+                if getattr(cap, "host_key_changed", False):
+                    msg = "HOST KEY CHANGED - " + msg
+                self.progress.emit(did, False, msg)
         self.done.emit(ok, changed)
 
 

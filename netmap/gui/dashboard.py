@@ -192,7 +192,7 @@ class Dashboard(QWidget):
             "<b>2.</b> Add the SNMP read-only community or SNMPv3 user for the devices.<br>"
             "<b>3.</b> Optionally name one or two core switches or routers to start from.<br><br>"
             "Everything found is saved in a project file. Document devices as you go, rescan later, and export the inventory "
-            "to Excel or the diagram to PDF, SVG or draw.io."
+            "to a spreadsheet or the diagram to PDF, SVG or .drawio."
         )
         wtext.setWordWrap(True)
         wtext.setTextFormat(Qt.RichText)

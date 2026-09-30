@@ -72,10 +72,11 @@ class _DnsThread(QThread):
 class ToolsPanel(QWidget):
     """A target box, four buttons, and the output of whatever ran last."""
 
-    def __init__(self, cred_store, scope_check=None, parent=None):
+    def __init__(self, cred_store, scope_check=None, parent=None, jobs=None):
         super().__init__(parent)
         self.store = cred_store
         self.scope_check = scope_check  # callable(ip) -> (allowed: bool, why: str)
+        self.jobs = jobs  # optional JobRegistry: threads are registered so closing waits for them
         self.proc: QProcess | None = None
         self.target = QLineEdit()
         self.target.setPlaceholderText("address or name")
@@ -126,30 +127,40 @@ class ToolsPanel(QWidget):
         if self.proc is not None:
             self.stop()
         self.out.appendPlainText(f"$ {' '.join(cmd)}")
-        self.proc = QProcess(self)
-        self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc = QProcess(self)
+        self.proc = proc
+        proc.setProcessChannelMode(QProcess.MergedChannels)
         enc = _console_encoding()
-        self.proc.readyReadStandardOutput.connect(lambda: self._append(bytes(self.proc.readAllStandardOutput()).decode(enc, "replace")))
-        self.proc.finished.connect(self._finished)
-        self.proc.errorOccurred.connect(lambda e: self.out.appendPlainText(f"could not run {cmd[0]}: {self.proc.errorString() if self.proc else e}"))
+        # every slot checks that the signal came from the process that is still current: a
+        # late `finished` from a killed run must not null out the run that replaced it
+        proc.readyReadStandardOutput.connect(lambda p=proc: p is self.proc and self._append(bytes(p.readAllStandardOutput()).decode(enc, "replace")))
+        proc.finished.connect(lambda *_, p=proc: self._finished(p))
+        proc.errorOccurred.connect(lambda e, p=proc: p is self.proc and self.out.appendPlainText(f"could not run {cmd[0]}: {p.errorString()}"))
         self.b_stop.setEnabled(True)
-        self.proc.start(cmd[0], cmd[1:])
+        proc.start(cmd[0], cmd[1:])
 
     def _append(self, text: str):
         self.out.moveCursor(self.out.textCursor().MoveOperation.End)
         self.out.insertPlainText(text.replace("\r\n", "\n"))
         self.out.ensureCursorVisible()
 
-    def _finished(self, *_):
+    def _finished(self, proc=None):
+        if proc is not None and proc is not self.proc:
+            proc.deleteLater()
+            return  # an earlier run that was replaced: nothing of the current run changes
         self.b_stop.setEnabled(False)
         self.out.appendPlainText("")
         self.proc = None
+        if proc is not None:
+            proc.deleteLater()
 
     def stop(self):
-        if self.proc is not None:
-            self.proc.kill()
-            self.proc.waitForFinished(1000)
-            self.proc = None
+        proc, self.proc = self.proc, None
+        if proc is not None:
+            proc.blockSignals(True)  # its finished/readyRead must not reach the next run's slots
+            proc.kill()
+            proc.waitForFinished(1000)
+            proc.deleteLater()
         self.b_stop.setEnabled(False)
 
     def ping(self):
@@ -169,6 +180,8 @@ class ToolsPanel(QWidget):
         self.out.appendPlainText(f"$ dns {t}")
         th = _DnsThread(t, self)
         th.done.connect(lambda text: self.out.appendPlainText(text + "\n"))
+        if self.jobs is not None:
+            self.jobs.add(th, "the DNS lookup", blocking=False)
         th.start()
         self._dns_thread = th
 
@@ -197,5 +210,7 @@ class ToolsPanel(QWidget):
                 self.out.appendPlainText(f"answered with “{label}”\n{describe_sysinfo(info)}\n")
 
         th.done.connect(done)
+        if self.jobs is not None:
+            self.jobs.add(th, "the SNMP test", blocking=False)
         th.start()
         self._snmp_thread = th

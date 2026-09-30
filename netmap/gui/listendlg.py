@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -30,13 +31,18 @@ class ListenDialog(QDialog):
         self.setWindowTitle("Listen for syslog / SNMP traps")
         self.snapshot = snapshot
         self.collector: EventCollector | None = None
-        self._seen = 0
+        self._seen = 0  # events shown so far (a running total, not an index into the buffer)
+        self._last_seq = None  # Event.seq of the last shown event, when events carry one
+        self._last_obj = None  # else the last shown event object itself
         self.syslog_port = QSpinBox()
         self.syslog_port.setRange(1, 65535)
         self.syslog_port.setValue(514)
         self.trap_port = QSpinBox()
         self.trap_port.setRange(1, 65535)
         self.trap_port.setValue(162)
+        self.bind_addr = QLineEdit("0.0.0.0")
+        self.bind_addr.setToolTip("Local address to listen on (0.0.0.0 = every interface)")
+        self.bind_addr.setMaximumWidth(120)
         self.start_btn = QPushButton("Start listening")
         self.start_btn.clicked.connect(self.toggle)
         self.status = QLabel("Point devices' logging/trap host at this machine. Ports 514/162 need admin; use high ports otherwise.")
@@ -47,6 +53,8 @@ class ListenDialog(QDialog):
         top.addWidget(self.syslog_port)
         top.addWidget(QLabel("Trap UDP"))
         top.addWidget(self.trap_port)
+        top.addWidget(QLabel("Bind"))
+        top.addWidget(self.bind_addr)
         top.addWidget(self.start_btn)
         top.addStretch(1)
         self.table = QTableWidget(0, 5)
@@ -80,7 +88,7 @@ class ListenDialog(QDialog):
 
     def toggle(self):
         if self.collector is None:
-            c = EventCollector(self.syslog_port.value(), self.trap_port.value())
+            c = self._make_collector()
             listening = c.start()
             if not listening:
                 self.status.setText("Could not bind either port: " + "; ".join(c.errors) + "  Try high ports (e.g. 5140 / 1620) or run as administrator.")
@@ -98,13 +106,46 @@ class ListenDialog(QDialog):
         else:
             self.stop()
 
+    def _new_events(self, evs: list) -> list:
+        """The events not shown yet. The collector's buffer is a bounded deque, so an index
+        into it is meaningless once it wraps: track by Event.seq when there is one, else by
+        the identity of the last event shown."""
+        if not evs:
+            return []
+        if getattr(evs[-1], "seq", None) is not None:
+            if self._last_seq is None:
+                return evs
+            return [e for e in evs if getattr(e, "seq", None) is not None and e.seq > self._last_seq]
+        if self._last_obj is None:
+            return evs
+        for i in range(len(evs) - 1, -1, -1):
+            if evs[i] is self._last_obj:
+                return evs[i + 1:]
+        return evs  # everything shown before has been evicted: all of these are new
+
+    def _make_collector(self) -> EventCollector:
+        import inspect
+
+        kwargs = {}
+        addr = self.bind_addr.text().strip()
+        try:
+            if addr and "bind_addr" in inspect.signature(EventCollector).parameters:
+                kwargs["bind_addr"] = addr
+        except (TypeError, ValueError):
+            pass
+        return EventCollector(self.syslog_port.value(), self.trap_port.value(), **kwargs)
+
     def _drain(self):
         if self.collector is None:
             return
         evs = list(self.collector.events)
-        for ev in evs[self._seen:]:
+        new = self._new_events(evs)
+        for ev in new:
             self._add(ev)
-        self._seen = len(evs)
+        if new:
+            self._last_obj = new[-1]
+            self._last_seq = getattr(new[-1], "seq", None)
+            self._seen += len(new)
         self.count.setText(f"{self._seen} events")
 
     def _add(self, ev):
@@ -112,10 +153,13 @@ class ListenDialog(QDialog):
         self.table.insertRow(r)
         name = self.snapshot.name(ev.source) if self.snapshot and ev.source in self.snapshot.inv.devices else ev.source
         vals = [time.strftime("%H:%M:%S", time.localtime(ev.time)), name, ev.kind, ev.severity, ev.message]
+        details = getattr(ev, "details", None)  # decoded trap OID / varbinds, when the core provides them
         for c, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
             if c == 3 and ev.severity in SEV_COLOR:
                 it.setForeground(QBrush(QColor(SEV_COLOR[ev.severity])))
+            if c == 4 and details:
+                it.setToolTip(str(ev.message) + "\n\n" + (("\n".join(f"{k}: {v2}" for k, v2 in details.items()) if isinstance(details, dict) else str(details))))
             self.table.setItem(r, c, it)
         if r > 4000:
             self.table.removeRow(0)

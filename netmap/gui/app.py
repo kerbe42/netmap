@@ -49,7 +49,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     log_path = _setup_logging(args.verbose)
 
-    from PySide6.QtCore import QCoreApplication, QSettings, Qt
+    from PySide6.QtCore import QCoreApplication, QSettings, Qt, QTimer
     from PySide6.QtWidgets import QApplication
 
     from .. import __version__
@@ -78,14 +78,20 @@ def main(argv=None) -> int:
 
     app.setWindowIcon(app_icon())
     apply_theme(app, args.theme or QSettings().value("ui/theme", "system"))
-    win = MainWindow(log_path=log_path)
+    headless = bool(args.screenshots or args.selftest)
+    # the recovery copy lives beside the log; a self-test must never touch (or clear) a real one
+    win = MainWindow(log_path=log_path, recovery_dir="" if headless else None)
     if args.project:
         win.open_project(args.project)
-    if args.screenshots or args.selftest:
+    if headless:
         from .selftest import run_selftest
 
         return run_selftest(win, args.screenshots, args.selftest)
     win.show()
+    if not args.project or not win.inv.devices:
+        win.offer_recovery()
+    else:
+        QTimer.singleShot(300, win.offer_recovery)
     return app.exec()
 
 

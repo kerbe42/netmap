@@ -199,7 +199,7 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             for d in list(win.inv.devices.values())[:4]:
                 f.write(f"{d.name},{d.id},{d.serial},Head office\n")
             f.write("decommissioned-sw,10.254.254.254,FOC0000GONE,Basement\n")
-        rd = ReconcileDialog(win.inv, win)
+        rd = ReconcileDialog(lambda: win.inv, win)
         rd.load(lst)
         rd._run()
         rd.show()
@@ -233,7 +233,7 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
         qd.edit.setText("hosts where os ~ windows and confidence = high")
         qd.run()
         _pump(150)
-        (ok if qd.table.rowCount() > 0 else fail)(f"query console returned {qd.table.rowCount()} rows")
+        (ok if qd.row_count() > 0 else fail)(f"query console returned {qd.row_count()} rows")
         shot("44-query", qd)
         qd.close()
         # switch front-panel view

@@ -7,16 +7,15 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
 )
 
 from ..query import QueryError, pages, run_query
-from .table import display
+from .table import ID_ROLE, FilterProxy, PlaceholderTableView, RowsModel
 
 EXAMPLES = [
     "devices where role = switch",
@@ -29,6 +28,8 @@ EXAMPLES = [
     "compliance where severity = high",
     "dependencies where service = https",
 ]
+
+RESIZE_TO_CONTENTS_MAX = 2000  # above this many rows, columns take their declared widths
 
 
 class QueryDialog(QDialog):
@@ -55,10 +56,21 @@ class QueryDialog(QDialog):
         self.status = QLabel(f"Tables: {', '.join(pages())}.  Operators: = != ~ !~ > < >= <=.  Clauses: where / and / or / select / order by / limit.")
         self.status.setObjectName("muted")
         self.status.setWordWrap(True)
-        self.table = QTableWidget(0, 0)
+        # the same model/view pair as the inventory pages: 14,000 result rows cost a list of
+        # dicts, not 14,000 x columns QTableWidgetItems
+        self.model = RowsModel([], self)
+        self.proxy = FilterProxy(self)
+        self.proxy.setSourceModel(self.model)
+        self.table = PlaceholderTableView()
+        self.table.set_placeholder("Type a query and press Enter, or pick an example.")
+        self.table.setModel(self.proxy)
+        self.table.setSortingEnabled(True)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(False)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(24)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.doubleClicked.connect(self._open)
         lay = QVBoxLayout(self)
@@ -67,6 +79,7 @@ class QueryDialog(QDialog):
         lay.addWidget(self.table, 1)
         self.resize(900, 560)
         self._rows = []
+        self._cols = []
 
     def run(self):
         try:
@@ -76,17 +89,23 @@ class QueryDialog(QDialog):
             return
         self._cols = cols
         self._rows = rows
-        self.table.setColumnCount(len(cols))
-        self.table.setHorizontalHeaderLabels([c.title for c in cols])
-        self.table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            for c, col in enumerate(cols):
-                self.table.setItem(r, c, QTableWidgetItem(display(col, row.get(col.key))))
-        self.table.resizeColumnsToContents()
+        self.model = RowsModel(cols, self)
+        self.model.set_rows(rows)
+        self.proxy.setSourceModel(self.model)
+        hdr = self.table.horizontalHeader()
+        hdr.setSortIndicator(-1, Qt.AscendingOrder)
+        if len(rows) <= RESIZE_TO_CONTENTS_MAX:
+            self.table.resizeColumnsToContents()
+        else:
+            for i, c in enumerate(cols):
+                self.table.setColumnWidth(i, c.width or 120)
+        self.table.viewport().update()
         self.status.setText(f"{len(rows)} result(s). Double-click a row to open it.")
 
+    def row_count(self) -> int:
+        return self.model.rowCount()
+
     def _open(self, idx):
-        if 0 <= idx.row() < len(self._rows):
-            nid = self._rows[idx.row()].get("_id")
-            if nid:
-                self.openNode.emit(nid)
+        nid = idx.data(ID_ROLE)
+        if nid:
+            self.openNode.emit(nid)
