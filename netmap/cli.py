@@ -263,7 +263,7 @@ def cmd_vmware(args) -> int:
 
     inv = _load_map(args.map)
     pw = args.password if args.password is not None else getpass.getpass("vCenter password: ")
-    result = discover(inv, args.host, args.user, pw, port=args.port, insecure=not args.secure)
+    result = discover(inv, args.host, args.user, pw, port=args.port, insecure=args.insecure)
     if result.get("error"):
         log.error("VMware discovery failed: %s", result["error"])
         return 1
@@ -298,7 +298,10 @@ def cmd_inspect(args) -> int:
     if not creds:
         log.error("give --linux-user/--linux-key and/or --win-user")
         return 2
-    result = asyncio.run(inspect_hosts(inv, creds))
+    # authenticated inspection stays inside the same ranges as every other step
+    cfg = load_config(getattr(args, "config", None))
+    scope, exclude = scope_from(args, cfg)
+    result = asyncio.run(inspect_hosts(inv, creds, scope=scope, exclude=exclude))
     inv.save(args.map)
     print(f"inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed. saved {args.map}")
     return 0
@@ -469,11 +472,14 @@ def build_parser():
     ins.add_argument("--map", "-m", default="netmap.json")
     ins.add_argument("--linux-user"), ins.add_argument("--linux-pass"), ins.add_argument("--linux-key")
     ins.add_argument("--win-user"), ins.add_argument("--win-pass")
+    ins.add_argument("--config", "-c", help="netmap.toml with [crawl] scope/exclude")
+    ins.add_argument("--scope", action="append", metavar="CIDR", help="only inspect hosts inside these networks (repeatable). Default: RFC1918")
+    ins.add_argument("--exclude", action="append", metavar="CIDR", help="never inspect these networks (repeatable)")
 
     vm = sub.add_parser("vmware", help="read-only VMware vCenter/ESXi discovery folded into the map")
     vm.add_argument("--map", "-m", default="netmap.json")
     vm.add_argument("--host", required=True), vm.add_argument("--user", required=True), vm.add_argument("--password")
-    vm.add_argument("--port", type=int, default=443), vm.add_argument("--secure", action="store_true", help="verify the TLS certificate")
+    vm.add_argument("--port", type=int, default=443), vm.add_argument("--insecure", action="store_true", help="skip TLS certificate verification (self-signed vCenter)")
 
     sv = sub.add_parser("serve", help="serve a read-only REST API over a saved map (JSON + the query language)")
     sv.add_argument("--map", "-m", default="netmap.json")

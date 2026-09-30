@@ -59,7 +59,8 @@ def test_token_required(snap):
             assert False, "should have been unauthorized"
         except urllib.error.HTTPError as e:
             assert e.code == 401
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/summary?token=secret", timeout=5) as r:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/summary", headers={"Authorization": "Bearer secret"})
+        with urllib.request.urlopen(req, timeout=5) as r:
             assert json.load(r)["devices"] == 11
     finally:
         srv.shutdown()

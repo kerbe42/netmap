@@ -291,7 +291,7 @@ def test_discover_folds_vm_and_host_into_inventory():
 
     # the ESXi host became a Host too
     esx = inv.hosts["10.0.0.10"]
-    assert esx.role == "server"
+    assert esx.role == "hypervisor"
     assert esx.os_family == "esxi"
     assert esx.os == "8.0.2 build-21813344"
     assert esx.vendor == "Dell Inc."
