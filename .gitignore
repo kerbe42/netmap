@@ -5,8 +5,15 @@ netmap.json
 netmap.html
 netmap.toml
 *.tmp
+*.log
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 dist/
 build/
 .claude/
 packaging/version_info.txt
+# CI smoke-test outputs and self-test screenshot folders
+shots-*/
+smoke.*
+smoke-*.csv

@@ -5,12 +5,18 @@
 # A folder rather than one file: it starts instantly (nothing to unpack to %TEMP% on
 # every launch), endpoint protection is calmer about it, and the installer and the
 # portable zip are both made from it.
+#
+# What is bundled (data files, collected packages, exclusions) lives in packaging/bundle.py,
+# shared with netmap.spec.
+import importlib.util
 import os
 import re
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
-
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
+_spec = importlib.util.spec_from_file_location("bundle", os.path.join(SPECPATH, "bundle.py"))
+bundle = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(bundle)
+
 VERSION = re.search(r'__version__ = "([^"]+)"', open(os.path.join(ROOT, "netmap", "__init__.py"), encoding="utf-8").read()).group(1)
 nums = [int(x) for x in re.findall(r"\d+", VERSION)[:3]] + [0]
 
@@ -26,7 +32,7 @@ with open(version_file, "w", encoding="utf-8") as f:
       StringStruct('FileDescription', 'NetMap - network inventory and topology'),
       StringStruct('FileVersion', '{VERSION}'),
       StringStruct('InternalName', 'NetMap'),
-      StringStruct('LegalCopyright', 'Copyright (c) 2026 kerbe42'),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 kerbe42. MIT License.'),
       StringStruct('OriginalFilename', 'NetMap.exe'),
       StringStruct('ProductName', 'NetMap'),
       StringStruct('ProductVersion', '{VERSION}')])]),
@@ -35,25 +41,9 @@ with open(version_file, "w", encoding="utf-8") as f:
 )
 """)
 
-datas = [
-    (os.path.join(ROOT, "netmap", "vendor", "vis-network.min.js"), "netmap/vendor"),
-    (os.path.join(ROOT, "netmap", "data", "oui.tsv"), "netmap/data"),
-    (os.path.join(ROOT, "netmap", "data", "sample-campus.netmap"), "netmap/data"),
-]
-binaries = []
-hiddenimports = ["netmap", "netmap.gui", "netmap.gui.app"]
-for pkg in ("pysnmp", "pyasn1", "pyasn1_modules", "networkx", "openpyxl", "et_xmlfile", "paramiko", "nacl", "bcrypt", "winrm", "requests", "requests_ntlm", "ntlm_auth", "xmltodict", "pyVmomi", "pyVim"):
-    try:
-        d, b, h = collect_all(pkg)
-    except Exception:  # an optional sub-dependency may be absent; skip it rather than fail the build
-        continue
-    datas += d
-    binaries += b
-    hiddenimports += h
-hiddenimports += collect_submodules("cryptography")
-
-EXCLUDES = ["tkinter", "matplotlib", "pytest", "snmpsim", "pysmi", "IPython", "numpy", "scipy", "pandas",
-            "PySide6.QtNetwork", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtOpenGL", "PySide6.QtPdf", "PySide6.QtDBus"]
+datas, binaries, hiddenimports = bundle.collect(ROOT, with_sample=True)
+hiddenimports += ["netmap.gui", "netmap.gui.app"]
+EXCLUDES = bundle.EXCLUDES + bundle.QT_EXCLUDES
 
 gui = Analysis(
     [os.path.join(SPECPATH, "gui_entry.py")],
