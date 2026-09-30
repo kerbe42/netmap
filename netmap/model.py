@@ -133,6 +133,7 @@ class Device:
     dns_name: str = ""
     role: str = "unknown"
     credential: str = ""
+    snmp_version: str = ""  # v1 | v2c | v3 - the protocol version that answered (labels are free text)
     depth: int = 0
     discovered_via: str = ""
     lldp_chassis_id: str = ""
@@ -250,6 +251,10 @@ class Inventory:
         # cache its (expensive) result and skip rebuilding on refreshes that changed nothing.
         self.rev: int = 0
         self._graph_cache: tuple = ()  # (rev, include_hosts, include_subnets, fdb_links, graph)
+        # derived while building the graph, never saved: MACs that were seen on so many
+        # addresses that they were dropped from the hosts (a next-hop router's MAC, a
+        # scan artifact); the Findings page shows them so the drop is not silent.
+        self.shared_macs: list[dict] = []  # {mac, count, subnets, ips}
 
     # ---- devices ----
     def add_device(self, dev: Device) -> None:
@@ -265,6 +270,7 @@ class Inventory:
             self.mac_to_device.setdefault(dev.lldp_chassis_id, dev.id)
         for cidr in dev.subnets():
             self.add_subnet(cidr, "device")
+        self.rev += 1  # a new device node
 
     def replace_device(self, dev: Device) -> None:
         """Swap in a freshly collected copy of a device we already had (a rescan)."""
@@ -276,9 +282,13 @@ class Inventory:
         for cidr in dev.subnets():
             self.add_subnet(cidr, "device")
 
-    def remove_device(self, did: str) -> None:
-        self.devices.pop(did, None)
-        self.reindex()
+    def remove_device(self, did: str) -> bool:
+        """Forget a polled device (the GUI's "remove from project"). Its annotations and
+        hand-placed positions are kept so they apply again if a later scan finds it.
+        Returns True if there was such a device."""
+        dev = self.devices.pop(did, None)
+        self.reindex()  # rebuilds ip_to_device/mac_to_device and bumps rev
+        return dev is not None
 
     def reindex(self) -> None:
         """Rebuild the address/MAC lookups from the devices themselves."""
@@ -300,15 +310,41 @@ class Inventory:
         return self.devices.get(did) if did else None
 
     def device_for_name(self, name: str) -> Optional[Device]:
+        """The polled device called `name`: by short (domain-stripped) name when that is
+        unique, else by the full lower-cased FQDN; None when ambiguous or unknown."""
         from .util import short_name
 
         target = short_name(name)
         if not target:
             return None
-        for d in self.devices.values():
-            if short_name(d.name) == target:
-                return d
+        by_short = self.devices_by_short_name()
+        ids = by_short.get(target, [])
+        if len(ids) == 1:
+            return self.devices.get(ids[0])
+        if len(ids) > 1:
+            full = (name or "").strip().lower()
+            for did in ids:
+                d = self.devices.get(did)
+                if d is not None and full and full in ((d.name or "").lower(), (d.dns_name or "").lower()):
+                    return d
         return None
+
+    def devices_by_short_name(self) -> dict[str, list[str]]:
+        """{short name: [device ids]}, built once per inventory revision (two switches called
+        "sw1" in different domains must not resolve to the first one)."""
+        from .util import short_name
+
+        key = (self.rev, len(self.devices))
+        cached = getattr(self, "_short_names", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        out: dict[str, list[str]] = {}
+        for d in self.devices.values():
+            for n in {short_name(d.name), short_name(d.dns_name)}:
+                if n:
+                    out.setdefault(n, []).append(d.id)
+        self._short_names = (key, out)
+        return out
 
     # ---- hosts ----
     def touch_host(self, ip: str, source: str, mac: Optional[str] = None) -> Host:
@@ -322,7 +358,19 @@ class Inventory:
             h.sources.append(source)
         if mac and not h.mac:
             h.mac = mac
+        self.rev += 1  # a host appeared or learned something -> the cached graph is stale
         return h
+
+    def remove_host(self, ip: str) -> bool:
+        """Forget a host (the GUI's "remove from project"); notes on it are kept.
+        Returns True if there was such a host."""
+        h = self.hosts.pop(ip, None)
+        self.unreachable.pop(ip, None)
+        # a VIP or alias registered against a device stays; only a mapping to the host itself goes
+        if self.ip_to_device.get(ip) == ip:
+            self.ip_to_device.pop(ip, None)
+        self.rev += 1
+        return h is not None
 
     def mac_to_ip(self) -> dict[str, str]:
         m: dict[str, str] = {}
@@ -340,9 +388,16 @@ class Inventory:
         if s is None:
             s = Subnet(cidr=cidr)
             self.subnets[cidr] = s
+            self.rev += 1  # new subnet node
         if source not in s.sources:
             s.sources.append(source)
+            self.rev += 1
         return s
+
+    def remove_subnet(self, cidr: str) -> bool:
+        s = self.subnets.pop(cidr, None)
+        self.rev += 1
+        return s is not None
 
     def subnet_for_ip(self, ip: str) -> Optional[str]:
         """Most specific known subnet containing `ip` (longest-prefix match)."""
@@ -350,7 +405,9 @@ class Inventory:
             a = ipaddress.ip_address(ip)
         except ValueError:
             return None
-        key = (len(self.subnets), id(self.subnets))
+        # rev moves on every add/remove through the Inventory API; the length catches a
+        # direct pop from the dict (remove + add of another subnet moves rev anyway)
+        key = (self.rev, len(self.subnets))
         if getattr(self, "_lpm_key", None) != key:
             by_len: dict[int, dict[int, str]] = {}
             for cidr in self.subnets:

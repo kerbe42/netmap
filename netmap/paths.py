@@ -69,16 +69,23 @@ def route_path(inv, src: str, dst_ip: str, max_hops: int = 32) -> list[Hop]:
     seen: set[str] = set()
     for _ in range(max_hops):
         dev = inv.devices.get(cur)
-        if dev is None or cur in seen:
+        if dev is None:
+            break
+        if cur in seen:
+            hops.append(Hop(node=cur, name=_name(inv, cur), role=dev.role, kind="route",
+                            detail=f"routing loop: {_name(inv, cur)} was already on the path"))
             break
         seen.add(cur)
-        # directly connected? (dst inside one of this device's interface subnets)
+        # directly connected? (dst inside one of this device's interface subnets). A
+        # 0.0.0.0/0 address on an unnumbered tunnel, or a loopback, would claim everything.
         connected = None
         for i in dev.interfaces:
             for ipc in i.ips:
                 try:
                     net = ipaddress.ip_network(ipc, strict=False)
                 except ValueError:
+                    continue
+                if net.prefixlen == 0 or net.is_loopback:
                     continue
                 if dst in net:
                     connected = i.name or i.descr
@@ -112,6 +119,9 @@ def route_path(inv, src: str, dst_ip: str, max_hops: int = 32) -> list[Hop]:
                             role="", kind="route", detail="next hop not in the inventory"))
             break
         cur = nxt
+    else:
+        hops.append(Hop(node=cur, name=_name(inv, cur), role=inv.devices[cur].role if cur in inv.devices else "", kind="route",
+                        detail=f"hop limit ({max_hops}) reached before {dst_ip}"))
     return hops
 
 
@@ -149,8 +159,18 @@ def topo_path(g: nx.MultiGraph, a: str, b: str) -> Optional[list[Hop]]:
 
 
 def host_access(inv, g: nx.MultiGraph, host_ip: str) -> Optional[tuple[str, str]]:
-    """The switch and port a host hangs off: from an FDB placement if we have one, else the
-    gateway of its subnet."""
+    """The switch and port a host hangs off.
+
+    Best evidence first: the host announced itself over LLDP/CDP to a polled switch (an
+    access point, phone or server - those sit on ports the bridge-table placement leaves
+    alone because a neighbour is on them); then the bridge-table (FDB) placement; then the
+    gateway of its subnet, with no port.
+    """
+    if host_ip in g:
+        for _, other, a in g.edges(host_ip, data=True):
+            if a.get("kind") in ("lldp", "cdp") and other in inv.devices:
+                _host_port, dev_port = edge_ports(host_ip, other, a)
+                return other, dev_port
     h = inv.hosts.get(host_ip)
     if h:
         for s in h.seen_on:
@@ -164,6 +184,12 @@ def host_access(inv, g: nx.MultiGraph, host_ip: str) -> Optional[tuple[str, str]
     return None
 
 
+def _infra_degree(g: nx.MultiGraph, n: str) -> int:
+    """Links to other network kit only: hosts on ports and subnet membership would make a
+    48-port access switch look better connected than the core."""
+    return sum(1 for _, _, a in g.edges(n, data=True) if a.get("kind") in ("lldp", "cdp", "l3"))
+
+
 def _pick_origin(inv, g: nx.MultiGraph) -> Optional[str]:
     """A sensible default starting point: the most connected router/L3 device (the core)."""
     cands = [n for n, a in g.nodes(data=True) if a.get("kind") == "device" and a.get("role") in ("router", "l3switch", "firewall")]
@@ -171,7 +197,7 @@ def _pick_origin(inv, g: nx.MultiGraph) -> Optional[str]:
         cands = [n for n, a in g.nodes(data=True) if a.get("kind") == "device"]
     if not cands:
         return None
-    return max(cands, key=lambda n: g.degree(n))
+    return max(cands, key=lambda n: (_infra_degree(g, n), n))
 
 
 def path_to(inv, g: nx.MultiGraph, target: str, origin: Optional[str] = None) -> Path:
@@ -204,18 +230,10 @@ def path_to(inv, g: nx.MultiGraph, target: str, origin: Optional[str] = None) ->
         hops = topo_path(g, origin, attach)
         if hops is None:
             # no cabled/adjacency path known: reconstruct the routed path from tables
-            r = route_path(inv, origin, _target_ip(inv, target))
+            r = route_path(inv, origin, target)
             if not r:
                 return Path(ok=False, target=target, origin=origin, note="no path found in the collected topology or routing tables")
             hops = r
     if final is not None:
         hops = list(hops) + [final]
     return Path(ok=True, target=target, origin=origin, hops=hops)
-
-
-def _target_ip(inv, target: str) -> str:
-    if target in inv.devices:
-        return target
-    if target in inv.hosts:
-        return target
-    return target
