@@ -36,6 +36,29 @@ def nmap_ping_opts() -> list[str]:
     return NMAP_PING_OPTS_ROOT if is_admin() else NMAP_PING_OPTS_USER
 
 
+def find_nmap() -> Optional[str]:
+    """nmap on PATH, or where the Windows installer puts it (it does not always add itself to PATH)."""
+    found = shutil.which("nmap")
+    if found or sys.platform != "win32":
+        return found
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), r"C:\Program Files (x86)", r"C:\Program Files"):
+        if base:
+            cand = os.path.join(base, "Nmap", "nmap.exe")
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def no_window() -> dict:
+    """subprocess kwargs that stop a console window flashing up for every ping/nmap when
+    netmap runs as a windowed desktop app on Windows. No-op elsewhere."""
+    if sys.platform == "win32":
+        import subprocess
+
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def ping_args(ip: str) -> list[str]:
     if sys.platform == "win32":
         return ["ping", "-n", "1", "-w", "1000", ip]
@@ -130,15 +153,19 @@ def _parse_nmap_xml(xml_text: str) -> list[dict]:
 
 
 async def _run_nmap(args: list[str], timeout: float) -> Optional[str]:
-    cmd = ["nmap", "-oX", "-", *args]
+    cmd = [find_nmap() or "nmap", "-oX", "-", *args]
     log.debug("running: %s", " ".join(cmd))
-    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **no_window())
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         log.warning("nmap timed out: %s", " ".join(args))
         return None
+    except asyncio.CancelledError:
+        # the scan was stopped: don't leave nmap running behind the app
+        proc.kill()
+        raise
     if proc.returncode != 0:
         log.warning("nmap exited %s: %s", proc.returncode, err.decode(errors="replace").strip()[:300])
         return None
@@ -147,8 +174,12 @@ async def _run_nmap(args: list[str], timeout: float) -> Optional[str]:
 
 async def _ping(ip: str, sem: asyncio.Semaphore) -> Optional[str]:
     async with sem:
-        proc = await asyncio.create_subprocess_exec(*ping_args(ip), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await proc.communicate()
+        proc = await asyncio.create_subprocess_exec(*ping_args(ip), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **no_window())
+        try:
+            out, _ = await proc.communicate()
+        except asyncio.CancelledError:
+            proc.kill()
+            raise
         # Windows ping exits 0 even for "Destination host unreachable"; require a TTL in the reply.
         ok = proc.returncode == 0 and (sys.platform != "win32" or b"TTL=" in out)
         return ip if ok else None
@@ -156,7 +187,7 @@ async def _ping(ip: str, sem: asyncio.Semaphore) -> Optional[str]:
 
 async def sweep_subnet(cidr: str, fingerprint: bool = False, nmap_timeout: float = 900.0, top_ports: int = 25) -> list[dict]:
     net = ipaddress.ip_network(cidr)
-    if shutil.which("nmap"):
+    if find_nmap():
         if not is_admin():
             log.warning("not elevated: nmap will use TCP pings only (no ARP/ICMP); run with sudo / as Administrator for full host discovery")
         xml = await _run_nmap([*nmap_ping_opts(), str(net)], nmap_timeout)

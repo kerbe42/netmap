@@ -6,7 +6,7 @@ import ipaddress
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
@@ -36,6 +36,12 @@ class CrawlConfig:
     save_path: Optional[str] = None
     max_devices: int = 5000
     progress_every: int = 1
+    # Rescan: re-poll devices already in the inventory instead of skipping them. `refresh_ids`
+    # narrows that to particular devices (e.g. "rescan this switch"); None means all of them.
+    refresh: bool = False
+    refresh_ids: Optional[set] = None
+    retry_unreachable: bool = False  # try again addresses that did not answer last time
+    on_device: Optional[Callable] = None  # called with each Device as it is added
 
 
 class Crawler:
@@ -47,16 +53,32 @@ class Crawler:
         self.prober = prober or probe
         self.queue: asyncio.Queue = asyncio.Queue()
         self.queued: set[str] = set()
-        self.tried: set[str] = set(inv.devices) | set(inv.unreachable)
-        self._save_lock = asyncio.Lock()
-        self.stats = {"probed": 0, "devices": 0, "no_snmp": 0, "skipped_scope": 0}
+        # Devices to collect again even though we know them; everything else already in the
+        # inventory is skipped, which is what makes --resume cheap.
+        if cfg.refresh:
+            self.refresh_pending: set[str] = set(cfg.refresh_ids if cfg.refresh_ids is not None else inv.devices) & set(inv.devices)
+        else:
+            self.refresh_pending = set()
+        self.refreshing: set[str] = set()
+        self.tried: set[str] = set(inv.devices) - self.refresh_pending
+        if not cfg.retry_unreachable:
+            self.tried |= set(inv.unreachable)
+        self.stats = {"probed": 0, "devices": 0, "refreshed": 0, "no_snmp": 0, "skipped_scope": 0, "new_devices": []}
         self._started = time.time()
 
     # ---- queue management ----
     def enqueue(self, ip: str, depth: int, via: str) -> bool:
         if not is_usable_ip(ip):
             return False
-        if ip in self.queued or ip in self.tried or ip in self.inv.ip_to_device:
+        known = self.inv.ip_to_device.get(ip)
+        if known is not None:
+            if known not in self.refresh_pending:
+                return False
+            # a device due for a rescan, reached via any of its addresses: poll its usual one
+            self.refresh_pending.discard(known)
+            self.refreshing.add(known)
+            ip = known
+        if ip in self.queued or ip in self.tried:
             return False
         if not in_scope(ip, self.cfg.scope, self.cfg.exclude):
             self.stats["skipped_scope"] += 1
@@ -114,20 +136,36 @@ class Crawler:
     # ---- per-IP work ----
     async def _process(self, ip: str, depth: int, via: str) -> None:
         self.tried.add(ip)
-        if ip in self.inv.ip_to_device:
+        refresh = ip in self.refreshing
+        if ip in self.inv.ip_to_device and not refresh:
             return
-        if len(self.inv.devices) >= self.cfg.max_devices:
+        if len(self.inv.devices) >= self.cfg.max_devices and not refresh:
             return
         self.stats["probed"] += 1
         sess, sysinfo = await self.prober(self.engine, ip, self.cfg.credentials, self.cfg.timeout, self.cfg.retries, self.cfg.port)
         if sess is None:
+            if refresh:
+                # it answered before; keep what we had and say that it went quiet
+                old = self.inv.devices.get(ip)
+                if old is not None and "no answer on rescan" not in old.errors:
+                    old.errors.append("no answer on rescan")
+                return
             self.stats["no_snmp"] += 1
             self.inv.unreachable[ip] = via
             if via.startswith(("arp", "lldp", "cdp", "nexthop")):
                 h = self.inv.touch_host(ip, via.split(":")[0])
                 h.snmp_failed = True
             return
+        self.inv.unreachable.pop(ip, None)
         dev = await self.collector(sess, ip, self.cfg.collect, sysinfo)
+        if refresh:
+            old = self.inv.devices.get(ip)
+            dev.depth = old.depth if old is not None else depth
+            dev.discovered_via = old.discovered_via if old is not None else via
+            self.inv.replace_device(dev)
+            self.stats["refreshed"] += 1
+            self._after_device(dev)
+            return
         dev.depth = depth
         dev.discovered_via = via
         # Dedupe: the same box reached via another of its addresses
@@ -139,18 +177,24 @@ class Crawler:
                     self.inv.ip_to_device.setdefault(b, other)
                 return
         self.inv.add_device(dev)
+        self.stats["devices"] += 1
+        self.stats["new_devices"].append(dev.id)
+        self._after_device(dev)
+
+    def _after_device(self, dev: Device) -> None:
         for a in dev.arp:
             if not in_scope(a.ip, self.cfg.scope, self.cfg.exclude):
                 continue
             h = self.inv.touch_host(a.ip, "arp", a.mac)
-            h.seen_on.append({"device": dev.id, "interface": dev.iface_label(a.if_index), "vlan": None, "via": "arp"})
-        self.stats["devices"] += 1
+            seen = {"device": dev.id, "interface": dev.iface_label(a.if_index), "vlan": None, "via": "arp"}
+            if seen not in h.seen_on:
+                h.seen_on.append(seen)
         added = self._enqueue_from_device(dev)
         log.info(
             "[%d dev, %d queued] %s %s (%s %s) if=%d lldp=%d cdp=%d arp=%d routes=%d fdb=%d +%d new, %.1fs%s",
             len(self.inv.devices),
             self.queue.qsize(),
-            ip,
+            dev.id,
             dev.name or "-",
             dev.vendor or "?",
             dev.role,
@@ -164,9 +208,13 @@ class Crawler:
             dev.collect_seconds,
             f" errors={len(dev.errors)}" if dev.errors else "",
         )
+        if self.cfg.on_device:
+            try:
+                self.cfg.on_device(dev)
+            except Exception:  # noqa: BLE001 - a UI callback must never stop a crawl
+                log.debug("on_device callback failed", exc_info=True)
         if self.cfg.save_path:
-            async with self._save_lock:
-                self.inv.save(self.cfg.save_path)
+            self.inv.save(self.cfg.save_path)
 
     async def _worker(self, wid: int) -> None:
         while True:
@@ -179,12 +227,24 @@ class Crawler:
             finally:
                 self.queue.task_done()
 
+    def progress(self) -> dict:
+        return {
+            "devices": len(self.inv.devices),
+            "probed": self.stats["probed"],
+            "queued": self.queue.qsize(),
+            "no_snmp": self.stats["no_snmp"],
+            "refreshed": self.stats["refreshed"],
+            "hosts": len(self.inv.hosts),
+            "elapsed": time.time() - self._started,
+        }
+
     async def run(self) -> Inventory:
         if self.engine is None:
             self.engine = SnmpEngine()
         for s in self.cfg.seeds:
             if not self.enqueue(s, 0, "seed"):
-                log.warning("seed %s not enqueued (out of scope, invalid, or already known)", s)
+                log.log(logging.INFO if s in self.inv.ip_to_device else logging.WARNING,
+                        "seed %s not enqueued (out of scope, invalid, or already known)", s)
         # On resume (or a deeper max_depth), re-walk what known devices point at.
         for dev in list(self.inv.devices.values()):
             self._enqueue_from_device(dev)
@@ -201,10 +261,11 @@ class Crawler:
             if self.cfg.save_path:
                 self.inv.save(self.cfg.save_path)
         log.info(
-            "crawl finished in %.0fs: %d probed, %d devices, %d without SNMP, %d out-of-scope refs",
+            "crawl finished in %.0fs: %d probed, %d new devices, %d re-polled, %d without SNMP, %d out-of-scope refs",
             time.time() - self._started,
             self.stats["probed"],
             self.stats["devices"],
+            self.stats["refreshed"],
             self.stats["no_snmp"],
             self.stats["skipped_scope"],
         )

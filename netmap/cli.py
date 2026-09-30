@@ -11,15 +11,13 @@ import sys
 import tomllib
 
 from . import __version__
-from .collect import CollectOptions
-from .crawl import CrawlConfig, Crawler
 from .graph import build_graph, export_csv, export_dot, export_graphml, text_summary
 from .model import Inventory
 from .render import render_html
 from .report import export_xlsx
+from .scan import ScanRequest, resolve_scope, run_scan
 from .snmp import Credential
-from .sweep import discover_targets, sweep
-from .util import RFC1918
+from .sweep import sweep
 
 log = logging.getLogger("netmap")
 
@@ -84,20 +82,9 @@ def targets_from(args, cfg):
 
 def scope_from(args, cfg, targets=None):
     c = cfg.get("crawl", {})
-    scope = _nets(args.scope or c.get("scope"))
-    exclude = _nets((args.exclude or []) + c.get("exclude", []))
-    if targets:
-        # Explicit targets are the scope unless a wider one was asked for; either way they
-        # are inside it, so a subnet you named is never skipped as "out of scope".
-        if not scope:
-            scope = list(targets)
-            log.info("scope taken from the %d target subnet(s) given", len(targets))
-        else:
-            scope = scope + [t for t in targets if not any(t.subnet_of(s) for s in scope if t.version == s.version)]
-    if not scope:
-        scope = list(RFC1918)
-        log.warning("no --scope or --target given; limiting crawl to RFC1918 space (10/8, 172.16/12, 192.168/16)")
-    return scope, exclude
+    # Explicit targets are the scope unless a wider one was asked for; either way they
+    # are inside it, so a subnet you named is never skipped as "out of scope".
+    return resolve_scope(targets or [], args.scope or c.get("scope") or [], (args.exclude or []) + c.get("exclude", []))
 
 
 def _outputs(inv: Inventory, args) -> None:
@@ -128,54 +115,41 @@ async def cmd_crawl(args) -> int:
     if not seeds and not targets:
         log.error("nothing to do: pass --seed IP to spider from a device, or --target CIDR / --target-file to inventory named subnets")
         return 2
-    scope, exclude = scope_from(args, cfg, targets)
     inv = Inventory.load(args.out) if args.resume and os.path.exists(args.out) else Inventory()
     if args.resume and inv.devices:
         log.info("resuming from %s: %s", args.out, inv.summary())
     if targets:
         log.info("targets: %s", [str(t) for t in targets])
-        found = await discover_targets(
-            inv,
-            targets,
-            scope,
-            exclude,
-            fingerprint=args.fingerprint,
-            probe_all=args.probe_all or c.get("probe_all", False),
-            max_prefix=args.sweep_max_size,
-        )
-        seeds = seeds + [ip for ip in found if ip not in seeds]
-        inv.save(args.out)
-        if not seeds:
-            log.warning("nothing answered a ping in the target subnets; check the ranges, or use --probe-all if ICMP is filtered")
-    ccfg = CrawlConfig(
+    req = ScanRequest(
         seeds=seeds,
+        targets=[str(t) for t in targets],
+        scope=[str(n) for n in _nets(args.scope or c.get("scope"))],
+        exclude=[str(n) for n in _nets((args.exclude or []) + c.get("exclude", []))],
         credentials=build_credentials(args, cfg),
-        scope=scope,
-        exclude=exclude,
+        probe_all=args.probe_all or c.get("probe_all", False),
+        sweep=args.sweep,
+        fingerprint=args.fingerprint,
+        probe_hosts=args.probe_hosts or c.get("probe_hosts", False),
+        resolve_names=args.dns or c.get("resolve_names", False),
+        follow_routes=not args.no_routes,
+        follow_gateways=not args.no_gateways,
+        arp=not args.no_arp,
+        fdb=not args.no_fdb,
+        routes=not args.no_routes,
+        cisco_vlan_fdb=args.cisco_vlan_fdb or c.get("cisco_vlan_fdb", False),
+        refresh=args.refresh,
+        retry_unreachable=args.retry_unreachable,
+        resweep=args.resweep,
         max_depth=args.max_depth if args.max_depth is not None else c.get("max_depth", 6),
         workers=args.workers or c.get("workers", 12),
         timeout=args.timeout or c.get("timeout", 2.0),
         retries=args.retries if args.retries is not None else c.get("retries", 1),
         port=args.port,
-        probe_hosts=args.probe_hosts or c.get("probe_hosts", False),
-        follow_routes=not args.no_routes,
-        follow_gateways=not args.no_gateways,
-        collect=CollectOptions(fdb=not args.no_fdb, cisco_vlan_fdb=args.cisco_vlan_fdb or c.get("cisco_vlan_fdb", False), routes=not args.no_routes, arp=not args.no_arp),
-        save_path=args.out,
         max_devices=args.max_devices,
+        sweep_max_prefix=args.sweep_max_size,
+        save_path=args.out,
     )
-    log.info("scope: %s  exclude: %s  seeds: %s  creds: %s", [str(n) for n in scope], [str(n) for n in exclude], seeds, [cr.label for cr in ccfg.credentials])
-    inv = await Crawler(ccfg, inv).run()
-    if args.sweep:
-        n = await sweep(inv, list(inv.subnets), scope, exclude, fingerprint=args.fingerprint, max_prefix=args.sweep_max_size, resweep=args.resweep)
-        log.info("sweep found %d hosts", n)
-        inv.save(args.out)
-    if targets and not inv.devices:
-        log.warning(
-            "no device in the target subnets answered SNMP: %d address(es) were probed and none replied. "
-            "Check that the community/v3 user is right, that SNMP is permitted from this host, and that the ranges are the managed ones",
-            len(inv.unreachable),
-        )
+    await run_scan(inv, req)
     log.info("saved %s (%s)", args.out, inv.summary())
     _outputs(inv, args)
     return 0
@@ -263,6 +237,9 @@ def build_parser():
     cr.add_argument("--sweep", action="store_true", help="after crawling, ping-sweep every discovered subnet with nmap")
     cr.add_argument("--resweep", action="store_true")
     cr.add_argument("--resume", action="store_true", help="load the existing map and skip devices already collected")
+    cr.add_argument("--refresh", action="store_true", help="with --resume, poll devices already in the map again and replace what was collected (notes and layout are kept)")
+    cr.add_argument("--retry-unreachable", action="store_true", help="with --resume, try again addresses that did not answer SNMP last time")
+    cr.add_argument("--dns", action="store_true", help="name devices and hosts from reverse DNS (PTR) lookups")
     cr.add_argument("--out", "-o", default="netmap.json", help="inventory JSON (written after every device)")
     _add_target_args(cr), _add_scope_args(cr), _add_sweep_args(cr), _add_output_args(cr, html_default="netmap.html")
 

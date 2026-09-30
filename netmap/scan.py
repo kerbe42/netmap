@@ -1,0 +1,220 @@
+"""One scan from start to finish: the same code behind `netmap crawl` and the desktop app.
+
+A scan is: work out the scope, find live addresses in the named target subnets, spider
+SNMP devices outwards from those and from any seeds, optionally sweep the subnets the
+devices revealed, optionally name everything from reverse DNS, and record what happened
+in the inventory's history. Callers get progress through a `ScanEvents` object and can
+stop a scan by cancelling the task running it; whatever was found up to then is kept.
+"""
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+from .collect import CollectOptions
+from .crawl import CrawlConfig, Crawler
+from .dns import resolve_names
+from .graph import enrich_inventory
+from .model import Inventory
+from .snmp import Credential
+from .sweep import discover_targets, sweep
+from .util import RFC1918
+
+log = logging.getLogger("netmap.scan")
+
+
+def nets(items) -> list:
+    return [ipaddress.ip_network(str(x).strip(), strict=False) for x in items or [] if str(x).strip()]
+
+
+def resolve_scope(targets: list, scope: list, exclude: list) -> tuple[list, list]:
+    """The address ranges a scan may touch, and those it must never touch.
+
+    Named targets are always inside the scope: with no explicit scope they *are* the
+    scope, so listing the ranges you were given is enough to stay inside them. With
+    neither, the scan is limited to RFC1918 space.
+    """
+    scope = nets(scope)
+    exclude = nets(exclude)
+    targets = nets(targets)
+    if targets:
+        if not scope:
+            scope = list(targets)
+            log.info("scope taken from the %d target subnet(s) given", len(targets))
+        else:
+            scope = scope + [t for t in targets if not any(t.subnet_of(s) for s in scope if t.version == s.version)]
+    if not scope:
+        scope = list(RFC1918)
+        log.warning("no scope or targets given; limiting the scan to RFC1918 space (10/8, 172.16/12, 192.168/16)")
+    return scope, exclude
+
+
+@dataclass
+class ScanRequest:
+    seeds: list[str] = field(default_factory=list)  # devices to spider outwards from
+    targets: list[str] = field(default_factory=list)  # subnets to inventory address by address
+    scope: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+    credentials: list[Credential] = field(default_factory=list)
+    probe_all: bool = False  # SNMP every address in the targets without pinging first
+    sweep: bool = False  # ping-sweep every subnet the devices revealed
+    fingerprint: bool = False  # nmap service detection on live hosts
+    probe_hosts: bool = False  # try SNMP on every ARP-learned address
+    resolve_names: bool = False  # reverse DNS for devices and hosts
+    follow_routes: bool = True
+    follow_gateways: bool = True
+    arp: bool = True
+    fdb: bool = True
+    routes: bool = True
+    cisco_vlan_fdb: bool = False
+    refresh: bool = False  # re-poll devices already in the inventory
+    refresh_ids: Optional[list[str]] = None
+    retry_unreachable: bool = False
+    resweep: bool = False
+    max_depth: int = 6
+    workers: int = 12
+    timeout: float = 2.0
+    retries: int = 1
+    port: int = 161
+    max_devices: int = 5000
+    sweep_max_prefix: int = 22
+    save_path: Optional[str] = None
+
+    def describe(self) -> dict:
+        """What was asked for, for the scan history. Credential labels only, never secrets."""
+        d = {k: v for k, v in self.__dict__.items() if k not in ("credentials", "save_path")}
+        d["credentials"] = [c.label for c in self.credentials]
+        return d
+
+
+class ScanEvents:
+    """Progress hooks. Every method runs on the scan's event loop thread and must be quick."""
+
+    def phase(self, name: str, detail: str = "") -> None:
+        pass
+
+    def tick(self, inv: Inventory, stats: dict) -> None:
+        """About once a second while a scan runs; `inv` is safe to read (or copy) here."""
+
+    def device(self, dev) -> None:
+        pass
+
+
+async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents] = None, engine=None, prober=None) -> dict:
+    """Run one scan into `inv`. Returns (and appends to inv.history) a record of it.
+
+    Cancelling the task that awaits this stops the scan cleanly: everything collected so
+    far stays in the inventory, it is saved, and the record says it was stopped.
+    """
+    ev = events or ScanEvents()
+    started = time.time()
+    scope, exclude = resolve_scope(req.targets, req.scope, req.exclude)
+    targets = nets(req.targets)
+    before = {"devices": set(inv.devices), "hosts": set(inv.hosts), "subnets": set(inv.subnets)}
+    stats: dict = {"phase": "starting", "devices": len(inv.devices), "hosts": len(inv.hosts), "elapsed": 0.0}
+    state = {"crawler": None, "cancelled": False, "error": ""}
+
+    async def ticker():
+        while True:
+            await asyncio.sleep(1.0)
+            c = state["crawler"]
+            if c is not None:
+                stats.update(c.progress())
+            stats.update(devices=len(inv.devices), hosts=len(inv.hosts), subnets=len(inv.subnets), elapsed=time.time() - started)
+            try:
+                ev.tick(inv, dict(stats))
+            except Exception:  # noqa: BLE001
+                log.debug("tick callback failed", exc_info=True)
+
+    def phase(name: str, detail: str = "") -> None:
+        stats["phase"] = name
+        log.info("== %s%s", name, f": {detail}" if detail else "")
+        ev.phase(name, detail)
+
+    tick_task = asyncio.ensure_future(ticker())
+    try:
+        seeds = list(dict.fromkeys(req.seeds))
+        if targets:
+            phase("Finding live addresses", f"{len(targets)} target subnet(s)")
+            found = await discover_targets(
+                inv, targets, scope, exclude,
+                fingerprint=req.fingerprint, probe_all=req.probe_all, max_prefix=req.sweep_max_prefix,
+            )
+            seeds += [ip for ip in found if ip not in seeds]
+            if req.save_path:
+                inv.save(req.save_path)
+            if not seeds:
+                log.warning("nothing answered a ping in the target subnets; check the ranges, or probe every address if ICMP is filtered")
+        ccfg = CrawlConfig(
+            seeds=seeds,
+            credentials=req.credentials,
+            scope=scope,
+            exclude=exclude,
+            max_depth=req.max_depth,
+            workers=req.workers,
+            timeout=req.timeout,
+            retries=req.retries,
+            port=req.port,
+            probe_hosts=req.probe_hosts,
+            follow_routes=req.follow_routes and req.routes,
+            follow_gateways=req.follow_gateways,
+            collect=CollectOptions(fdb=req.fdb, cisco_vlan_fdb=req.cisco_vlan_fdb, routes=req.routes, arp=req.arp),
+            save_path=req.save_path,
+            max_devices=req.max_devices,
+            refresh=req.refresh,
+            refresh_ids=set(req.refresh_ids) if req.refresh_ids is not None else None,
+            retry_unreachable=req.retry_unreachable,
+            on_device=ev.device,
+        )
+        phase("Polling devices", f"{len(seeds)} starting point(s), {len(req.credentials)} credential(s)")
+        log.info("scope: %s  exclude: %s  creds: %s", [str(n) for n in scope], [str(n) for n in exclude], [c.label for c in req.credentials])
+        crawler = Crawler(ccfg, inv, engine=engine, prober=prober)
+        state["crawler"] = crawler
+        await crawler.run()
+        stats.update(crawler.progress())
+        if req.sweep:
+            phase("Sweeping subnets")
+            n = await sweep(inv, list(inv.subnets), scope, exclude, fingerprint=req.fingerprint, max_prefix=req.sweep_max_prefix, resweep=req.resweep)
+            log.info("sweep found %d hosts", n)
+        if req.resolve_names:
+            phase("Resolving names")
+            await resolve_names(inv)
+        if targets and not inv.devices:
+            log.warning(
+                "no device in the target subnets answered SNMP: %d address(es) were probed and none replied. "
+                "Check that the community/v3 user is right, that SNMP is permitted from this host, and that the ranges are the managed ones",
+                len(inv.unreachable),
+            )
+    except asyncio.CancelledError:
+        state["cancelled"] = True
+        log.warning("scan stopped; keeping what was found so far")
+    finally:
+        tick_task.cancel()
+        enrich_inventory(inv)
+    record = {
+        "started": started,
+        "finished": time.time(),
+        "seconds": round(time.time() - started, 1),
+        "cancelled": state["cancelled"],
+        "request": req.describe(),
+        "scope": [str(n) for n in scope],
+        "exclude": [str(n) for n in exclude],
+        "found": {
+            "devices": len(inv.devices),
+            "hosts": len(inv.hosts),
+            "subnets": len(inv.subnets),
+            "new_devices": sorted(set(inv.devices) - before["devices"]),
+            "new_hosts": len(set(inv.hosts) - before["hosts"]),
+            "new_subnets": sorted(set(inv.subnets) - before["subnets"]),
+            "refreshed": (state["crawler"].stats["refreshed"] if state["crawler"] else 0),
+        },
+    }
+    inv.history.append(record)
+    if req.save_path:
+        inv.save(req.save_path)
+    phase("Stopped" if state["cancelled"] else "Finished", inv.summary())
+    return record

@@ -123,7 +123,7 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
         g.add_node(
             d.id,
             kind="device",
-            label=d.name or d.id,
+            label=d.name or d.dns_name or d.id,
             ip=d.id,
             ips=list(d.ips),
             role=d.role,
@@ -193,7 +193,7 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
             if key in seen_l2:
                 continue
             seen_l2.add(key)
-            g.add_edge(d.id, tgt, kind=nb.proto, src_port=nb.local_port, dst_port=nb.remote_port, label=f"{nb.local_port} - {nb.remote_port}")
+            g.add_edge(d.id, tgt, kind=nb.proto, src=d.id, src_port=nb.local_port, dst_port=nb.remote_port, label=f"{nb.local_port} - {nb.remote_port}")
 
     # --- L3 adjacency (routes) ---
     seen_l3: set = set()
@@ -262,8 +262,29 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                             continue
                         vlan = next((f.vlan for f in d.fdb if f.mac == mac and f.if_index == ifidx), None)
                         g.add_edge(d.id, hip, kind="fdb", label=d.iface_label(ifidx), port=d.iface_label(ifidx), vlan=vlan)
-                        inv.hosts[hip].seen_on.append({"device": d.id, "interface": d.iface_label(ifidx), "vlan": vlan, "via": "fdb"})
+                        seen = {"device": d.id, "interface": d.iface_label(ifidx), "vlan": vlan, "via": "fdb"}
+                        if seen not in inv.hosts[hip].seen_on:
+                            inv.hosts[hip].seen_on.append(seen)
+    apply_annotations(g, inv)
     return g
+
+
+def apply_annotations(g: nx.MultiGraph, inv: Inventory) -> None:
+    """What people wrote about a node wins over what SNMP said: a name, a corrected
+    role, the site it is in. Everything else in the note rides along for exports."""
+    for node_id, note in inv.annotations.items():
+        if node_id not in g:
+            continue
+        a = g.nodes[node_id]
+        if note.get("name"):
+            a["label"] = note["name"]
+        if note.get("role"):
+            a["role"] = note["role"]
+        for k in ("site", "owner", "asset_tag", "status", "notes"):
+            if note.get(k):
+                a[k] = note[k]
+        if note.get("tags"):
+            a["tags"] = list(note["tags"])
 
 
 def _add_host_nodes(g: nx.MultiGraph, inv: Inventory) -> None:
@@ -303,6 +324,18 @@ def _upgrade_host(attrs: dict, nb) -> None:
         attrs["hostname"] = nb.remote_name
     if nb.remote_platform and not attrs.get("vendor"):
         attrs["vendor"] = nb.remote_platform[:60]
+
+
+def edge_ports(u: str, v: str, attrs: dict) -> tuple[str, str]:
+    """(port on u, port on v) for an LLDP/CDP edge.
+
+    An undirected multigraph hands edges back in whatever order its adjacency happens to
+    be stored, so `src_port` is not necessarily u's port: `src` says whose it is.
+    """
+    sp, dp = attrs.get("src_port", ""), attrs.get("dst_port", "")
+    if attrs.get("src") == v:
+        return dp, sp
+    return sp, dp
 
 
 def graph_to_dict(g: nx.MultiGraph) -> dict:
