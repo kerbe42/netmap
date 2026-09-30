@@ -1,9 +1,14 @@
 name: build
 
-# Every push: the test suite on Linux and on Windows (core, GUI and real-SNMP end-to-end
-# tests), the single-file command-line binaries, and the Windows desktop app - which is
-# started in its self-test mode (every page, every export) and screenshotted before it is
-# packaged as an installer and a portable zip. A v* tag attaches all of it to a release.
+# Every push: the test suite on Linux (Python 3.11 and 3.12) and on Windows (core, GUI and
+# real-SNMP end-to-end tests), the single-file command-line binaries, and the Windows desktop
+# app - which is started in its self-test mode (every page, every export) and screenshotted
+# before it is packaged as an installer and a portable zip. A v* tag attaches all of it to a
+# release whose notes come from CHANGELOG.md.
+#
+# A "Version x.y.z" commit on main is always followed by its tag, so the heavy binary jobs
+# skip that push and run once, on the tag. Actions are pinned to commit SHAs (Dependabot
+# keeps them current). The Linux binary is built on ubuntu-22.04 so it runs on glibc 2.35+.
 on:
   push:
     branches: [main]
@@ -11,31 +16,59 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
 
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
-      PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-build.txt
       - name: Qt runtime libraries (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 fonts-dejavu-core
-      - run: pip install -e ".[gui]" pytest snmpsim pysmi
-      - run: python -m pytest -q tests
+      - run: pip install -r requirements-build.txt -e ".[gui,test]"
+      - name: Bundled data reaches the installed package
+        # The EoL table once shipped in no distribution; eol.py then silently returned nothing.
+        run: |
+          python -c "from netmap import eol, util; t = eol._load(); assert len(t) > 20, 'eol.json missing/empty'; print(len(t), 'EoL records from', util.resource_path('data', 'eol.json'))"
+          python tools/make_sample.py --check
+      - name: Tests
+        # -rs: every skip with its reason in the log (the snmpsim fixture fails, not skips, when CI is set)
+        run: python -m pytest -q -rs --durations=15 tests
 
   cli:
+    # a "Version x.y.z" push to main is immediately followed by its tag: build the binaries once, on the tag
+    if: ${{ github.event_name != 'push' || github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'Version ') }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -43,19 +76,23 @@ jobs:
           - os: windows-latest
             artifact: netmap-cli-windows-x64
             binary: dist/netmap.exe
-          - os: ubuntu-latest
+          - os: ubuntu-22.04 # glibc 2.35: the binary then runs on Ubuntu 22.04+, Debian 12+, RHEL 9+
             artifact: netmap-cli-linux-x64
             binary: dist/netmap
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e . pyinstaller
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-build.txt
+      - run: pip install -r requirements-build.txt -e .
       - run: pyinstaller netmap.spec --noconfirm
-      # --version proves it starts; rendering the example map proves the bundled
-      # vis-network and OUI table came along and openpyxl works.
+      # --version proves it starts; rendering the example map proves the bundled vis-network and
+      # OUI table came along and openpyxl works; the archive listing proves the EoL table is inside.
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -65,6 +102,10 @@ jobs:
           if (!(Test-Path smoke.xlsx)) { throw "xlsx export failed" }
           if (!(Test-Path smoke.drawio)) { throw "drawio export failed" }
           if (!(Select-String -Path smoke-hosts.csv -Pattern "." -Quiet)) { throw "csv export failed" }
+          $listing = python -m PyInstaller.utils.cliutils.archive_viewer -l dist\netmap.exe
+          foreach ($f in "netmap/data/eol.json", "netmap/data/oui.tsv", "netmap/vendor/vis-network.min.js") {
+            if (-not ($listing | Select-String -SimpleMatch -Quiet $f)) { throw "$f is not in the frozen binary" }
+          }
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -73,26 +114,46 @@ jobs:
           test "$(stat -c%s smoke.html)" -gt 100000 || { echo "vis-network was not embedded"; exit 1; }
           test -s smoke.xlsx || { echo "xlsx export failed"; exit 1; }
           test -s smoke.drawio || { echo "drawio export failed"; exit 1; }
-      - uses: actions/upload-artifact@v4
+          python -m PyInstaller.utils.cliutils.archive_viewer -l dist/netmap > listing.txt
+          for f in netmap/data/eol.json netmap/data/oui.tsv netmap/vendor/vis-network.min.js; do
+            grep -qF "$f" listing.txt || { echo "$f is not in the frozen binary"; exit 1; }
+          done
+          echo "glibc floor of this binary:"; objdump -T dist/netmap | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
 
   desktop:
+    if: ${{ github.event_name != 'push' || github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'Version ') }}
+    timeout-minutes: 45
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[gui]" pyinstaller
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-build.txt
+      - run: pip install -r requirements-build.txt -e ".[gui]"
+      - name: Regenerate the bundled sample project
+        # the sample is generated from tests/demonet.py; build it fresh so it always matches the code that reads it
+        run: python tools/make_sample.py
       - name: Build the app folder
         run: pyinstaller packaging/netmap-gui.spec --noconfirm
       - name: Version
         id: ver
         shell: bash
         run: echo "version=$(python -c 'import netmap; print(netmap.__version__)')" >> "$GITHUB_OUTPUT"
+      - name: Bundled data files are in the app folder
+        shell: pwsh
+        run: |
+          foreach ($f in "netmap\data\eol.json", "netmap\data\oui.tsv", "netmap\data\sample-campus.netmap", "netmap\vendor\vis-network.min.js") {
+            if (!(Test-Path "dist\NetMap\_internal\$f")) { throw "$f missing from dist\NetMap\_internal" }
+          }
       - name: Self-test the frozen app (offscreen)
         shell: pwsh
         run: |
@@ -114,9 +175,10 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "native self-test failed ($($p.ExitCode))" }
           # and once in the app's own light theme, independent of the runner's classic Windows look
           $p = Start-Process -FilePath dist\NetMap\NetMap.exe -ArgumentList "--selftest","--theme","light","--screenshots","shots-light","netmap\data\sample-campus.netmap" -Wait -PassThru
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
+          # download this after a release and run tools/refresh_screenshots.py --from <folder> to update docs/screenshots
           name: netmap-desktop-screenshots
           path: |
             shots-offscreen
@@ -138,7 +200,7 @@ jobs:
           & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" packaging\netmap.iss
           if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
           Get-ChildItem dist\*.exe, dist\*.zip | Format-Table Name, Length
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: netmap-desktop-windows-x64
           path: |
@@ -149,21 +211,44 @@ jobs:
   release:
     needs: [test, cli, desktop]
     if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 15
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the only job that needs it: it creates the release and uploads the files
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
+          python-version: "3.12"
+      - name: Tag, package version and CHANGELOG agree
+        id: ver
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg="$(python -c 'import re,pathlib; print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("netmap/__init__.py").read_text()).group(1))')"
+          test "$version" = "$pkg" || { echo "tag v$version but netmap.__version__ is $pkg"; exit 1; }
+          python .github/scripts/release_notes.py "$version" --check
+          python .github/scripts/release_notes.py "$version" > notes.md
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: netmap-cli-*
           path: artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: netmap-desktop-windows-x64
+          path: artifacts/netmap-desktop-windows-x64
       - name: Collect release files
         run: |
+          v="${{ steps.ver.outputs.version }}"
           mkdir -p release
           cp artifacts/netmap-desktop-windows-x64/* release/
-          cp artifacts/netmap-cli-windows-x64/netmap.exe release/netmap.exe
-          cp artifacts/netmap-cli-linux-x64/netmap release/netmap-linux-x64
-          chmod +x release/netmap-linux-x64
+          cp artifacts/netmap-cli-windows-x64/netmap.exe "release/netmap-$v-win-x64.exe"
+          cp artifacts/netmap-cli-linux-x64/netmap "release/netmap-$v-linux-x64"
+          chmod +x "release/netmap-$v-linux-x64"
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          name: NetMap ${{ steps.ver.outputs.version }}
+          body_path: notes.md
           files: release/*
           fail_on_unmatched_files: true

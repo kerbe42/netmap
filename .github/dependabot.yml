@@ -1,0 +1,24 @@
+# Keeps the pinned action SHAs in .github/workflows and the pins in requirements-build.txt current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    groups:
+      build-tooling:
+        patterns: ["pyinstaller*", "pytest", "snmpsim", "pysmi"]
+      qt:
+        patterns: ["PySide6*", "shiboken6"]

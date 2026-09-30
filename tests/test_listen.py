@@ -24,13 +24,25 @@ def test_parse_trap_community():
     assert ev.kind == "trap" and "public" in ev.message
 
 
+def _free_udp_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("0.0.0.0", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
 def test_collector_receives_on_high_ports():
-    c = EventCollector(syslog_port=15140, trap_port=16200, on_event=None)
+    syslog_port, trap_port = _free_udp_port(), _free_udp_port()
+    while trap_port == syslog_port:
+        trap_port = _free_udp_port()
+    c = EventCollector(syslog_port=syslog_port, trap_port=trap_port, on_event=None)
     listening = c.start()
     try:
         assert any("syslog" in x for x in listening), c.errors
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.sendto(b"<190>test message from a switch", ("127.0.0.1", 15140))
+        s.sendto(b"<190>test message from a switch", ("127.0.0.1", syslog_port))
         s.close()
         end = time.time() + 3
         while time.time() < end and not c.events:

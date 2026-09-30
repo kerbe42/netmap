@@ -1,39 +1,28 @@
 # PyInstaller spec: build a single-file `netmap` / `netmap.exe`.
-#   pyinstaller netmap.spec
+#   pyinstaller netmap.spec --noconfirm
 # The same spec is used on Linux (produces `dist/netmap`) and on the Windows CI
-# runner (produces `dist/netmap.exe`). pysnmp, pyasn1 and cryptography all lean on
-# dynamic imports, so we pull them in wholesale rather than trust auto-detection.
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+# runner (produces `dist/netmap.exe`). What is bundled - data files, wholesale-collected
+# packages, exclusions - is defined once in packaging/bundle.py and shared with the
+# desktop-app spec, so the two cannot drift apart again.
+import importlib.util
+import os
 
-datas = [
-    ("netmap/vendor/vis-network.min.js", "netmap/vendor"),
-    ("netmap/data/oui.tsv", "netmap/data"),  # offline MAC -> vendor, so typing works with no internet
-]
-binaries = []
-hiddenimports = ["netmap"]
+ROOT = os.path.abspath(SPECPATH)
+_spec = importlib.util.spec_from_file_location("bundle", os.path.join(ROOT, "packaging", "bundle.py"))
+bundle = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(bundle)
 
-# Whole packages that PyInstaller's static analysis misses pieces of.
-for pkg in ("pysnmp", "pyasn1", "pyasn1_modules", "networkx", "openpyxl", "et_xmlfile", "paramiko", "nacl", "bcrypt", "winrm", "requests", "requests_ntlm", "ntlm_auth", "xmltodict", "pyVmomi", "pyVim"):
-    try:
-        d, b, h = collect_all(pkg)
-    except Exception:  # an optional sub-dependency may be absent; skip it rather than fail the build
-        continue
-    datas += d
-    binaries += b
-    hiddenimports += h
-
-# cryptography backs SNMPv3 auth/priv; its provider modules load dynamically.
-hiddenimports += collect_submodules("cryptography")
+datas, binaries, hiddenimports = bundle.collect(ROOT, with_sample=False)
 
 a = Analysis(
-    ["packaging/entry.py"],
-    pathex=["."],
+    [os.path.join(ROOT, "packaging", "entry.py")],
+    pathex=[ROOT],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "pytest", "snmpsim", "pysmi", "IPython"],
+    excludes=bundle.EXCLUDES,
     noarchive=False,
 )
 
