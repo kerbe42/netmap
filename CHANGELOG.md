@@ -19,11 +19,105 @@ Fixes from a review of the whole codebase, grouped by what they mean for someone
   from the secret itself.
 - The README now states exactly which steps send traffic, what each one sends, and how the
   scope, target ranges and exclusions bound them.
+- Ping sweeps hand `nmap` only the part of a subnet that is inside the scope and outside every
+  exclusion (an excluded range inside a swept subnet, or an excluded single address, used to be
+  scanned and merely left out of the results). A target subnet wholly outside the scope is
+  skipped with a warning.
+- Hosts imported from DHCP leases or vCenter, or kept from an earlier wider scan, are no longer
+  probed, resolved or logged into when they fall outside the current scope.
+- Running-configuration capture never sends a configuration-mode command. The FortiOS profile
+  used to change the console paging setting, which is a logged configuration change; paging
+  prompts are now answered instead. Any configuration-mode command is refused outright.
+- Captured running configurations are stored with secrets redacted (SNMP communities, local
+  passwords and hashes, pre-shared keys, RADIUS/TACACS keys, certificate blocks); the line
+  stays so diffs still line up.
+- SSH collection (host facts and configuration capture) checks host keys: the system
+  `known_hosts` plus a per-user store are consulted, a key is recorded on first sight, and a
+  changed key stops the connection with a message naming the file to clear.
+- vCenter connections verify the TLS certificate by default; `--insecure` (CLI) or the dialog's
+  checkbox opts out for self-signed servers.
+- Authenticated inspection only tries SSH or WinRM where the port is open, never against
+  appliance roles (controllers, cameras, printers, phones, lights-out management), so a
+  read-only service account is not locked out by failed logons.
+- The SSDP description document is only fetched from the address that announced it.
+- The local read-only API no longer allows cross-origin reads from other web pages and takes
+  its token from the `Authorization` header only.
+- Credential labels no longer embed any part of the community string (the default label used
+  to carry its first characters into the project file, CSV and workbook exports).
+- The syslog/trap listener records trap contents (trap name, interface, status) instead of the
+  community string, and binds exclusively on Windows so it fails loudly rather than sharing a
+  port with another listener.
 
 ### Topology and identification accuracy
-- Corrections from the review of host placement, link matching and device identification;
-  the details are recorded in the commits of this release and will be summarised here at
-  release time.
+- The topology graph cache introduced in 0.9.0 now actually works (a loop variable overwrote
+  its key), so refreshing a page no longer rebuilds the graph and re-profiles every host.
+  Model changes that the cache must see (adding or removing hosts, subnets, devices) all
+  invalidate it.
+- Subnet gateways are the devices that route for the subnet (routing role, routes to other
+  networks, or the active first-hop-redundancy owner), not every switch with a management
+  address in it.
+- Path tracing reaches endpoints announced over LLDP/CDP (access points, phones, servers) on
+  their real access port instead of stopping at the gateway.
+- Ports named "Port 1", "Port 24" (common on small-business switches) are no longer mistaken
+  for port-channels, so hosts are placed on them and the port panel shows them.
+- Q-BRIDGE forwarding tables map the forwarding-database id to the VLAN id (they differ on
+  several vendors); ARP rows of invalid type are dropped; per-VLAN forwarding walks on IOS skip
+  suspended VLANs and report when the VLAN cap truncates them.
+- Two devices that share an address in a virtual range (container bridges, hypervisor default
+  switches, first-hop virtual addresses) are no longer merged into one; merging needs a
+  matching serial, chassis id, or name plus object id.
+- SNMP table walks stop on agents that return non-increasing OIDs, retry once from the last
+  row after a mid-walk timeout, and record a truncated table in the device's error list
+  instead of presenting a partial table as complete.
+- Routes are read from the address-family-neutral route table first, then the CIDR table,
+  then the legacy table, so routers that only populate the newer table contribute routes; a
+  malformed mask no longer discards the rest of a route table.
+- LLDP local ports identified by MAC address are decoded and matched; PoE per-port status is
+  matched by stack member and port, not by interface index.
+- SNMPv1 credentials for old UPSes, PDUs and printers; address ranges (`a.b.c.d-e`) in target
+  files.
+- A rescan without the optional phases keeps a device's ports, operating system, management
+  planes, functions and DNS name instead of blanking them.
+- Host identification: vendor and product words are matched as whole tokens and only in the
+  fields that name a vendor (server header, certificate issuer), so "praxis" no longer means a
+  camera vendor and "pilot" no longer means lights-out management; a name seen from three
+  sources votes once; a NetBIOS answer without a unit id (file-sharing daemons on Linux and
+  storage appliances) no longer classifies the host as Windows; lights-out controllers are
+  `bmc`, cast and streaming devices are the new `media` role, and a Windows workstation with a
+  web port is not promoted to a web server. BSD and hypervisor banners map to their own
+  families.
+- Identification probes no longer starve at scale: concurrency is bounded per probe, so every
+  host's answers are recorded (about one in eight was, on a 60-host test with slow answers).
+- New reads: BACnet object name/vendor/model, NTP mode-6 variables, Modbus device id with the
+  broadcast unit id first and complete frames.
+- Findings: "Neighbour not polled" no longer fires for phones and access points announced over
+  LLDP (they are listed as endpoints); VLAN host counts are distinct MACs; "Subnet not yet
+  scanned" ignores point-to-point links and prefixes a polled device sits in; IPv6 hosts are
+  not flagged as outside the address plan; a MAC seen on several addresses is reported instead
+  of silently dropped. New checks: switch with a single uplink, overlapping subnets from
+  different devices, spanning-tree root on an access switch or disputed between switches, VLAN
+  mismatch across a link. Devices list a free-port count.
+- Compliance: the spanning-tree default-priority check understands extended system ids (32768
+  + VLAN) and treats priority 0 as deliberate; the HTTP management finding is no longer hidden
+  when Telnet is also open; the SNMP version check uses the protocol that answered, not the
+  credential's label.
+- Query language: quoted values may contain operators and the words and/or; `>` and `<`
+  compare IP addresses, sizes, durations and dates by value; `port =` searches services only;
+  malformed queries raise a query error instead of crashing.
+- Compare: placeholder serials never produce a false "moved"; a host whose address changed is
+  reported as readdressed rather than removed and added; the reboot check tolerates the
+  497-day uptime wrap. Asset-list check: serial and annotated name are compared the same way
+  they are matched, and a listed device found only as an unpolled address says so.
+- Exports: cells that start with a formula character are written as text in CSV and .xlsx;
+  draw.io tooltips and edge labels are escaped for their HTML rendering; the hand-over workbook
+  uses display names and adds Site/Owner/Status/Asset tag/Notes columns plus Findings,
+  Compliance, Hardware support and Dependencies sheets.
+- Layered layout wraps very wide layers of hosts under their parent switch (a 15,000-host
+  estate laid out 2.6 million pixels wide before).
+- DHCP import: the last lease block per address wins, inactive leases update existing hosts
+  only, inactive reservations are not reported active, and the `netsh` table, the DHCP server
+  XML export and Kea JSON are now accepted; an unrecognised file is reported instead of
+  importing nothing.
 
 ### Desktop app
 - Fixes from the review of the desktop app (scan dialog, lists, details panel, exports); to be
