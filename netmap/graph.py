@@ -17,6 +17,24 @@ from .util import oui_vendor, parse_os_version, plausible_mac, short_name
 
 TRUNK_MAC_THRESHOLD = 8
 
+# names/types that mark an interface as a link-aggregation bundle (an uplink that
+# learns every downstream MAC on its port-channel ifIndex, not the physical member)
+_LAG_NAME_RE = re.compile(r"^(po|port-?channel|bundle-ether|be\d|ae\d|bond\d|lag\d|team)", re.I)
+_LAG_IFTYPE = {161}  # ieee8023adLag
+
+
+def _is_uplink_iface(dev, ifidx: int) -> bool:
+    """True if this switch port is an uplink and shouldn't have hosts pinned to it:
+    a trunk, a LAG member, or a LAG aggregator (port-channel)."""
+    i = dev.iface(ifidx)
+    if not i:
+        return False
+    if i.mode == "trunk" or i.lag:
+        return True
+    if i.type in _LAG_IFTYPE:
+        return True
+    return bool(_LAG_NAME_RE.match((i.name or i.descr or "").strip()))
+
 _PORT_ABBREV = [
     (r"^hundredgigabitethernet", "hu"), (r"^fortygigabitethernet", "fo"), (r"^twentyfivegige", "twe"), (r"^tengigabitethernet", "te"),
     (r"^twogigabitethernet", "tw"), (r"^gigabitethernet", "gi"), (r"^fastethernet", "fa"), (r"^ethernet", "et"), (r"^port-channel", "po"),
@@ -58,6 +76,25 @@ def enrich_inventory(inv: Inventory) -> None:
                     d.vendor = v
                     break
         d.os_version = d.os_version or parse_os_version(d.sysdescr, d.vendor)  # maps saved before it was collected
+    _register_vips(inv)
+
+
+def _register_vips(inv: Inventory) -> None:
+    """Point each FHRP virtual IP (HSRP/VRRP) at the router currently active/master for
+    it, so a route whose next hop is the VIP resolves to a real device instead of
+    dead-ending, and 'what is my gateway' can name the router actually forwarding."""
+    best: dict[str, tuple[bool, str]] = {}  # vip -> (is_active, device_id)
+    for d in inv.devices.values():
+        for r in getattr(d, "redundancy", []):
+            vip = r.get("vip")
+            if not vip:
+                continue
+            active = r.get("state") in ("active", "master")
+            cur = best.get(vip)
+            if cur is None or (active and not cur[0]):
+                best[vip] = (active, d.id)
+    for vip, (_active, did) in best.items():
+        inv.ip_to_device.setdefault(vip, did)  # never clobber a device that truly owns the IP
 
 
 def _drop_shared_macs(inv: Inventory) -> None:
@@ -305,25 +342,45 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                 if cidr and cidr in g:
                     g.add_edge(ip, cidr, kind="member", label="")
         if fdb_links:
+            # Decide which switch/port each host really hangs off, from the MAC address
+            # tables. Two problems make the naive "MAC on a port -> host is there" wrong:
+            #  * uplinks (LLDP neighbour, trunk mode, or a LAG member/aggregator) carry
+            #    every downstream MAC, so hosts get pinned to the trunk;
+            #  * a MAC is seen by every switch on its path, so one host lands on several.
+            # We exclude the definite uplinks, then reconcile each MAC to the *leaf* -
+            # the candidate access port carrying the fewest MACs (uplinks carry many).
+            candidates: dict = defaultdict(list)  # mac -> [(count, dev_id, ifidx, is_access)]
             for d in inv.devices.values():
                 per_port: dict = defaultdict(set)
                 for f in d.fdb:
                     if f.if_index is not None:
                         per_port[f.if_index].add(f.mac)
                 for ifidx, macs in per_port.items():
-                    if ifidx in uplink_ports[d.id] or len(macs) > TRUNK_MAC_THRESHOLD:
+                    if ifidx in uplink_ports[d.id] or _is_uplink_iface(d, ifidx):
                         continue
+                    count = len(macs)
+                    is_access = (d.iface(ifidx).mode == "access") if d.iface(ifidx) else False
                     for mac in macs:
-                        hip = mac_ip.get(mac)
-                        if not hip or hip not in g or hip in inv.ip_to_device:
-                            continue
-                        if g.has_edge(d.id, hip):
-                            continue
-                        vlan = next((f.vlan for f in d.fdb if f.mac == mac and f.if_index == ifidx), None)
-                        g.add_edge(d.id, hip, kind="fdb", label=d.iface_label(ifidx), port=d.iface_label(ifidx), vlan=vlan)
-                        seen = {"device": d.id, "interface": d.iface_label(ifidx), "vlan": vlan, "via": "fdb"}
-                        if seen not in inv.hosts[hip].seen_on:
-                            inv.hosts[hip].seen_on.append(seen)
+                        candidates[mac].append((count, d.id, ifidx, is_access))
+            for mac, cands in candidates.items():
+                hip = mac_ip.get(mac)
+                if not hip or hip not in g or hip in inv.ip_to_device:
+                    continue
+                # the leaf: fewest MACs on the port, an access port breaking ties
+                count, dev_id, ifidx, is_access = min(cands, key=lambda c: (c[0], not c[3]))
+                # a huge port that isn't a known access port is a trunk to gear we didn't
+                # poll - better to leave the host unplaced than pin it to that uplink
+                if count > TRUNK_MAC_THRESHOLD and not is_access:
+                    continue
+                d = inv.devices[dev_id]
+                if g.has_edge(d.id, hip):
+                    continue
+                vlan = next((f.vlan for f in d.fdb if f.mac == mac and f.if_index == ifidx), None)
+                label = d.iface_label(ifidx)
+                g.add_edge(d.id, hip, kind="fdb", label=label, port=label, vlan=vlan)
+                seen = {"device": d.id, "interface": label, "vlan": vlan, "via": "fdb"}
+                if seen not in inv.hosts[hip].seen_on:
+                    inv.hosts[hip].seen_on.append(seen)
     apply_annotations(g, inv)
     return g
 

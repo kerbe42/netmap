@@ -363,6 +363,54 @@ def test_profile_identifies_from_multiple_signals():
     assert pb.vendor.startswith("Raspberry") and pb.confidence in ("low", "medium")
 
 
+def test_fdb_places_host_on_leaf_not_uplink():
+    """A host MAC is learned by every switch on its path. It must land on the access
+    port of the leaf switch, never on a LAG/trunk uplink that carries many MACs."""
+    from netmap.model import Inventory, Device, Host, Interface, FdbEntry, Neighbor
+    from netmap.graph import build_graph
+
+    inv = Inventory()
+    # core switch: the host MAC appears on its port-channel uplink (Po1, ifIndex 100)
+    # alongside dozens of other downstream MACs
+    core = Device(id="10.0.0.1"); core.services = 2
+    core.interfaces = [Interface(index=100, name="Port-channel1", mode="trunk")]
+    core.fdb = [FdbEntry(mac=f"02:00:00:00:01:{n:02x}", if_index=100, vlan=10) for n in range(1, 20)]
+    core.fdb.append(FdbEntry(mac="cc:3d:82:11:22:33", if_index=100, vlan=10))
+
+    # access switch: same host MAC on a real access port (Gi1/0/5, ifIndex 5), few MACs;
+    # its uplink to the core is a LAG member (Gi1/0/48) with an LLDP neighbour
+    acc = Device(id="10.0.0.2"); acc.services = 2
+    acc.interfaces = [Interface(index=5, name="Gi1/0/5", mode="access", vlan=10),
+                      Interface(index=48, name="Gi1/0/48", lag="Po1")]
+    acc.fdb = [FdbEntry(mac="cc:3d:82:11:22:33", if_index=5, vlan=10),
+               FdbEntry(mac="02:00:00:00:01:01", if_index=48, vlan=10)]
+    acc.neighbors = [Neighbor(proto="lldp", local_if_index=48, remote_name="core")]
+    inv.add_device(core); inv.add_device(acc)
+
+    host = Host(ip="10.0.0.50", mac="cc:3d:82:11:22:33")
+    inv.hosts["10.0.0.50"] = host
+
+    g = build_graph(inv, include_hosts=True, include_subnets=False)
+    # placed on the access switch's access port, not the core's Po1 uplink
+    assert g.has_edge("10.0.0.2", "10.0.0.50")
+    assert not g.has_edge("10.0.0.1", "10.0.0.50")
+    port = next(iter(g["10.0.0.2"]["10.0.0.50"].values()))["port"]
+    assert "1/0/5" in port
+
+
+def test_fhrp_vip_registered_to_active_router():
+    from netmap.model import Inventory, Device
+    from netmap.graph import enrich_inventory
+
+    inv = Inventory()
+    r1 = Device(id="10.0.0.2"); r1.redundancy = [{"proto": "hsrp", "group": "1", "vip": "10.0.0.1", "state": "standby"}]
+    r2 = Device(id="10.0.0.3"); r2.redundancy = [{"proto": "hsrp", "group": "1", "vip": "10.0.0.1", "state": "active"}]
+    inv.add_device(r1); inv.add_device(r2)
+    enrich_inventory(inv)
+    # the VIP resolves to the ACTIVE router, so a route next-hop of the VIP won't dead-end
+    assert inv.ip_to_device.get("10.0.0.1") == "10.0.0.3"
+
+
 def test_server_functions_from_ports():
     from netmap.model import Host
     from netmap.profile import profile_host, server_functions

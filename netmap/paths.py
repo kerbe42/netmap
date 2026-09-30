@@ -122,7 +122,9 @@ def _topo_graph(g: nx.MultiGraph) -> nx.Graph:
         if a.get("kind") in ("lldp", "cdp", "l3") and g.nodes[u].get("kind") == "device" and g.nodes[v].get("kind") == "device":
             if not h.has_edge(u, v):
                 pu, pv = edge_ports(u, v, a)
-                h.add_edge(u, v, kind=a.get("kind"), pu=pu, pv=pv)
+                # record which endpoint pu belongs to, so a traversal in the opposite
+                # direction still labels the egress/ingress ports the right way round
+                h.add_edge(u, v, kind=a.get("kind"), pu=pu, pv=pv, src=u)
     return h
 
 
@@ -138,15 +140,12 @@ def topo_path(g: nx.MultiGraph, a: str, b: str) -> Optional[list[Hop]]:
     hops = [Hop(node=nodes[0], name=g.nodes[nodes[0]].get("label", nodes[0]), role=g.nodes[nodes[0]].get("role", ""), kind="start")]
     for prev, node in zip(nodes, nodes[1:]):
         e = h.edges[prev, node]
-        out_port, in_port = (e.get("pu"), e.get("pv")) if _order(e, prev) else (e.get("pv"), e.get("pu"))
+        # pu belongs to e["src"]; if we're traversing from src, pu is the egress port
+        fwd = e.get("src") == prev
+        out_port, in_port = (e.get("pu"), e.get("pv")) if fwd else (e.get("pv"), e.get("pu"))
         hops.append(Hop(node=node, name=g.nodes[node].get("label", node), role=g.nodes[node].get("role", ""),
                         kind=e.get("kind", ""), out_port=out_port or "", in_port=in_port or ""))
     return hops
-
-
-def _order(edge, prev):
-    # networkx stores an undirected edge once; pu/pv were recorded for (u, v) as inserted.
-    return True  # ports are best-effort; both are shown in the label anyway
 
 
 def host_access(inv, g: nx.MultiGraph, host_ip: str) -> Optional[tuple[str, str]]:
