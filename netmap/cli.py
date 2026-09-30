@@ -200,6 +200,32 @@ def cmd_diff(args) -> int:
     return 0
 
 
+def cmd_capture(args) -> int:
+    import getpass
+
+    from .capture import capture_config, store_config
+
+    inv = Inventory.load(args.map)
+    ids = args.device or sorted(inv.devices)
+    pw = args.password if args.password is not None else (getpass.getpass("SSH password: ") if not args.key else "")
+    ok = changed = 0
+    for did in ids:
+        dev = inv.devices.get(did)
+        if dev is None:
+            log.warning("%s is not a device in the map", did)
+            continue
+        cap = capture_config(did, args.user, pw, os_family=dev.os_family, vendor=dev.vendor, port=args.port, key_filename=args.key)
+        if cap.ok:
+            ok += 1
+            changed += 1 if store_config(inv, did, cap) else 0
+            log.info("%s: captured%s", dev.name or did, " (changed)" if inv.configs[did][-1]["sha"] != (inv.configs[did][-2]["sha"] if len(inv.configs[did]) > 1 else None) else "")
+        else:
+            log.warning("%s: %s", dev.name or did, cap.error)
+    inv.save(args.map)
+    print(f"captured {ok} of {len(ids)} device(s); {changed} changed. saved {args.map}")
+    return 0
+
+
 def cmd_check(args) -> int:
     from .reconcile import guess_columns, read_table, reconcile, write_csv
 
@@ -319,6 +345,14 @@ def build_parser():
     rc_.add_argument("assets", help="CSV or Excel file listing the devices that should be there")
     rc_.add_argument("--csv", help="write the comparison to this CSV file")
 
+    cap = sub.add_parser("capture", help="capture device running-configs over SSH (read-only) and store them in the map")
+    cap.add_argument("--map", "-m", default="netmap.json")
+    cap.add_argument("--user", "-u", required=True, help="SSH username")
+    cap.add_argument("--password", "-P", help="SSH password (omit to be prompted)")
+    cap.add_argument("--key", help="SSH private key file")
+    cap.add_argument("--port", type=int, default=22)
+    cap.add_argument("--device", action="append", help="only capture this device IP (repeatable); default: all in the map")
+
     gu = sub.add_parser("gui", help="open the desktop app (needs the 'gui' extra: pip install netmap[gui])")
     gu.add_argument("project", nargs="?", help="project to open")
     return p
@@ -351,6 +385,8 @@ def main(argv=None) -> None:
         rc = cmd_diff(args)
     elif args.cmd == "check":
         rc = cmd_check(args)
+    elif args.cmd == "capture":
+        rc = cmd_capture(args)
     elif args.cmd == "gui":
         try:
             from .gui.app import main as gui_main

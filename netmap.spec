@@ -13,7 +13,7 @@ binaries = []
 hiddenimports = ["netmap"]
 
 # Whole packages that PyInstaller's static analysis misses pieces of.
-for pkg in ("pysnmp", "pyasn1", "pyasn1_modules", "networkx", "openpyxl", "et_xmlfile"):
+for pkg in ("pysnmp", "pyasn1", "pyasn1_modules", "networkx", "openpyxl", "et_xmlfile", "paramiko", "nacl", "bcrypt"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

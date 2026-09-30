@@ -231,6 +231,7 @@ class Inventory:
         self.layout: dict[str, dict[str, list[float]]] = {}  # view name -> node id -> [x, y]
         self.project: dict = {}  # name, description, saved scan settings (never secrets)
         self.history: list[dict] = []  # one entry per scan: when, what was asked, what was found
+        self.configs: dict[str, list[dict]] = {}  # device id -> [{captured_at, text, sha}] newest last
 
     # ---- devices ----
     def add_device(self, dev: Device) -> None:
@@ -360,6 +361,7 @@ class Inventory:
             "annotations": self.annotations,
             "layout": self.layout,
             "history": self.history,
+            "configs": self.configs,
         }
 
     @classmethod
@@ -390,6 +392,7 @@ class Inventory:
         inv.layout = {k: dict(v) for k, v in (d.get("layout") or {}).items()}
         inv.project = dict(d.get("project") or {})
         inv.history = list(d.get("history") or [])
+        inv.configs = {k: list(v) for k, v in (d.get("configs") or {}).items()}
         return inv
 
     def copy(self) -> "Inventory":

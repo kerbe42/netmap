@@ -481,6 +481,11 @@ class DetailsPanel(QWidget):
         if d.vlans:
             vrows = [{"_id": f"vlan:{v}", "_role": "", "vlan": v, "name": n} for v, n in sorted(d.vlans.items())]
             self.tabs.addTab(_table(_cols(("vlan", "VLAN", "int", 60), ("name", "Name", "text", 200)), vrows, self.openNode), "VLANs")
+        revs = s.inv.configs.get(d.id)
+        if revs:
+            from .capturedlg import ConfigView
+
+            self.tabs.addTab(ConfigView(revs), "Config")
         self._add_path_tab(s, d.id)
 
     def _add_path_tab(self, s: Snapshot, node_id: str):

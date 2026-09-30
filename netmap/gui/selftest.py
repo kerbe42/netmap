@@ -89,6 +89,21 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             _pump(200)
             shot("22-subnet-ipmap")
             ok(f"subnet details {cidr}")
+        # a device with stored configs shows a Config tab with a diff
+        cfg_dev = next((d for d in inv.configs), None)
+        if cfg_dev:
+            win.open_node(cfg_dev)
+            _pump(200)
+            tabs = [win.details.tabs.tabText(i) for i in range(win.details.tabs.count())]
+            (ok if "Config" in tabs else fail)(f"config tab present: {('Config' in tabs)}")
+            for i in range(win.details.tabs.count()):
+                if win.details.tabs.tabText(i) == "Config":
+                    win.details.tabs.setCurrentIndex(i)
+                    cv = win.details.tabs.currentWidget()
+                    if hasattr(cv, "diff") and cv.diff.isEnabled():
+                        cv.diff.setChecked(True)
+                    _pump(150)
+                    shot("23-config-diff")
         # map presets and layouts
         win.navigate("map")
         for preset in ("physical", "logical", "all"):

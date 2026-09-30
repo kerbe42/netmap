@@ -42,7 +42,7 @@ datas = [
 ]
 binaries = []
 hiddenimports = ["netmap", "netmap.gui", "netmap.gui.app"]
-for pkg in ("pysnmp", "pyasn1", "pyasn1_modules", "networkx", "openpyxl", "et_xmlfile"):
+for pkg in ("pysnmp", "pyasn1", "pyasn1_modules", "networkx", "openpyxl", "et_xmlfile", "paramiko", "nacl", "bcrypt"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

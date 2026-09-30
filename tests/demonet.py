@@ -451,6 +451,17 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         wh.model = "J9147A"
         wh.sysdescr = "ProCurve J9147A 2910al-48G Switch, revision W.15.14.0013"
         wh.os_family = "hp-provision"
+    # two stored config revisions on the core, so the Config tab has a change to diff
+    import time as _t
+    if "10.99.0.2" in inv.devices:
+        base = ("!\nhostname core-sw-01\n!\nvlan 10\n name USERS\n!\nvlan 20\n name Voice\n!\n"
+                "interface Vlan10\n ip address 10.10.0.2 255.255.252.0\n standby 10 ip 10.10.0.1\n standby 10 priority 110\n!\n"
+                "interface TwentyFiveGigE1/0/1\n description acc-fl1-01\n switchport mode trunk\n!\nntp server 10.99.0.20\nend\n")
+        newer = base.replace("vlan 20\n name Voice", "vlan 20\n name VOICE").replace("ntp server 10.99.0.20\n", "ntp server 10.99.0.20\nntp server 10.99.0.21\n")
+        inv.configs["10.99.0.2"] = [
+            {"captured_at": _t.time() - 86400 * 14, "text": base, "sha": "a" * 8, "version": "Cisco IOS-XE 17.9.4a"},
+            {"captured_at": _t.time() - 3600, "text": newer, "sha": "b" * 8, "version": "Cisco IOS-XE 17.9.4a"},
+        ]
     # a little documentation, the way someone taking the network over would start it
     inv.annotate("10.99.0.2", site="HQ comms room A", owner="Network team", status="Verified", tags=["core"],
                  notes="Core pair with core-sw-02 (StackWise Virtual). Default route to fw-edge-01.")

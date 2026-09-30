@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         self._act(tm, "Ping / traceroute / DNS / SNMP test", lambda: (self.tools_dock.show(), self.tools_dock.raise_(), self.tools.target.setFocus()))
         self._act(tm, "&Compare with another scan…", self.compare)
         self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/Excel list of devices you were given")
+        self._act(tm, "Capture device &configs (SSH)…", self.capture_configs, tip="Log in read-only and save each device's running-config, to read and diff over time")
 
         hm = mb.addMenu("&Help")
         self._act(hm, "&Quick guide", self.quick_guide, QKeySequence.HelpContents)
@@ -752,6 +753,7 @@ class MainWindow(QMainWindow):
             m.addAction("Traceroute", lambda: self.node_action("traceroute", node_id))
         if node_id in self.inv.devices:
             m.addAction("Rescan this device", lambda: self.node_action("rescan", node_id))
+            m.addAction("Capture config (SSH)…", lambda: self.capture_configs(node_id))
         if node_id in self.inv.subnets:
             m.addSeparator()
             m.addAction("Find every live address in this subnet", lambda: self.sweep_subnet(node_id))
@@ -1109,6 +1111,49 @@ class MainWindow(QMainWindow):
         dlg = CompareDialog(d, os.path.basename(path), self.project_name(), self)
         dlg.openNode.connect(self.open_node)
         dlg.show()
+
+    def capture_configs(self, node_id: str = ""):
+        if self.worker is not None or getattr(self, "_cap_worker", None) is not None:
+            QMessageBox.information(self, "Busy", "A scan or capture is already running.")
+            return
+        if not self.inv.devices:
+            QMessageBox.information(self, "No devices", "Scan the network first, then capture configs from the devices found.")
+            return
+        from .capturedlg import CaptureDialog, CaptureWorker
+
+        dlg = CaptureDialog(len(self.inv.devices), self.snapshot.name(node_id) if node_id else "", self)
+        if not dlg.exec():
+            return
+        v = dlg.values()
+        if not v["username"]:
+            QMessageBox.warning(self, "Username needed", "Enter the SSH username to log in with.")
+            return
+        ids = [node_id] if (node_id and v["scope"] == "one") else sorted(self.inv.devices)
+        self.activity_dock.show()
+        self.activity_dock.raise_()
+        self.log_view.appendPlainText(f"\n=== Capturing configs from {len(ids)} device(s) — {time.strftime('%H:%M:%S')} ===")
+        self.scan_phase.setText(f"Capturing configs from {len(ids)} device(s)…")
+        self.scan_bar.show()
+        self.stop_btn.show()
+        w = CaptureWorker(self.inv, ids, v, self)
+        self._cap_worker = w
+        w.progress.connect(lambda did, ok, msg: self.log_view.appendPlainText(f"  {self.snapshot.name(did)}: {'ok - ' if ok else 'FAILED - '}{msg}"))
+
+        def finished(ok, changed):
+            self._cap_worker = None
+            self.scan_bar.hide()
+            self.stop_btn.hide()
+            self.set_dirty(True)
+            self.refresh()
+            msg = f"Captured {ok} config(s), {changed} changed."
+            self.scan_phase.setText(msg)
+            self.statusBar().showMessage(msg, 10000)
+            if self.path:
+                self._write(self.path)
+
+        w.done.connect(finished)
+        self.stop_btn.clicked.connect(w.stop)
+        w.start()
 
     def reconcile(self):
         from .reconciledlg import ReconcileDialog
