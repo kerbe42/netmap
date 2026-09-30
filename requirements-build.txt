@@ -20,7 +20,7 @@ shiboken6==6.11.2
 # runtime libraries: upper-bounded, exact versions resolved from pyproject
 pysnmp>=7.1.30,<7.2
 pyasn1>=0.6.4,<0.7
-cryptography>=50,<51
+cryptography>=50.0.1,<51
 networkx>=3.7,<4
 openpyxl>=3.1.5,<3.2
 paramiko>=5.0,<6

@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: System :: Networking :: Monitoring",
     "Topic :: System :: Systems Administration",
 ]
-dependencies = ["pysnmp>=7.1", "cryptography>=42", "networkx>=3.0", "openpyxl>=3.1", "paramiko>=3.4", "pywinrm>=0.4", "pyvmomi>=8.0"]
+dependencies = ["pysnmp>=7.1", "cryptography>=50.0.1", "networkx>=3.0", "openpyxl>=3.1", "paramiko>=3.4", "pywinrm>=0.4", "pyvmomi>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/kerbe42/netmap"
