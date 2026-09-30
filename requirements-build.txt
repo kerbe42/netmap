@@ -1,0 +1,28 @@
+# Pinned tooling for CI and release builds. Runtime dependencies come from pyproject.toml;
+# the upper bounds here stop a surprise major release changing a build.
+# Install:  pip install -r requirements-build.txt -e ".[gui,test]"
+# Dependabot (.github/dependabot.yml) proposes bumps; update the pins from a venv that
+# passed the suite:  pip freeze | grep -i -E "pyinstaller|pytest|snmpsim|pysmi|pyside6|shiboken"
+
+# freezing
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.7
+
+# tests
+pytest==9.1.1
+snmpsim==1.2.2
+pysmi==2.0.0
+
+# desktop app (the gui extra says >=6.7; CI builds with exactly this)
+PySide6-Essentials==6.11.2
+shiboken6==6.11.2
+
+# runtime libraries: upper-bounded, exact versions resolved from pyproject
+pysnmp>=7.1.30,<7.2
+pyasn1>=0.6.4,<0.7
+cryptography>=50,<51
+networkx>=3.7,<4
+openpyxl>=3.1.5,<3.2
+paramiko>=5.0,<6
+pywinrm>=0.5,<0.6
+pyvmomi>=9.1,<10
