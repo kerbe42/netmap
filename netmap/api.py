@@ -1,11 +1,16 @@
 """A small read-only REST API over an inventory, for scripting and integration.
 
 Serves JSON: the inventory pages, individual objects, and the query language, so another
-system can pull the data or search it. Read-only and, by default, bound to localhost. An
-optional token guards it. Built on the standard library only.
+system can pull the data or search it. Read-only (GET only) and, by default, bound to
+localhost. An optional bearer token guards it: it is accepted in the ``Authorization``
+header only (never in the URL, where it would land in logs and browser history) and is
+compared in constant time. No cross-origin header is sent unless the caller allow-lists
+origins, so a page in a browser cannot read the inventory through a logged-in user. Built
+on the standard library only.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import re
@@ -64,17 +69,27 @@ def _clean(row: dict) -> dict:
     return {k: v for k, v in row.items() if not k.startswith("_")}
 
 
-def make_handler(snapshot_factory, token: str = ""):
+def token_ok(headers, token: str) -> bool:
+    """True if the request's ``Authorization: Bearer <token>`` matches (constant-time).
+    Query-string tokens are deliberately not accepted."""
+    if not token:
+        return True
+    auth = headers.get("Authorization", "") if headers is not None else ""
+    supplied = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+    return bool(supplied) and hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
+
+
+def make_handler(snapshot_factory, token: str = "", allowed_origins=()):
+    allowed = tuple(o.rstrip("/") for o in (allowed_origins or ()) if o)
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             log.debug("api %s", a)
 
         def do_GET(self):  # noqa: N802
             u = urlparse(self.path)
-            if token:
-                supplied = self.headers.get("Authorization", "").removeprefix("Bearer ").strip() or (parse_qs(u.query).get("token") or [""])[0]
-                if supplied != token:
-                    return self._send(401, {"error": "unauthorized"})
+            if not token_ok(self.headers, token):
+                return self._send(401, {"error": "unauthorized: send 'Authorization: Bearer <token>'"})
             try:
                 status, body = handle(snapshot_factory(), u.path, parse_qs(u.query))
             except Exception as e:  # noqa: BLE001
@@ -86,16 +101,23 @@ def make_handler(snapshot_factory, token: str = ""):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            if origin and origin in allowed:  # echo only an allow-listed origin, never "*"
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
             self.end_headers()
             self.wfile.write(data)
 
     return Handler
 
 
-def serve(inv_or_factory, host: str = "127.0.0.1", port: int = 8088, token: str = "") -> ThreadingHTTPServer:
+def serve(inv_or_factory, host: str = "127.0.0.1", port: int = 8088, token: str = "",
+          allowed_origins=()) -> ThreadingHTTPServer:
     """Start the API server. `inv_or_factory` is an Inventory or a callable returning one
-    (so a live app can serve current data). Returns the server; call .shutdown() to stop."""
+    (so a live app can serve current data). `allowed_origins` lists browser origins
+    (``"http://localhost:3000"``) that may read the API cross-site; none by default.
+    Returns the server; call .shutdown() to stop."""
     factory = inv_or_factory if callable(inv_or_factory) else (lambda: inv_or_factory)
-    srv = ThreadingHTTPServer((host, port), make_handler(lambda: Snapshot(factory()), token))
+    srv = ThreadingHTTPServer((host, port), make_handler(lambda: Snapshot(factory()), token, allowed_origins))
     return srv

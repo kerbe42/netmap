@@ -15,10 +15,18 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .util import oui_vendor
+from .util import oui_vendor, short_name
 
 # role -> the OS family it usually implies, when nothing more specific is known
-ROLE_OS = {"printer": "printer", "camera": "embedded", "phone": "embedded", "ups": "embedded", "nas": "embedded", "wireless": "network", "plc": "embedded", "bms": "embedded", "ot": "embedded", "bmc": "embedded"}
+ROLE_OS = {"printer": "printer", "camera": "embedded", "phone": "embedded", "ups": "embedded", "nas": "embedded", "wireless": "network", "plc": "embedded", "bms": "embedded", "ot": "embedded", "bmc": "embedded", "media": "embedded", "hypervisor": ""}
+
+# Roles this module can assign. `media` (AirPlay/Chromecast/UPnP renderers, smart TVs) is
+# an appliance: consumers of this list (icons, labels) should fall back to a generic
+# host icon/label for any role they do not know.
+ROLES = ("host", "server", "webserver", "fileserver", "mailserver", "dnsserver", "dc", "hypervisor", "vm",
+         "database", "windows", "workstation", "printer", "phone", "camera", "nas", "ups", "plc", "bms",
+         "ot", "bmc", "media", "wireless", "switch", "router", "l3switch", "firewall")
+ROLE_LABELS_EXTRA = {"media": "Media / AV device"}  # labels for roles the GUI's table may not know yet
 
 # service/port -> what it suggests. (port, role, weight, note)
 PORT_HINTS = [
@@ -101,7 +109,7 @@ FUNCTION_ROLE = [
 # roles that are appliances or network gear, not general-purpose servers: their
 # open web/SMB ports are management UIs, not "server functions", so we don't list
 # functions for them at all (a printer isn't a "web server").
-_APPLIANCE_ROLES = {"printer", "camera", "phone", "ups", "plc", "bms", "ot", "bmc",
+_APPLIANCE_ROLES = {"printer", "camera", "phone", "ups", "plc", "bms", "ot", "bmc", "media",
                     "wireless", "switch", "router", "l3switch", "firewall", "subnet", "unpolled"}
 # database product labels, so a specialised "SQL Server" still counts as "Database"
 # when deciding the primary role.
@@ -149,9 +157,9 @@ MDNS_HINTS = {
     "_printer": ("printer", 7, "printer", "advertises LPR printing"),
     "_pdl-datastream": ("printer", 6, "printer", "advertises raw printing"),
     "_scanner": ("printer", 5, "printer", "advertises scanning"),
-    "_airplay": ("server", 6, "embedded", "advertises AirPlay (Apple TV / speaker)"),
-    "_raop": ("server", 5, "embedded", "advertises AirPlay audio"),
-    "_googlecast": ("server", 6, "android", "advertises Chromecast"),
+    "_airplay": ("media", 6, "embedded", "advertises AirPlay (Apple TV / speaker)"),
+    "_raop": ("media", 5, "embedded", "advertises AirPlay audio"),
+    "_googlecast": ("media", 6, "android", "advertises Chromecast"),
     "_hap": ("host", 5, "embedded", "advertises HomeKit (HAP)"),
     "_homekit": ("host", 5, "embedded", "advertises HomeKit"),
     "_afpovertcp": ("nas", 5, "embedded", "advertises AFP file sharing"),
@@ -162,7 +170,9 @@ MDNS_HINTS = {
     "_device-info": ("host", 1, "", "advertises device info"),
 }
 
-# substrings in an HTTP Server header / TLS cert / SSDP server -> (vendor, role, os_family, weight)
+# tokens in an HTTP Server header / TLS cert / SSDP server -> (vendor, role, os_family, weight).
+# Matched as whole words (a token may be followed by digits: iDRAC9, iLO5, ESXi7), never as
+# substrings - "praxis" is not Axis and "Unified" is not UniFi.
 BANNER_HINTS = [
     ("fortigate", "Fortinet", "firewall", "fortios", 8),
     ("fortinet", "Fortinet", "firewall", "fortios", 7),
@@ -177,11 +187,11 @@ BANNER_HINTS = [
     ("diskstation", "Synology", "nas", "embedded", 8),
     ("qnap", "QNAP", "nas", "embedded", 8),
     ("truenas", "iXsystems", "nas", "embedded", 7),
-    ("proxmox", "Proxmox", "server", "linux", 7),
-    ("vmware", "VMware", "server", "linux", 6),
-    ("esxi", "VMware", "server", "linux", 7),
-    ("idrac", "Dell", "server", "embedded", 7),
-    ("ilo", "HPE", "server", "embedded", 7),
+    ("proxmox", "Proxmox", "hypervisor", "linux", 7),
+    ("vmware", "VMware", "hypervisor", "esxi", 6),
+    ("esxi", "VMware", "hypervisor", "esxi", 7),
+    ("idrac", "Dell", "bmc", "embedded", 7),
+    ("ilo", "HPE", "bmc", "embedded", 7),
     ("laserjet", "HP", "printer", "printer", 8),
     ("officejet", "HP", "printer", "printer", 8),
     ("deskjet", "HP", "printer", "printer", 8),
@@ -201,22 +211,53 @@ BANNER_HINTS = [
     ("boa", "", "camera", "embedded", 3),
     ("lighttpd", "", "embedded", "embedded", 2),
 ]
+# Short or generic vendor tokens: only trusted in the fields a device itself fills in
+# (HTTP Server header, auth realm, TLS issuer / subject organisation, SSDP server /
+# manufacturer), never in a page title, a certificate CN/SAN hostname or a friendly name -
+# those carry people's words ("praxis", "pilot", "Unified Comms").
+_STRICT_NEEDLES = frozenset({"axis", "ilo", "boa", "unifi", "eaton", "apc", "iis", "cisco", "windows",
+                             "apache", "nginx", "openssh", "lighttpd", "brother", "vmware", "fortinet"})
 
-# hostname patterns -> (role, os_family, note, weight)
+
+def _needle_re(needle: str) -> re.Pattern:
+    return re.compile(r"(?<![a-z0-9])" + re.escape(needle) + r"(?![a-z])", re.I)
+
+
+_BANNER_RES = [(_needle_re(n), n, ven, role, of, w, n in _STRICT_NEEDLES) for n, ven, role, of, w in BANNER_HINTS]
+
+
+def banner_matches(loose: str, strict: str):
+    """Yield (needle, vendor, role, os_family, weight) for the BANNER_HINTS found in the text.
+
+    `strict` is the vendor-authored text (Server header, realm, cert issuer/organisation);
+    `loose` may add titles and names. Strict needles are only looked for in `strict`."""
+    loose = f"{loose} {strict}"
+    for rx, needle, ven, role, of, w, is_strict in _BANNER_RES:
+        if rx.search(strict if is_strict else loose):
+            yield needle, ven, role, of, w
+
+
+def _tok(*words: str) -> str:
+    """A regex alternative matching any of `words` as a whole token (digits may follow: nas01)."""
+    return r"(?<![a-z])(?:" + "|".join(words) + r")(?![a-z])"
+
+
+# hostname patterns -> (role, os_family, note, weight). Tokens are anchored so that
+# jonas-pc is not a NAS and annexus is not a Nexus switch.
 NAME_HINTS = [
     (re.compile(r"^SEP[0-9A-F]{12}$", re.I), "phone", "embedded", "Cisco IP phone naming (SEP<mac>)", 8),
     (re.compile(r"^SIP[0-9A-F]{12}$", re.I), "phone", "embedded", "SIP phone naming", 6),
     (re.compile(r"^android[-_]", re.I), "host", "android", "Android device hostname", 6),
-    (re.compile(r"iphone|ipad|-mbp|macbook|-mac\b", re.I), "workstation", "macos", "Apple device hostname", 5),
+    (re.compile(_tok("iphone", "ipad", "macbook") + r"|-mbp|-mac(?![a-z])", re.I), "workstation", "macos", "Apple device hostname", 5),
     (re.compile(r"^(printer|prn|mfp|hpm?|kyocera|ricoh)[-_0-9]", re.I), "printer", "printer", "printer-style hostname", 4),
     (re.compile(r"^(cam|ipc|nvr|dvr)[-_0-9]", re.I), "camera", "embedded", "camera-style hostname", 4),
-    (re.compile(r"^(esx|esxi|vmhost)", re.I), "server", "linux", "hypervisor hostname", 4),
+    (re.compile(r"^(esx|esxi|vmhost)", re.I), "hypervisor", "", "hypervisor hostname", 4),
     (re.compile(r"(^dc\d|domaincontroller|-dc-|^ad\d)", re.I), "windows", "windows", "domain-controller hostname", 4),
-    (re.compile(r"(nas|synology|diskstation|qnap|truenas|freenas)", re.I), "nas", "embedded", "NAS-style hostname", 4),
-    (re.compile(r"(switch|^sw[-_0-9]|-sw\d|catalyst|nexus)", re.I), "switch", "network", "switch-style hostname", 3),
-    (re.compile(r"(router|^rtr|-rtr|gateway|^gw[-_0-9])", re.I), "router", "network", "router-style hostname", 3),
-    (re.compile(r"(^ap[-_0-9]|-ap\d|accesspoint|wifi|wlan)", re.I), "wireless", "network", "access-point hostname", 3),
-    (re.compile(r"(firewall|^fw[-_0-9]|-fw\d|fortigate|palo)", re.I), "firewall", "network", "firewall-style hostname", 3),
+    (re.compile(_tok("nas", "synology", "diskstation", "qnap", "truenas", "freenas"), re.I), "nas", "embedded", "NAS-style hostname", 4),
+    (re.compile(_tok("switch", "catalyst", "nexus") + r"|^sw[-_0-9]|-sw\d", re.I), "switch", "network", "switch-style hostname", 3),
+    (re.compile(_tok("router", "rtr", "gateway") + r"|^gw[-_0-9]", re.I), "router", "network", "router-style hostname", 3),
+    (re.compile(_tok("accesspoint", "wifi", "wlan") + r"|^ap[-_0-9]|-ap\d", re.I), "wireless", "network", "access-point hostname", 3),
+    (re.compile(_tok("firewall", "fortigate", "palo") + r"|^fw[-_0-9]|-fw\d", re.I), "firewall", "network", "firewall-style hostname", 3),
 ]
 
 # order names are trusted in when choosing the one to display
@@ -276,14 +317,25 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
         if port in ports:
             add("open port", note, role, role, weight)
     if products:
-        for needle, ven, role, of, weight in BANNER_HINTS:
-            if needle in products:
-                add("service banner", f"nmap saw '{needle}'", role, role, weight, of=of, ven=ven or None)
+        for needle, ven, role, of, weight in banner_matches("", products):
+            add("service banner", f"nmap saw '{needle}'", role, role, weight, of=of, ven=ven or None)
+
+    # the SSH identification string names the OS outright; it outranks a NetBIOS guess
+    ssh_fam = ((probes.get("ssh") or {}).get("os_family") or "").lower()
 
     # ---- NetBIOS ----------------------------------------------------------
     nb = probes.get("netbios") or {}
     if nb:
-        add("NetBIOS", "answered UDP 137", "Windows / SMB host", "windows", 6, of="windows")
+        if nb.get("mac"):
+            # a real adapter MAC in the node-status reply: the Windows NetBIOS stack
+            add("NetBIOS", "answered UDP 137 with its adapter MAC", "Windows / SMB host", "windows", 6,
+                of=None if (ssh_fam and ssh_fam != "windows") else "windows")
+        else:
+            # a null unit id is how Samba (Linux servers, consumer NAS) answers - weak evidence
+            # only, and none at all for Windows when the SSH banner already names another OS
+            samba_like = bool(ssh_fam) and ssh_fam != "windows"
+            add("NetBIOS", "answered UDP 137 (no adapter MAC: Samba-style)", "SMB host",
+                None if samba_like else "windows", 0 if samba_like else 2)
         if nb.get("is_dc"):
             add("NetBIOS", "advertises the domain-controller role (0x1C)", "Active Directory domain controller", "windows", 6, of="windows", os_="Windows Server")
         if nb.get("domain"):
@@ -306,7 +358,6 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
 
     # ---- SSDP / UPnP ------------------------------------------------------
     sd = probes.get("ssdp") or {}
-    text = " ".join(str(sd.get(k, "")) for k in ("server", "friendly_name", "manufacturer", "model", "device_type")).lower()
     if sd:
         if sd.get("manufacturer"):
             add("UPnP", f"manufacturer {sd['manufacturer']}", f"made by {sd['manufacturer']}", ven=sd["manufacturer"])
@@ -314,12 +365,13 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
             add("UPnP", f"model {sd['model']}", sd["model"], mdl=sd["model"])
         dt = (sd.get("device_type") or "").lower()
         if "mediaserver" in dt or "mediarenderer" in dt:
-            add("UPnP", "advertises a media device", "media/AV device", "server", 4, of="embedded")
+            add("UPnP", "advertises a media device", "media/AV device", "media", 4, of="embedded")
         if "internetgateway" in dt:
             add("UPnP", "advertises an internet gateway", "router / gateway", "router", 5, of="network")
-        for needle, ven, role, of, weight in BANNER_HINTS:
-            if needle in text:
-                add("UPnP", f"'{needle}' in device description", role, role, weight, of=of, ven=ven or None)
+        strict = " ".join(str(sd.get(k) or "") for k in ("server", "manufacturer"))
+        loose = " ".join(str(sd.get(k) or "") for k in ("friendly_name", "model", "device_type"))
+        for needle, ven, role, of, weight in banner_matches(loose, strict):
+            add("UPnP", f"'{needle}' in device description", role, role, weight, of=of, ven=ven or None)
 
     # ---- HTTP / TLS -------------------------------------------------------
     http = probes.get("http") or {}
@@ -327,16 +379,15 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
     for e in entries:
         if not isinstance(e, dict):
             continue
-        blob = " ".join(str(e.get(k, "")) for k in ("server", "title", "realm", "cert_cn", "cert_issuer")).lower()
-        san = " ".join(e.get("cert_san", [])).lower()
-        blob = f"{blob} {san}"
+        # vendor-authored fields vs. free text (titles, certificate hostnames)
+        strict = " ".join(str(e.get(k) or "") for k in ("server", "realm", "cert_issuer", "cert_org"))
+        loose = " ".join(str(e.get(k) or "") for k in ("title", "cert_cn"))
         if e.get("server"):
             add("HTTP", f"Server: {e['server']}", "has a web UI")
         if e.get("cert_cn"):
             add("TLS", f"certificate CN {e['cert_cn']}", "identifies itself in its certificate")
-        for needle, ven, role, of, weight in BANNER_HINTS:
-            if needle in blob:
-                add("HTTP/TLS", f"'{needle}' in banner/cert", role, role, weight, of=of, ven=ven or None)
+        for needle, ven, role, of, weight in banner_matches(loose, strict):
+            add("HTTP/TLS", f"'{needle}' in banner/cert", role, role, weight, of=of, ven=ven or None)
 
     # ---- nmap service/OS scan --------------------------------------------
     nm = probes.get("nmap") or {}
@@ -357,7 +408,10 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
             of="embedded", mdl=en.get("product") or None)
     bac = probes.get("bacnet") or {}
     if bac.get("bacnet"):
-        add("BACnet", f"answered BACnet I-Am (device {bac.get('device_id', '?')})", "building-automation controller", "bms", 9, of="embedded")
+        add("BACnet", f"answered BACnet I-Am (device {bac.get('device_id', '?')})", "building-automation controller", "bms", 9, of="embedded",
+            ven=bac.get("vendor") or None, mdl=bac.get("model") or None)
+        if bac.get("name"):
+            add("BACnet", f"device object-name {bac['name']}", bac["name"])
     ipmi = probes.get("ipmi") or {}
     if ipmi.get("ipmi"):
         add("IPMI", f"answered IPMI {ipmi.get('version', '')} (623)".strip(), "server lights-out controller (BMC)", "bmc", 8, of="embedded")
@@ -381,12 +435,19 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
         ev.append({"source": "agent-less inspection", "observed": f"reported OS: {sysd['os']}", "implies": sysd["os"]})
 
     # ---- names ------------------------------------------------------------
+    # one vote per distinct short name: dns, netbios and mdns usually all report the same
+    # name, and that is one clue, not three
+    seen_names: set[str] = set()
     for src in NAME_PRIORITY:
         nm = host.names.get(src) if host.names else None
         if not nm:
             continue
+        key = short_name(nm)
+        if not key or key in seen_names:
+            continue
+        seen_names.add(key)
         for rx, role, of, note, weight in NAME_HINTS:
-            if rx.search(nm):
+            if rx.search(key):
                 add(f"{src} name", f"'{nm}' - {note}", role, role, weight, of=of or None)
 
     # ---- server functions from open ports (additive) ----------------------
@@ -441,14 +502,19 @@ def _promote_role(prof: Profile, host) -> Profile:
     if role not in ("server", "host", "windows", "unknown", ""):
         return prof
     ports = {p.get("port") for p in (host.ports or []) if p.get("port")}
-    is_server_os = "server" in (prof.os or "").lower() or (prof.os_family or "") in ("linux", "esxi")
+    is_server_os = "server" in (prof.os or "").lower() or (prof.os_family or "") in ("linux", "bsd", "esxi")
     real_file_server = bool(ports & {2049, 548}) or ("File server" in funcs and is_server_os)
+    # a Windows *workstation* with port 80 open (IIS Express, a printer-sharing stack, a
+    # vendor agent) is not a web server; that needs a server OS or a non-Windows family
+    windows_client = (prof.os_family or "") == "windows" and not is_server_os
     for label, promoted in FUNCTION_ROLE:
         # a specialised DB product (SQL Server, MySQL...) still means "Database"
         present = (funcs & _DB_LABELS) if label == "Database" else (label in funcs)
         if not present:
             continue
         if label == "File server" and not real_file_server:
+            continue
+        if label == "Web server" and windows_client:
             continue
         prof.role = promoted
         break
@@ -463,11 +529,14 @@ def _promote_role(prof: Profile, host) -> Profile:
     return prof
 
 
-ROLE_FROM_FAMILY = {"windows": "windows", "macos": "workstation", "android": "host", "printer": "printer", "network": "switch", "linux": "server"}
+ROLE_FROM_FAMILY = {"windows": "windows", "macos": "workstation", "android": "host", "printer": "printer", "network": "switch",
+                    "linux": "server", "bsd": "server", "esxi": "hypervisor"}
 
-# nmap osclass osfamily -> our os_family
+# nmap osclass osfamily -> our os_family (BSDs are their own family; ESXi is `esxi`, as the
+# SSH/HTTP banners map it - one vocabulary throughout)
 _NMAP_FAMILY = {"windows": "windows", "linux": "linux", "mac os x": "macos", "macos": "macos", "ios": "ios",
-                "embedded": "embedded", "ios-xe": "ios", "junos": "junos", "freebsd": "linux", "vmware esxi": "esxi"}
+                "embedded": "embedded", "ios-xe": "ios", "junos": "junos", "freebsd": "bsd", "openbsd": "bsd", "netbsd": "bsd",
+                "vmware esxi": "esxi", "esxi": "esxi"}
 
 
 def _best_name(host) -> str:

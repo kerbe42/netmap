@@ -353,12 +353,13 @@ def _content(si):
 # --------------------------------------------------------------------------- #
 # connection (the only networked function)
 # --------------------------------------------------------------------------- #
-def connect(host, username, password, port: int = 443, insecure: bool = True, timeout: int = 20):
+def connect(host, username, password, port: int = 443, insecure: bool = False, timeout: int = 20):
     """Open a read-only vCenter/ESXi session and return the connected ``ServiceInstance``.
 
     The caller owns the session and must :func:`disconnect` it (or use :func:`discover`,
-    which handles that). With ``insecure`` (the default in a lab / for self-signed certs) an
-    SSL context that does not verify is used.
+    which handles that). The server certificate is verified by default; pass
+    ``insecure=True`` explicitly to accept a self-signed / untrusted certificate (the
+    credentials then go to whoever answers on that address).
     """
     if SmartConnect is None:
         raise RuntimeError(
@@ -396,15 +397,17 @@ def disconnect(si) -> None:
 # --------------------------------------------------------------------------- #
 # orchestration: fold the virtual estate into an Inventory
 # --------------------------------------------------------------------------- #
-def discover(inv, host, username, password, port: int = 443, insecure: bool = True, si=None) -> dict:
+def discover(inv, host, username, password, port: int = 443, insecure: bool = False, si=None) -> dict:
     """Discover the VMware estate at ``host`` and fold it into ``inv``.
 
-    Connects (unless a ``si`` ServiceInstance/content is injected, as tests do), reads every
-    ESXi host and VM read-only, then:
+    Connects (verifying TLS unless ``insecure=True``; or uses an injected ``si``
+    ServiceInstance/content, as tests do), reads every ESXi host and VM read-only, then:
 
-    * every VM with an IP becomes/updates a ``Host`` (role ``vm``), with guest OS/family,
-      hostname, first guest MAC, and hypervisor placement recorded on ``host.system``;
-    * every ESXi host with a management IP becomes/updates a ``Host`` (role ``server``);
+    * every VM address becomes/updates a ``Host`` (role ``vm``) - a multi-homed VM is folded
+      under each of its addresses - with guest OS/family and hostname filled where the record
+      had none (curated data is never overwritten), first guest MAC, and hypervisor placement
+      recorded on ``host.system``;
+    * every ESXi host with a management IP becomes/updates a ``Host`` (role ``hypervisor``);
     * the VM->host->cluster relationships and portgroup/VLAN list are stashed on
       ``inv.vmware`` (a live-scan enrichment; it is not persisted to JSON, which is fine).
 
@@ -437,12 +440,13 @@ def discover(inv, host, username, password, port: int = 443, insecure: bool = Tr
             if not ip:
                 continue
             host_rec = inv.touch_host(ip, "vmware")
-            host_rec.role = "server"
+            host_rec.role = "hypervisor"
             host_rec.os_family = "esxi"
-            host_rec.os = h["version"] or host_rec.os
-            if h["vendor"]:
+            if not host_rec.os and h["version"]:
+                host_rec.os = h["version"]
+            if h["vendor"] and not host_rec.vendor:
                 host_rec.vendor = h["vendor"]
-            if h["model"]:
+            if h["model"] and not host_rec.model:
                 host_rec.model = h["model"]
             if h["name"]:
                 host_rec.names["vmware"] = h["name"]
@@ -470,27 +474,32 @@ def discover(inv, host, username, password, port: int = 443, insecure: bool = Tr
             if not v["ips"]:
                 continue
             vms_with_ip += 1
-            ip = v["ips"][0]
             mac = v["macs"][0] if v["macs"] else None
-            host_rec = inv.touch_host(ip, "vmware", mac)
-            host_rec.role = "vm"
-            if v["guest_os"]:
-                host_rec.os = v["guest_os"]
             fam = os_family_from_guest(v["guest_os"])
-            if fam:
-                host_rec.os_family = fam
-            if v["guest_hostname"]:
-                host_rec.hostname = v["guest_hostname"]
-            host_rec.system.update(
-                {
-                    "hypervisor": v["host"],
-                    "vm_host_ip": name_to_mgmt.get(v["host"], ""),
-                    "power_state": v["power_state"],
-                    "vcpu": v["cpu"],
-                    "memory_mb": v["memory_mb"],
-                    "tools": v["tools_running"],
-                }
-            )
+            for ip in v["ips"]:  # a multi-homed VM is the same machine at every address
+                host_rec = inv.touch_host(ip, "vmware", mac)
+                host_rec.role = "vm"
+                # fill-if-empty, like hostinfo.apply_facts: never clobber curated data
+                if v["guest_os"] and not host_rec.os:
+                    host_rec.os = v["guest_os"]
+                if fam and not host_rec.os_family:
+                    host_rec.os_family = fam
+                if v["guest_hostname"]:
+                    host_rec.names["vmware"] = v["guest_hostname"]
+                    if not host_rec.hostname:
+                        host_rec.hostname = v["guest_hostname"]
+                host_rec.system.update(
+                    {
+                        "vm_name": v["name"],
+                        "hypervisor": v["host"],
+                        "vm_host_ip": name_to_mgmt.get(v["host"], ""),
+                        "power_state": v["power_state"],
+                        "vcpu": v["cpu"],
+                        "memory_mb": v["memory_mb"],
+                        "tools": v["tools_running"],
+                        "all_ips": list(v["ips"]),
+                    }
+                )
 
         # ---- stash the relationships (live-scan enrichment, not persisted) ----
         try:
