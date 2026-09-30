@@ -17,6 +17,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    # pyproject.toml holds minimum versions the app is known to work with; raising them every
+    # time a library releases would only exclude users' existing installs. Only the exact
+    # pins in requirements-build.txt should move.
+    versioning-strategy: increase-if-necessary
     groups:
       build-tooling:
         patterns: ["pyinstaller*", "pytest", "snmpsim", "pysmi"]
