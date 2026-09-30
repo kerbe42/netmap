@@ -51,19 +51,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import layout as L
+from .. import diagram
+from ..diagram import PRESETS
 from ..graph import edge_ports
+from ..views import is_mac, short_port
 from .icons import ROLE_LABELS, paint_badge, role_color, role_pixmap
 
-PRESETS = {
-    "physical": {"title": "Physical (cabling)", "l2": True, "l3": True, "subnets": False, "hosts": False, "unpolled": True},
-    "logical": {"title": "Logical (routing & subnets)", "l2": False, "l3": True, "subnets": True, "hosts": False, "unpolled": False},
-    "all": {"title": "Everything", "l2": True, "l3": True, "subnets": True, "hosts": False, "unpolled": True},
-}
 LAYOUTS = {"layered": "Layered (core on top)", "organic": "Organic", "radial": "Radial around selection"}
 EDGE_TITLES = {"lldp": "LLDP", "cdp": "CDP", "l3": "Routing", "member": "Subnet", "fdb": "MAC table"}
 
 NODE_SIZE = {"device": 40.0, "host": 26.0, "subnet": 30.0}
+
+
+def map_label(name: str) -> str:
+    """ap-fl1-01.mgmt.example.com -> ap-fl1-01 on the diagram; addresses stay whole."""
+    import re
+
+    if "." in name and not re.match(r"^[\d.]+(/\d+)?$", name):
+        return name.split(".", 1)[0]
+    return name
 
 
 def _is_dark(pal: QPalette) -> bool:
@@ -86,13 +92,13 @@ class NodeItem(QGraphicsObject):
         self.setAcceptHoverEvents(True)
         self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
         self.setZValue(2 if self.kind == "device" else 1)
-        self._label = str(attrs.get("label") or node_id)
+        self._label = map_label(str(attrs.get("label") or node_id))
         if self.kind == "device":
             ip = attrs.get("ip") or ""
             self._sub = ip if ip and ip != self._label else ""
         elif self.kind == "subnet":
             v = attrs.get("vlan")
-            self._sub = f"VLAN {v}" if v else ""
+            self._sub = (f"VLAN {v}" + (f" {attrs['vlan_name']}" if attrs.get("vlan_name") else "")) if v else ""
         else:
             self._sub = attrs.get("ip", "") if attrs.get("label") and attrs.get("label") != attrs.get("ip") else ""
         self._font = QFont()
@@ -104,7 +110,7 @@ class NodeItem(QGraphicsObject):
         fs = QFontMetricsF(self._small)
         self._text_w = min(max(fm.horizontalAdvance(self._label), fs.horizontalAdvance(self._sub)) + 8, 190.0)
         self._text_h = fm.height() + (fs.height() if self._sub else 0) + 2
-        tip = [f"<b>{self._label}</b>", ROLE_LABELS.get(self.role, self.role)]
+        tip = [f"<b>{attrs.get('label') or node_id}</b>", ROLE_LABELS.get(self.role, self.role)]
         for k in ("ip", "vendor", "model", "mac"):
             if attrs.get(k):
                 tip.append(f"{k}: {attrs[k]}")
@@ -145,6 +151,10 @@ class NodeItem(QGraphicsObject):
             painter.setBrush(role_color("subnet" if self.kind == "subnet" else self.role))
             painter.drawEllipse(r)
             return
+        if self.role == "unpolled":
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(pal.color(QPalette.Base))
+            painter.drawRoundedRect(r, r.width() * 0.22, r.width() * 0.22)
         paint_badge(painter, r, self.role, self.kind, dashed=self.role == "unpolled")
         if lod < 0.45 and self.kind == "host":
             return
@@ -208,9 +218,12 @@ class EdgeItem(QGraphicsPathItem):
         self.hover = False
         self.setZValue(0)
         self.setAcceptHoverEvents(True)
-        self.port_a, self.port_b = edge_ports(a.node_id, b.node_id, attrs)
+        pa, pb = edge_ports(a.node_id, b.node_id, attrs)
+        # an endpoint's LLDP port id is usually just its MAC: noise on a diagram
+        self.port_a = "" if is_mac(pa) else short_port(pa)
+        self.port_b = "" if is_mac(pb) else short_port(pb)
         if self.kind in ("lldp", "cdp"):
-            tip = f"{a._label} {self.port_a}  ↔  {b._label} {self.port_b}  ({EDGE_TITLES[self.kind]})"
+            tip = f"{a._label} {pa}  ↔  {b._label} {pb}  ({EDGE_TITLES[self.kind]})"
         elif self.kind == "l3":
             tip = f"{a._label} ↔ {b._label}: {attrs.get('label', '')} (routing next-hop)"
         elif self.kind == "fdb":
@@ -230,8 +243,8 @@ class EdgeItem(QGraphicsPathItem):
             c = QColor("#fb923c") if dark else QColor("#ea580c")
             pen = QPen(c, 1.6, Qt.DashLine)
         elif self.kind == "member":
-            c = QColor("#64748b") if dark else QColor("#94a3b8")
-            pen = QPen(c, 1.2, Qt.DotLine)
+            c = QColor("#7c8aa0") if dark else QColor("#64748b")
+            pen = QPen(c, 1.4, Qt.DashDotLine)
         else:
             c = QColor("#475569") if dark else QColor("#cbd5e1")
             pen = QPen(c, 1.0)
@@ -272,13 +285,24 @@ class EdgeItem(QGraphicsPathItem):
         painter.drawPath(self.path())
         lod = option.levelOfDetailFromTransform(painter.worldTransform())
         if self.page.show_ports and self.kind in ("lldp", "cdp") and lod > 0.7 and not faded:
-            self._port_label(painter, self.a, self.port_a, 0.18)
-            self._port_label(painter, self.b, self.port_b, 0.82)
+            self._port_label(painter, self.a, self.b, self.port_a, False)
+            self._port_label(painter, self.b, self.a, self.port_b, True)
 
-    def _port_label(self, painter: QPainter, near: NodeItem, text: str, t: float):
+    def _port_label(self, painter: QPainter, near: NodeItem, far: NodeItem, text: str, from_end: bool):
+        """Interface name just outside the node it belongs to - below its caption when the
+        link leaves downwards, so the two never overlap."""
         if not text:
             return
-        p = self.path().pointAtPercent(t)
+        length = self.path().length()
+        if length < 1:
+            return
+        dx = far.pos().x() - near.pos().x()
+        dy = far.pos().y() - near.pos().y()
+        dist = near.size / 2 + 14
+        if dy > 0 and abs(dx) < dy * 1.6:
+            dist = near.size / 2 + near._text_h + 16
+        t = min(dist / length, 0.42)
+        p = self.path().pointAtPercent(1 - t if from_end else t)
         f = QFont()
         f.setPointSizeF(6.8)
         painter.setFont(f)
@@ -376,11 +400,14 @@ class Legend(QFrame):
         self.lay = QVBoxLayout(self)
         self.lay.setContentsMargins(8, 6, 8, 6)
         self.lay.setSpacing(2)
+        self.lay.setSizeConstraint(QVBoxLayout.SetFixedSize)  # follow the content as it changes
 
     def set_content(self, roles: list[tuple[str, str]], edges: list[str]):
         while self.lay.count():
             w = self.lay.takeAt(0).widget()
             if w:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
         for role, kind in roles:
             row = QWidget()
@@ -393,8 +420,11 @@ class Legend(QFrame):
             h.addWidget(QLabel(ROLE_LABELS.get(role, role)))
             h.addStretch(1)
             self.lay.addWidget(row)
+            row.show()
         for k in edges:
-            self.lay.addWidget(QLabel({"l2": "━━  cabling (LLDP/CDP)", "l3": "╍╍  routing next-hop", "member": "┈┈  subnet membership", "fdb": "──  host on switch port"}[k]))
+            lab = QLabel({"l2": "━━  cabling (LLDP/CDP)", "l3": "╍╍  routing next-hop", "member": "┈┈  subnet membership", "fdb": "──  host on switch port"}[k])
+            self.lay.addWidget(lab)
+            lab.show()
         self.adjustSize()
 
 
@@ -445,27 +475,40 @@ class TopologyPage(QWidget):
         tb.addWidget(self.layout_box)
         self.relayout_act = tb.addAction("Re-arrange", self.relayout)
         self.relayout_act.setToolTip("Discard hand-placed positions for this view and lay it out again")
+        self.show_btn = QToolButton()
+        self.show_btn.setText("Show")
+        self.show_btn.setPopupMode(QToolButton.InstantPopup)
+        self.show_btn.setToolTip("Choose what the map shows")
+        show = QMenu(self.show_btn)
+        self.show_btn.setMenu(show)
         tb.addSeparator()
+        tb.addWidget(self.show_btn)
         self.toggles: dict[str, QAction] = {}
         for key, text, tip in (
-            ("l2", "Cabling", "Links learned from LLDP/CDP"),
-            ("l3", "Routing", "Routing next-hop adjacencies"),
+            ("l2", "Cabling (LLDP/CDP links)", "Links learned from LLDP/CDP"),
+            ("l3", "Routing next-hops", "Routing next-hop adjacencies"),
             ("subnets", "Subnets", "Subnets and which devices have an address in them"),
             ("hosts", "Hosts", "Endpoints: on their switch port (physical) or in their subnet (logical)"),
-            ("unpolled", "Unpolled", "Neighbours seen over LLDP/CDP that were not polled"),
+            ("unpolled", "Neighbours not polled", "Neighbours seen over LLDP/CDP that were not polled"),
+            ("l2devices", "Layer-2 switches", "Switches that do not route (hidden on the logical view)"),
         ):
             a = QAction(text, self)
             a.setCheckable(True)
             a.setToolTip(tip)
             a.toggled.connect(lambda on, key=key: self._toggle(key, on))
-            tb.addAction(a)
+            show.addAction(a)
             self.toggles[key] = a
-        self.ports_act = QAction("Port names", self)
+        show.addSeparator()
+        self.ports_act = QAction("Port names on links", self)
         self.ports_act.setCheckable(True)
         self.ports_act.setChecked(True)
-        self.ports_act.setToolTip("Show interface names at both ends of cabling links (when zoomed in)")
         self.ports_act.toggled.connect(self._toggle_ports)
-        tb.addAction(self.ports_act)
+        show.addAction(self.ports_act)
+        self.legend_act = QAction("Legend", self)
+        self.legend_act.setCheckable(True)
+        self.legend_act.setChecked(True)
+        self.legend_act.toggled.connect(self._toggle_legend)
+        show.addAction(self.legend_act)
         tb.addSeparator()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find on map: name, IP, MAC, serial…")
@@ -499,8 +542,9 @@ class TopologyPage(QWidget):
         self.info = QLabel()
         self.info.setObjectName("muted")
 
-        self.legend = Legend(self.view)
-        self.legend.move(10, 10)
+        # a child of the page, not of the view's viewport: the viewport scrolls its children
+        self.legend = Legend(self)
+        self.show_legend = True
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -510,12 +554,9 @@ class TopologyPage(QWidget):
         lay.addWidget(self.view, 1)
         foot = QHBoxLayout()
         foot.setContentsMargins(8, 2, 8, 2)
-        foot.addWidget(self.info)
-        foot.addStretch(1)
-        hint = QLabel("Drag to pan · wheel to zoom · Shift+drag to select · drag a node to move it · right-click for actions")
-        hint.setObjectName("muted")
-        foot.addWidget(hint)
+        foot.addWidget(self.info, 1)
         lay.addLayout(foot)
+        self.view.setToolTip("Drag the background to pan · wheel to zoom · Shift+drag to select several · drag a node to move it · right-click for actions")
         self._sync_toggles()
 
     # ------------------------------------------------------------ data in
@@ -540,12 +581,30 @@ class TopologyPage(QWidget):
     def _sync_toggles(self):
         for k, a in self.toggles.items():
             a.blockSignals(True)
-            a.setChecked(bool(self.flags.get(k)))
+            a.setChecked(bool(self.flags.get(k, k == "l2devices")))
             a.blockSignals(False)
 
     def _toggle(self, key, on):
         self.flags[key] = on
         self.rebuild(keep_view=True)
+
+    def _toggle_legend(self, on):
+        self.show_legend = on
+        self.legend.setVisible(on and bool(self.nodes))
+        self._place_legend()
+
+    def _place_legend(self):
+        g = self.view.geometry()
+        self.legend.move(g.left() + 10, g.top() + 10)
+        self.legend.raise_()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_legend()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        QTimer.singleShot(0, self._place_legend)
 
     def _toggle_ports(self, on):
         self.show_ports = on
@@ -558,48 +617,10 @@ class TopologyPage(QWidget):
 
     # ------------------------------------------------------------ which nodes/edges
     def visible_graph(self) -> tuple[dict, list]:
-        g = self.g
-        f = self.flags
-        nodes: dict[str, dict] = {}
-        edges: list[tuple[str, str, dict]] = []
-        if g is None:
-            return nodes, edges
-        for n, a in g.nodes(data=True):
-            kind = a.get("kind")
-            if n in self.hidden_nodes:
-                continue
-            if kind == "device":
-                if a.get("role") == "unpolled" and not f.get("unpolled"):
-                    continue
-                nodes[n] = a
-            elif kind == "subnet" and f.get("subnets"):
-                nodes[n] = a
-            elif kind == "host" and f.get("hosts"):
-                nodes[n] = a
-        for u, v, a in g.edges(data=True):
-            k = a.get("kind")
-            if u not in nodes or v not in nodes:
-                continue
-            if k in ("lldp", "cdp") and not f.get("l2"):
-                # hosts announced over LLDP (APs, phones) still hang off their switch
-                if not f.get("hosts") or (nodes[u].get("kind") == "device" and nodes[v].get("kind") == "device"):
-                    continue
-            if k == "l3" and not f.get("l3"):
-                continue
-            if k == "member":
-                hostside = nodes[u].get("kind") == "host" or nodes[v].get("kind") == "host"
-                if not f.get("subnets"):
-                    continue
-                if hostside and f.get("l2") and self.preset == "physical":
-                    continue
-            if k == "fdb" and not f.get("hosts"):
-                continue
-            edges.append((u, v, a))
-        if f.get("hosts"):
-            # a host with nothing to hang off (no switch port, no subnet shown) is noise on a diagram
-            linked = {x for u, v, _ in edges for x in (u, v)}
-            for n in [n for n, a in nodes.items() if a.get("kind") == "host" and n not in linked]:
-                del nodes[n]
+        nodes, edges = diagram.select(self.g, self.flags, self.preset)
+        if self.hidden_nodes:
+            nodes = {n: a for n, a in nodes.items() if n not in self.hidden_nodes}
+            edges = [(u, v, a) for u, v, a in edges if u in nodes and v in nodes]
         if self.focus:
             center, hops = self.focus
             if center in nodes:
@@ -670,38 +691,9 @@ class TopologyPage(QWidget):
             self._building = False
 
     def _positions(self, nodes: dict, edges: list) -> dict:
-        pairs = [(u, v) for u, v, _ in edges]
-        saved = (self.inv.layout.get(self._layout_key()) if self.inv is not None else None) or {}
-        if self.layout_kind == "radial":
-            root = self._radial_root(nodes)
-            if root:
-                return L.radial(nodes, pairs, root)
-        auto = L.layered(nodes, pairs)
-        if self.layout_kind == "organic":
-            auto = L.organic(nodes, pairs, init=auto)
-        if not saved or self.focus:
-            return auto
-        # hand-placed positions win; anything new is placed relative to a neighbour that has one
-        pos = {n: tuple(saved[n]) for n in nodes if n in saved}
-        if not pos:
-            return auto
-        dxs = [pos[n][0] - auto[n][0] for n in pos if n in auto]
-        dys = [pos[n][1] - auto[n][1] for n in pos if n in auto]
-        shift = (sum(dxs) / len(dxs), sum(dys) / len(dys)) if dxs else (0.0, 0.0)
-        adj: dict[str, list] = {}
-        for u, v in pairs:
-            adj.setdefault(u, []).append(v)
-            adj.setdefault(v, []).append(u)
-        for n in nodes:
-            if n in pos:
-                continue
-            anchor = next((m for m in adj.get(n, []) if m in pos and m in auto), None)
-            if anchor is not None and n in auto:
-                pos[n] = (pos[anchor][0] + auto[n][0] - auto[anchor][0], pos[anchor][1] + auto[n][1] - auto[anchor][1])
-            else:
-                x, y = auto.get(n, (0.0, 0.0))
-                pos[n] = (x + shift[0], y + shift[1])
-        return pos
+        saved = None if self.focus or self.inv is None else self.inv.layout.get(self._layout_key())
+        root = self._radial_root(nodes) if self.layout_kind == "radial" else None
+        return diagram.positions(nodes, edges, saved, self.layout_kind, root)
 
     def _radial_root(self, nodes) -> Optional[str]:
         sel = [i.node_id for i in self.scene.selectedItems() if isinstance(i, NodeItem) and i.node_id in nodes]
@@ -866,7 +858,8 @@ class TopologyPage(QWidget):
         if "fdb" in kinds:
             ek.append("fdb")
         self.legend.set_content(roles, ek)
-        self.legend.setVisible(bool(nodes))
+        self.legend.setVisible(bool(nodes) and self.show_legend)
+        self._place_legend()
 
     def _update_info(self, nodes, edges):
         kinds: dict = {}

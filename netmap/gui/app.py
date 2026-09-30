@@ -57,8 +57,14 @@ def main(argv=None) -> int:
     QCoreApplication.setOrganizationName("netmap")
     QCoreApplication.setApplicationName("NetMap")
     QCoreApplication.setApplicationVersion(__version__)
+    if args.selftest or args.screenshots:
+        # never touch the user's real settings (window layout, credentials, recent files)
+        import tempfile
+
+        QSettings.setDefaultFormat(QSettings.IniFormat)
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, tempfile.mkdtemp(prefix="netmap-selftest-settings-"))
     portable_ini = os.path.join(os.path.dirname(sys.executable if getattr(sys, "frozen", False) else __file__), "netmap-portable.ini")
-    if os.path.exists(portable_ini):
+    if os.path.exists(portable_ini) and not (args.selftest or args.screenshots):
         # portable mode: settings live beside the executable, nothing in the registry
         QSettings.setDefaultFormat(QSettings.IniFormat)
         QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, os.path.dirname(portable_ini))

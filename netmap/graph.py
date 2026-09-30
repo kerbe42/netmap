@@ -1,6 +1,7 @@
 """Turn the inventory into a topology graph (nodes + typed edges) and export it."""
 from __future__ import annotations
 
+import bisect
 import csv
 import ipaddress
 import json
@@ -53,6 +54,31 @@ def enrich_inventory(inv: Inventory) -> None:
         d.os_version = d.os_version or parse_os_version(d.sysdescr, d.vendor)  # maps saved before it was collected
 
 
+def subnet_vlans(inv: Inventory) -> dict[str, set]:
+    """Subnet -> VLAN ids, from the SVIs (Vlan10, VLAN20, vlan.30) that carry an address in it."""
+    out: dict[str, set] = defaultdict(set)
+    for d in inv.devices.values():
+        for i in d.interfaces:
+            if not i.ips:
+                continue
+            m = re.search(r"vlan\s*\.?0*(\d+)", f"{i.name} {i.descr}", re.I)
+            if not m and i.vlan and i.mode != "trunk":
+                vid = i.vlan
+            elif m:
+                vid = int(m.group(1))
+            else:
+                continue
+            for x in i.ips:
+                try:
+                    out[str(ipaddress.ip_network(x, strict=False))].add(vid)
+                except ValueError:
+                    pass
+    for cidr, sub in inv.subnets.items():
+        if sub.vlan:
+            out[cidr].add(sub.vlan)
+    return out
+
+
 def ipam_rows(inv: Inventory) -> list[dict]:
     """Per-subnet address accounting, the IPAM view of a crawl.
 
@@ -60,42 +86,35 @@ def ipam_rows(inv: Inventory) -> list[dict]:
     route gateways), so utilisation is evidence-based and reads low for a subnet that was
     never swept. `swept` says whether to trust it.
     """
+    seen_ints = set()
+    for ip in list(inv.ip_to_device) + list(inv.hosts):
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if a.version == 4:
+            seen_ints.add(int(a))
+    ordered = sorted(seen_ints)
+    vlans_of = subnet_vlans(inv)
     rows = []
     for cidr, s in inv.subnets.items():
         net = ipaddress.ip_network(cidr)
         usable = max(net.num_addresses - 2, 1) if net.prefixlen < 31 else net.num_addresses
-        seen: set[str] = set()
-        for ip in inv.ip_to_device:
-            try:
-                if ipaddress.ip_address(ip) in net:
-                    seen.add(ip)
-            except ValueError:
-                continue
-        for ip in inv.hosts:
-            try:
-                if ipaddress.ip_address(ip) in net:
-                    seen.add(ip)
-            except ValueError:
-                continue
-        vlans = set()
-        for d in inv.devices.values():
-            for i in d.interfaces:
-                if any(ipaddress.ip_network(x, strict=False) == net for x in i.ips):
-                    m = re.search(r"vlan\s*0*(\d+)", f"{i.name} {i.descr}", re.I)
-                    if m:
-                        vlans.add(int(m.group(1)))
-        if s.vlan:
-            vlans.add(s.vlan)
+        if net.version == 4:
+            lo, hi = int(net.network_address), int(net.broadcast_address)
+            used = bisect.bisect_right(ordered, hi) - bisect.bisect_left(ordered, lo)
+        else:
+            used = 0
         rows.append(
             {
                 "cidr": cidr,
                 "size": net.num_addresses,
                 "usable": usable,
-                "used": len(seen),
-                "free": max(usable - len(seen), 0),
-                "utilisation_pct": round(100.0 * len(seen) / usable, 1),
+                "used": used,
+                "free": max(usable - used, 0),
+                "utilisation_pct": round(min(100.0 * used / usable, 100.0), 1),
                 "gateways": " ".join(inv.devices[g].name or g for g in s.gateways if g in inv.devices),
-                "vlan": " ".join(str(v) for v in sorted(vlans)),
+                "vlan": " ".join(str(v) for v in sorted(vlans_of.get(cidr, ()))),
                 "sources": " ".join(s.sources),
                 "swept": s.swept,
             }
@@ -190,6 +209,10 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                 continue
             if g.nodes[tgt].get("kind") == "host":
                 _upgrade_host(g.nodes[tgt], nb)
+                h = inv.hosts.get(tgt)
+                if h is not None:  # keep the inventory (and so every export) in step with the map
+                    h.role = g.nodes[tgt]["role"]
+                    h.hostname = h.hostname or g.nodes[tgt].get("hostname", "")
             key = tuple(sorted([(d.id, norm_port(nb.local_port)), (tgt, norm_port(nb.remote_port))]))
             if key in seen_l2:
                 continue
@@ -217,8 +240,13 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
 
     # --- subnets ---
     if include_subnets:
+        vlans_of = subnet_vlans(inv)
+        vlan_names = {vid: sorted(names)[0] for vid, (names, _) in vlan_rows(inv).items() if names}
         for cidr, s in inv.subnets.items():
-            g.add_node(cidr, kind="subnet", label=cidr, cidr=cidr, sources=list(s.sources), swept=s.swept, vlan=s.vlan)
+            vids = sorted(vlans_of.get(cidr, ()))
+            vlan = vids[0] if len(vids) == 1 else s.vlan
+            g.add_node(cidr, kind="subnet", label=cidr, cidr=cidr, sources=list(s.sources), swept=s.swept, vlan=vlan,
+                       vlan_name=vlan_names.get(vlan, "") if vlan else "")
         for d in inv.devices.values():
             for i in d.interfaces:
                 for ipc in i.ips:
@@ -311,12 +339,18 @@ def _upgrade_host(attrs: dict, nb) -> None:
     """A host that announces itself over LLDP/CDP tells us what it is."""
     caps = (nb.remote_caps or "").lower()
     plat = (nb.remote_platform or "").lower()
-    if attrs.get("role") in ("host", "workstation", "unknown"):
-        if "wlan-ap" in caps or re.search(r"\bap\b|access point|aironet|air-", plat):
-            attrs["role"] = "wireless"
-        elif "telephone" in caps or "phone" in caps or "phone" in plat:
-            attrs["role"] = "phone"
-        elif "router" in caps:
+    attrs["announced"] = True
+    if nb.remote_platform and not attrs.get("platform"):
+        attrs["platform"] = nb.remote_platform[:120]
+    # An access point or phone saying so over LLDP/CDP beats any guess from its MAC vendor.
+    # Router/bridge capabilities are weaker (a Linux box forwarding for containers says
+    # "router"), so they only type something we had no better idea about.
+    if "wlan-ap" in caps or re.search(r"\bap\b|access point|aironet|air-", plat):
+        attrs["role"] = "wireless"
+    elif "telephone" in caps or "phone" in caps or re.search(r"\bphone\b|\bsip-t|\bvvx\b", plat):
+        attrs["role"] = "phone"
+    elif attrs.get("role") in ("host", "workstation", "unknown"):
+        if "router" in caps:
             attrs["role"] = "router"
         elif "bridge" in caps or "switch" in caps:
             attrs["role"] = "switch"

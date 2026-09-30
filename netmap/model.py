@@ -296,16 +296,28 @@ class Inventory:
         return s
 
     def subnet_for_ip(self, ip: str) -> Optional[str]:
+        """Most specific known subnet containing `ip` (longest-prefix match)."""
         try:
             a = ipaddress.ip_address(ip)
         except ValueError:
             return None
-        best = None
-        for cidr in self.subnets:
-            n = ipaddress.ip_network(cidr)
-            if a in n and (best is None or n.prefixlen > best.prefixlen):
-                best = n
-        return str(best) if best else None
+        key = (len(self.subnets), id(self.subnets))
+        if getattr(self, "_lpm_key", None) != key:
+            by_len: dict[int, dict[int, str]] = {}
+            for cidr in self.subnets:
+                n = ipaddress.ip_network(cidr)
+                if n.version == 4:
+                    by_len.setdefault(n.prefixlen, {})[int(n.network_address) >> (32 - n.prefixlen) if n.prefixlen else 0] = cidr
+            self._lpm = sorted(by_len.items(), reverse=True)
+            self._lpm_key = key
+        if a.version != 4:
+            return None
+        v = int(a)
+        for plen, table in self._lpm:
+            hit = table.get(v >> (32 - plen) if plen else 0)
+            if hit:
+                return hit
+        return None
 
     # ---- persistence ----
     def to_dict(self) -> dict:

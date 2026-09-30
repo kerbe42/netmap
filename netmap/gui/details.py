@@ -226,6 +226,9 @@ class DetailsPanel(QWidget):
         self.tabs.setDocumentMode(True)
         self.doc = DocForm()
         self.doc.changed.connect(self.annotationChanged)
+        # one scroll area for the life of the panel: a widget must never be handed to a
+        # second scroll area while the first still points at it
+        self.doc_scroll = self._scroll(self.doc)
 
         self.empty = QLabel("Select a device, host or subnet — in a list or on the map — to see its details here.")
         self.empty.setWordWrap(True)
@@ -248,6 +251,7 @@ class DetailsPanel(QWidget):
     # ------------------------------------------------------------ entry
     def clear(self):
         self.node_id = ""
+        self._clear_tabs()
         self.body.hide()
         self.empty.show()
 
@@ -260,7 +264,7 @@ class DetailsPanel(QWidget):
         self.snapshot = snapshot
         self.node_id = node_id
         inv = snapshot.inv
-        self.tabs.clear()
+        self._clear_tabs()
         if node_id in inv.devices:
             self._device(snapshot, inv.devices[node_id])
             kind = "device"
@@ -282,7 +286,8 @@ class DetailsPanel(QWidget):
             self.clear()
             return
         self.doc.load(node_id, inv.note(node_id), kind)
-        self.tabs.addTab(self._scroll(self.doc), "Documentation")
+        self.tabs.insertTab(1, self.doc_scroll, "Notes")
+        self.tabs.setTabToolTip(1, "Your documentation for this item: name, role, site, owner, asset tag, status, tags, notes")
         want = self._last_tab.get(snapshot.kind(node_id) or kind)
         for i in range(self.tabs.count()):
             if want and self.tabs.tabText(i).split(" (")[0] == want:
@@ -293,6 +298,14 @@ class DetailsPanel(QWidget):
         self.btn_web.setVisible(kind in ("device", "host"))
         self.empty.hide()
         self.body.show()
+
+    def _clear_tabs(self):
+        """Remove and delete the previous item's pages (QTabWidget.clear only hides them)."""
+        while self.tabs.count():
+            w = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            if w is not self.doc_scroll:
+                w.deleteLater()
 
     # ------------------------------------------------------------ builders
     def _head(self, role: str, kind: str, title: str, subtitle: str):
@@ -367,7 +380,7 @@ class DetailsPanel(QWidget):
         ]
         self.tabs.addTab(self._facts(pairs), "Overview")
         icols = [c for c in IFACE_COLUMNS if c.key != "device"]
-        self.tabs.addTab(_table(icols, interface_rows(s, d.id)), f"Interfaces ({len(d.interfaces)})")
+        self.tabs.addTab(_table(icols, interface_rows(s, d.id)), "Ports")
         nb_rows = []
         for nb in d.neighbors:
             target = None
@@ -389,7 +402,7 @@ class DetailsPanel(QWidget):
             )
         ncols = _cols(("neighbor", "Neighbour", "text", 150), ("local", "Local port", "port", 90), ("remote", "Their port", "port", 90),
                       ("proto", "Via", "text", 50), ("ip", "Address", "ip", 100), ("platform", "Platform", "text", 160), ("caps", "Capabilities", "text", 100))
-        self.tabs.addTab(_table(ncols, nb_rows, self.openNode), f"Neighbours ({len(nb_rows)})")
+        self.tabs.addTab(_table(ncols, nb_rows, self.openNode), "Neighbours")
         hosts = s.fdb_hosts.get(d.id, [])
         if hosts:
             hrows = []
@@ -399,15 +412,15 @@ class DetailsPanel(QWidget):
                               "vendor": h.vendor if h else "", "port": port, "vlan": vlan if vlan is not None else ""})
             hcols = _cols(("name", "Host", "text", 140), ("ip", "IP", "ip", 100), ("port", "Port", "port", 70), ("vlan", "VLAN", "int", 45),
                           ("mac", "MAC", "text", 120), ("vendor", "Vendor", "text", 140))
-            self.tabs.addTab(_table(hcols, hrows, self.openNode), f"Hosts ({len(hrows)})")
+            self.tabs.addTab(_table(hcols, hrows, self.openNode), "Hosts")
         hw = hardware_rows(s, d.id)
         if hw:
-            self.tabs.addTab(_table([c for c in HARDWARE_COLUMNS if c.key != "device"], hw), f"Hardware ({len(hw)})")
+            self.tabs.addTab(_table([c for c in HARDWARE_COLUMNS if c.key != "device"], hw), "Hardware")
         if d.arp:
             arows = [{"_id": a.ip if a.ip in inv.hosts or a.ip in inv.ip_to_device else "", "_role": "", "ip": a.ip, "mac": a.mac,
                       "vendor": oui_vendor(a.mac), "iface": d.iface_label(a.if_index), "name": s.name(inv.ip_to_device.get(a.ip, a.ip))} for a in d.arp]
             acols = _cols(("ip", "IP", "ip", 105), ("mac", "MAC", "text", 120), ("vendor", "Vendor", "text", 140), ("iface", "Interface", "port", 90), ("name", "Name", "text", 140))
-            self.tabs.addTab(_table(acols, arows, self.openNode), f"ARP ({len(arows)})")
+            self.tabs.addTab(_table(acols, arows, self.openNode), "ARP")
         if d.routes:
             rrows = []
             for r in d.routes:
@@ -417,10 +430,10 @@ class DetailsPanel(QWidget):
                               "proto": ROUTE_PROTO.get(r.proto, str(r.proto) if r.proto else "")})
             rcols = _cols(("dest", "Destination", "cidr", 120), ("nexthop", "Next hop", "ip", 105), ("via", "Next-hop device", "text", 130),
                           ("iface", "Interface", "port", 90), ("proto", "Learned by", "text", 80))
-            self.tabs.addTab(_table(rcols, rrows, self.openNode), f"Routes ({len(rrows)})")
+            self.tabs.addTab(_table(rcols, rrows, self.openNode), "Routes")
         if d.vlans:
             vrows = [{"_id": f"vlan:{v}", "_role": "", "vlan": v, "name": n} for v, n in sorted(d.vlans.items())]
-            self.tabs.addTab(_table(_cols(("vlan", "VLAN", "int", 60), ("name", "Name", "text", 200)), vrows, self.openNode), f"VLANs ({len(vrows)})")
+            self.tabs.addTab(_table(_cols(("vlan", "VLAN", "int", 60), ("name", "Name", "text", 200)), vrows, self.openNode), "VLANs")
 
     def _stub(self, s: Snapshot, sid: str):
         a = s.g.nodes[sid] if sid in s.g else {}
@@ -499,7 +512,7 @@ class DetailsPanel(QWidget):
         used = [c for c in subnet_addresses(s, cidr, limit=65536) if c["state"] not in ("free", "reserved")]
         rows = [{"_id": c.get("node", ""), "_role": c.get("role", ""), "_kind": "host", "ip": c["ip"], "what": c["state"], "name": c.get("label", "")} for c in used]
         self.tabs.addTab(_table(_cols(("ip", "Address", "ip", 110), ("what", "What", "text", 90), ("name", "Name", "text", 200)), rows, self.openNode),
-                         f"Addresses ({len(rows)})")
+                         "Addresses")
 
     def _vlan(self, s: Snapshot, vid_id: str):
         vid = int(vid_id.split(":", 1)[1])

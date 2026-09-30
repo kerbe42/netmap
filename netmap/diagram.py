@@ -17,9 +17,12 @@ from .graph import edge_ports
 
 PRESETS = {
     "physical": {"title": "Physical (cabling)", "l2": True, "l3": True, "subnets": False, "hosts": False, "unpolled": True},
-    "logical": {"title": "Logical (routing & subnets)", "l2": False, "l3": True, "subnets": True, "hosts": False, "unpolled": False},
+    "logical": {"title": "Logical (routing & subnets)", "l2": False, "l3": True, "subnets": True, "hosts": False, "unpolled": False, "l2devices": False},
     "all": {"title": "Everything", "l2": True, "l3": True, "subnets": True, "hosts": False, "unpolled": True},
 }
+
+
+INFRA_ROLES = {"wireless", "switch", "l3switch", "router", "firewall"}
 
 
 def select(g, flags: dict, preset: str = "physical") -> tuple[dict, list]:
@@ -33,10 +36,16 @@ def select(g, flags: dict, preset: str = "physical") -> tuple[dict, list]:
         if kind == "device":
             if a.get("role") == "unpolled" and not flags.get("unpolled"):
                 continue
+            if a.get("role") == "switch" and not flags.get("l2devices", True):
+                continue  # a layer-2 switch's only address is its management SVI: noise on an L3 diagram
             nodes[n] = a
         elif kind == "subnet" and flags.get("subnets"):
             nodes[n] = a
         elif kind == "host" and flags.get("hosts"):
+            nodes[n] = a
+        elif kind == "host" and flags.get("l2") and a.get("role") in INFRA_ROLES and _announced(g, n):
+            # access points, and switches/routers that announce themselves but could not be
+            # polled, are part of the network's cabling, not "hosts"
             nodes[n] = a
     for u, v, a in g.edges(data=True):
         k = a.get("kind")
@@ -66,15 +75,24 @@ def select(g, flags: dict, preset: str = "physical") -> tuple[dict, list]:
     return nodes, edges
 
 
+def _announced(g, n) -> bool:
+    """True if a neighbour announced this node over LLDP/CDP."""
+    for _, _, a in g.edges(n, data=True):
+        if a.get("kind") in ("lldp", "cdp"):
+            return True
+    return False
+
+
 def positions(nodes: dict, edges: list, saved: Optional[dict] = None, kind: str = "layered", root: Optional[str] = None) -> dict:
     """Node positions: the saved (hand-placed) ones where present, a computed layout for the
     rest, placed relative to a neighbour that already has a position so they land near it."""
     pairs = [(u, v) for u, v, _ in edges]
     if kind == "radial" and root:
-        return L.radial(nodes, pairs, root)
-    auto = L.layered(nodes, pairs)
-    if kind == "organic":
-        auto = L.organic(nodes, pairs, init=auto)
+        auto = L.radial(nodes, pairs, root)
+    else:
+        auto = L.layered(nodes, pairs)
+        if kind == "organic":
+            auto = L.organic(nodes, pairs, init=auto)
     if not saved:
         return auto
     pos = {n: (float(saved[n][0]), float(saved[n][1])) for n in nodes if n in saved}
@@ -159,7 +177,7 @@ def drawio_page(name: str, nodes: dict, edges: list, pos: dict, page_id: str) ->
         x, y = pos.get(n, (0.0, 0.0))
         label = _esc(a.get("label") or n)
         if a.get("kind") == "device" and a.get("ip") and a.get("ip") != a.get("label"):
-            label += f"<br><font style=&quot;font-size:9px&quot; color=&quot;#555555&quot;>{_esc(a.get('ip'))}</font>"
+            label += f'<br><font style="font-size:9px" color="#555555">{_esc(a.get("ip"))}</font>'
         elif a.get("kind") == "subnet" and a.get("vlan"):
             label += f"<br>VLAN {_esc(a.get('vlan'))}"
         tip = " | ".join(str(a.get(k)) for k in ("vendor", "model", "serial", "site") if a.get(k))

@@ -55,8 +55,9 @@ class BarList(QWidget):
 
     rowClicked = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, label_ratio: float = 0.4, parent=None):
         super().__init__(parent)
+        self.label_ratio = label_ratio
         self.rows: list[tuple] = []
         self.row_h = 22
         self.setMouseTracking(True)
@@ -79,8 +80,8 @@ class BarList(QWidget):
             p.drawText(self.rect(), Qt.AlignLeft | Qt.AlignVCenter, "nothing yet")
             return
         top = max((r[2] for r in self.rows), default=1) or 1
-        label_w = min(170, int(self.width() * 0.38))
-        count_w = 70
+        label_w = min(260, int(self.width() * self.label_ratio))
+        count_w = 60
         bar_w = max(self.width() - label_w - count_w - 30, 40)
         for i, (key, label, value, color, icon_role, kind, suffix) in enumerate(self.rows):
             y = i * self.row_h + 2
@@ -131,6 +132,7 @@ class Dashboard(QWidget):
     openNode = Signal(str)
     newScan = Signal()
     openProject = Signal()
+    openSample = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -190,8 +192,12 @@ class Dashboard(QWidget):
         b1.clicked.connect(self.newScan)
         b2 = QPushButton("Open a project…")
         b2.clicked.connect(self.openProject)
+        b3 = QPushButton("Explore a sample network")
+        b3.setToolTip("A simulated campus: see the map, lists and findings before scanning anything")
+        b3.clicked.connect(self.openSample)
         wb.addWidget(b1)
         wb.addWidget(b2)
+        wb.addWidget(b3)
         wb.addStretch(1)
         wl.addLayout(wb)
         self.lay.addWidget(self.welcome)
@@ -200,14 +206,15 @@ class Dashboard(QWidget):
         cards = QGridLayout(self.cards_w)
         cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(12)
+        self.cards_grid = cards
         self.c_dev = Card("Network devices")
         self.c_host = Card("Hosts / endpoints")
         self.c_sub = Card("Subnets")
         self.c_vlan = Card("VLANs")
         self.c_link = Card("Links")
         self.c_find = Card("Needs attention")
-        for i, (c, page) in enumerate(((self.c_dev, "devices"), (self.c_host, "hosts"), (self.c_sub, "subnets"), (self.c_vlan, "vlans"), (self.c_link, "links"), (self.c_find, "findings"))):
-            cards.addWidget(c, 0, i)
+        self.cards = [self.c_dev, self.c_host, self.c_sub, self.c_vlan, self.c_link, self.c_find]
+        for c, page in zip(self.cards, ("devices", "hosts", "subnets", "vlans", "links", "findings")):
             c.clicked.connect(lambda page=page: self.navigate.emit(page, ""))
         self.lay.addWidget(self.cards_w)
 
@@ -221,22 +228,45 @@ class Dashboard(QWidget):
         self.b_vendors.rowClicked.connect(lambda k: self.navigate.emit("devices", f'vendor:"{k}"'))
         self.b_hosts = BarList()
         self.b_hosts.rowClicked.connect(lambda k: self.navigate.emit("hosts", f"type:{k}"))
-        self.b_subnets = BarList()
+        self.b_subnets = BarList(0.5)
         self.b_subnets.rowClicked.connect(self.openNode)
-        self.b_find = BarList()
+        self.b_find = BarList(0.6)
         self.b_find.rowClicked.connect(lambda k: self.navigate.emit("findings", f'finding:"{k}"'))
-        self.b_os = BarList()
+        self.b_os = BarList(0.5)
         self.b_os.rowClicked.connect(lambda k: self.navigate.emit("devices", f'os:"{k}"'))
-        grid.addWidget(_box("Devices by role", self.b_roles), 0, 0)
-        grid.addWidget(_box("Devices by vendor", self.b_vendors), 0, 1)
-        grid.addWidget(_box("Endpoints by type", self.b_hosts, "From MAC vendor, open ports and LLDP; correct any in the Hosts list."), 0, 2)
-        grid.addWidget(_box("Busiest subnets", self.b_subnets, "Addresses seen in use. Unswept subnets can only undercount."), 1, 0)
-        grid.addWidget(_box("Needs attention", self.b_find, "Things to check before you rely on this inventory."), 1, 1)
-        grid.addWidget(_box("Software versions", self.b_os, "OS versions reported by the devices."), 1, 2)
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
+        self.grid = grid
+        self.boxes = [
+            _box("Devices by role", self.b_roles),
+            _box("Devices by vendor", self.b_vendors),
+            _box("Endpoints by type", self.b_hosts, "From MAC vendor, open ports and LLDP; correct any in the Hosts list."),
+            _box("Busiest subnets", self.b_subnets, "Addresses seen in use. Unswept subnets can only undercount."),
+            _box("Needs attention", self.b_find, "Things to check before you rely on this inventory."),
+            _box("Software versions", self.b_os, "OS versions reported by the devices."),
+        ]
+        self._cols = 0
+        self._reflow(3)
         self.lay.addWidget(self.grid_w)
         self.lay.addStretch(1)
+
+    def _reflow(self, cols: int):
+        """Cards and charts in as many columns as the width allows."""
+        if cols == self._cols:
+            return
+        self._cols = cols
+        card_cols = {3: 6, 2: 3, 1: 2}[cols]
+        for i, c in enumerate(self.cards):
+            self.cards_grid.addWidget(c, i // card_cols, i % card_cols)
+        for i in range(6):
+            self.cards_grid.setColumnStretch(i, 1 if i < card_cols else 0)
+        for i, b in enumerate(self.boxes):
+            self.grid.addWidget(b, i // cols, i % cols)
+        for i in range(3):
+            self.grid.setColumnStretch(i, 1 if i < cols else 0)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        w = e.size().width()
+        self._reflow(3 if w >= 1080 else 2 if w >= 700 else 1)
 
     def set_snapshot(self, s: Snapshot, project_name: str = ""):
         inv = s.inv
@@ -258,14 +288,14 @@ class Dashboard(QWidget):
         devices = [d for d in inv.devices.values()]
         hosts = [h for ip, h in inv.hosts.items() if ip not in inv.ip_to_device]
         findings = finding_rows(s)
-        attention = [f for f in findings if f["severity"] in ("attention", "check")]
+        attention = [f for f in findings if f["severity"].lower() in ("attention", "check")]
         self.c_dev.set(len(devices), f"+ {len(s.stubs)} seen but not polled" if s.stubs else "all polled")
         swept = sum(1 for sub in inv.subnets.values() if sub.swept)
         self.c_host.set(len(hosts), f"{sum(1 for h in hosts if h.mac)} with a MAC address")
         self.c_sub.set(len(inv.subnets), f"{swept} swept")
         self.c_vlan.set(len(s.vlans), f"{sum(1 for n, _ in s.vlans.values() if len(n) > 1)} named inconsistently" if any(len(n) > 1 for n, _ in s.vlans.values()) else "")
         kinds = Counter(a.get("kind") for _, _, a in s.links)
-        self.c_link.set(len(s.links), f"{kinds.get('lldp', 0) + kinds.get('cdp', 0)} cabled · {kinds.get('l3', 0)} routed")
+        self.c_link.set(len(s.links), f"{kinds.get('lldp', 0) + kinds.get('cdp', 0)} cabled · {kinds.get('l3', 0)} routed only")
         self.c_find.set(len(attention), f"{len(findings)} findings in total")
 
         roles = Counter((inv.note(d.id).get("role") or d.role) for d in devices)
@@ -278,7 +308,7 @@ class Dashboard(QWidget):
         self.b_subnets.set_rows([(r["cidr"], r["cidr"] + (f"  VLAN {r['vlan']}" if r["vlan"] else ""), r["utilisation_pct"],
                                   "#16a34a" if r["utilisation_pct"] < 60 else "#d97706" if r["utilisation_pct"] < 85 else "#dc2626", "subnet", "subnet", "%") for r in busiest])
         cats = Counter(f["category"] for f in findings)
-        sev = {f["category"]: f["severity"] for f in findings}
+        sev = {f["category"]: f["severity"].lower() for f in findings}
         color = {"attention": "#dc2626", "check": "#d97706", "info": "#94a3b8"}
         order = {"attention": 0, "check": 1, "info": 2}
         self.b_find.set_rows([(c, c, n, color[sev[c]], "", "", "") for c, n in sorted(cats.items(), key=lambda kv: (order[sev[kv[0]]], -kv[1]))[:8]])

@@ -8,3 +8,5 @@ netmap.toml
 .pytest_cache/
 dist/
 build/
+.claude/
+packaging/version_info.txt

@@ -84,8 +84,12 @@ def classify_host(ports: list[dict], vendor: str, hostname: str) -> str:
     v = (vendor or "").lower()
 
     def vendor_role() -> str:
+        if v in ("hp", "hp inc", "hewlett packard"):
+            return "printer"  # HP's own OUIs are mostly on printers; its PCs use Intel/Realtek NICs
         for role, keys in VENDOR_ROLES:
             if any(k in v for k in keys):
+                if role == "printer" and "enterprise" in v:
+                    continue  # Hewlett Packard Enterprise: servers and Aruba kit, not printers
                 return role
         return ""
 

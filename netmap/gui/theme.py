@@ -83,22 +83,23 @@ def apply_theme(app: QApplication, mode: str = "system") -> None:
     if _native_style is None:
         _native_style = app.style().name()
     hints = app.styleHints()
+    # Styles are set by name so Qt creates and owns them; handing it a Python-created
+    # QStyle leads to a double free when the next theme replaces it.
     if mode == "dark":
-        app.setStyle(QStyleFactory.create("Fusion"))
+        app.setStyle("Fusion")
         app.setPalette(_dark_palette())
         _set_scheme(hints, Qt.ColorScheme.Dark)
     elif mode == "light":
-        app.setStyle(QStyleFactory.create("Fusion"))
+        app.setStyle("Fusion")
         app.setPalette(_light_palette())
         _set_scheme(hints, Qt.ColorScheme.Light)
     else:
         _set_scheme(hints, Qt.ColorScheme.Unknown)
-        style = QStyleFactory.create(_native_style) if _native_style else None
-        if style is not None:
-            app.setStyle(style)
+        if _native_style and _native_style in [k.lower() for k in QStyleFactory.keys()] + QStyleFactory.keys():
+            app.setStyle(_native_style)
         app.setPalette(app.style().standardPalette())
         if hints.colorScheme() == Qt.ColorScheme.Dark and _native_style and _native_style.lower() not in ("windows11", "macos"):
-            app.setStyle(QStyleFactory.create("Fusion"))
+            app.setStyle("Fusion")
             app.setPalette(_dark_palette())
     app.setStyleSheet(EXTRA_QSS)
 

@@ -60,6 +60,8 @@ def sort_key(kind: str, v):
             return (1, 0.0)
     if kind == "bool":
         return (0, 1 if v else 0)
+    if kind == "severity":
+        return (_SEV_ORDER.get(str(v).lower(), 9),)
     return natural_key(v)
 
 
@@ -83,6 +85,28 @@ def fmt_duration(seconds) -> str:
     if m:
         return f"{m}m {s % 60}s" if m < 10 else f"{m}m"
     return f"{s}s"
+
+
+_SHORT_PORTS = [
+    ("hundredgigabitethernet", "Hu"), ("fortygigabitethernet", "Fo"), ("twentyfivegige", "Twe"), ("tengigabitethernet", "Te"),
+    ("fivegigabitethernet", "Fi"), ("twogigabitethernet", "Tw"), ("gigabitethernet", "Gi"), ("fastethernet", "Fa"),
+    ("port-channel", "Po"), ("bundle-ether", "BE"), ("ethernet", "Eth"), ("management", "Mgmt"),
+]
+_MAC_RE = re.compile(r"^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$", re.I)
+
+
+def short_port(name: str) -> str:
+    """GigabitEthernet1/0/2 -> Gi1/0/2: the form people write on diagrams."""
+    n = (name or "").strip()
+    low = n.lower()
+    for long, short in _SHORT_PORTS:
+        if low.startswith(long):
+            return short + n[len(long):].lstrip()
+    return n
+
+
+def is_mac(s: str) -> bool:
+    return bool(_MAC_RE.match((s or "").strip()))
 
 
 def fmt_speed(mbps) -> str:
@@ -122,7 +146,18 @@ class Snapshot:
                 if f.if_index is not None:
                     self.port_macs[(d.id, f.if_index)] += 1
         self.stubs = {n: a for n, a in self.g.nodes(data=True) if a.get("role") == "unpolled"}
-        self.links = [(u, v, a) for u, v, a in self.g.edges(data=True) if a.get("kind") in ("lldp", "cdp", "l3")]
+        # switches/routers that announced themselves, answer in ARP, but did not answer SNMP
+        self.silent_infra = {n: a for n, a in self.g.nodes(data=True)
+                             if a.get("kind") == "host" and a.get("announced") and a.get("role") in ("switch", "l3switch", "router", "firewall")}
+        infra = {"switch", "l3switch", "router", "firewall", "wireless", "unpolled"}
+
+        def is_infra(n):
+            a = self.g.nodes[n]
+            return a.get("kind") == "device" or a.get("role") in infra
+
+        # links between network kit; a phone's or server's LLDP link is on its host record instead
+        self.links = [(u, v, a) for u, v, a in self.g.edges(data=True) if a.get("kind") in ("lldp", "cdp", "l3") and is_infra(u) and is_infra(v)]
+        self.endpoint_links = sum(1 for u, v, a in self.g.edges(data=True) if a.get("kind") in ("lldp", "cdp") and not (is_infra(u) and is_infra(v)))
 
     # ---- helpers ----
     def name(self, node_id: str) -> str:
@@ -253,14 +288,14 @@ def host_rows(s: Snapshot) -> list[dict]:
 # ---------------------------------------------------------------- subnets / IPAM
 SUBNET_COLUMNS = [
     Column("cidr", "Subnet", "cidr", 125),
-    Column("name", "Name", width=150),
-    Column("vlan", "VLAN", width=60),
-    Column("gateways", "Gateway(s)", width=160),
-    Column("usable", "Usable", "int", 70),
-    Column("used", "In use", "int", 70),
-    Column("free", "Free", "int", 70),
+    Column("vlan", "VLAN", width=55),
     Column("util", "Utilisation", "pct", 130),
-    Column("swept", "Swept", "bool", 60, tip="whether every address was probed; if not, 'in use' is a floor"),
+    Column("used", "In use", "int", 65),
+    Column("free", "Free", "int", 65),
+    Column("usable", "Usable", "int", 65),
+    Column("gateways", "Gateway(s)", width=170),
+    Column("name", "Name", width=140),
+    Column("swept", "Swept", "bool", 55, tip="whether every address was probed; if not, 'in use' is a floor"),
     Column("site", "Site", width=110),
     Column("notes", "Notes", width=160),
     Column("sources", "Found via", width=120, visible=False),
@@ -473,7 +508,7 @@ def hardware_rows(s: Snapshot, device_id: Optional[str] = None) -> list[dict]:
 
 # ---------------------------------------------------------------- findings
 FINDING_COLUMNS = [
-    Column("severity", "Level", width=70),
+    Column("severity", "Level", "severity", 85),
     Column("category", "Finding", width=190),
     Column("item", "Item", width=170),
     Column("detail", "Detail", width=260),
@@ -489,12 +524,16 @@ def finding_rows(s: Snapshot) -> list[dict]:
     rows: list[dict] = []
 
     def add(sev, cat, node, item, detail, why):
-        rows.append({"_id": node, "_kind": s.kind(node) or "", "_role": s.role(node), "severity": sev, "category": cat, "item": item, "detail": detail, "why": why})
+        rows.append({"_id": node, "_kind": s.kind(node) or "", "_role": s.role(node), "severity": sev.capitalize(), "category": cat, "item": item, "detail": detail, "why": why})
 
     for sid, a in s.stubs.items():
         via = ", ".join(sorted({s.name(n) for n in s.g.neighbors(sid)}))
         add("attention", "Neighbour not polled", sid, a.get("label", sid), f"ip={a.get('ip') or '-'}  {a.get('model', '')[:60]}  seen from {via}",
             "Announced over LLDP/CDP but no credential worked, or it is outside the scope: an unmanaged device or one missing from the handover")
+    for hid, a in s.silent_infra.items():
+        via = ", ".join(sorted({s.name(n) for n in s.g.neighbors(hid) if s.kind(n) == "device"}))
+        add("attention", "Neighbour not polled", hid, a.get("label", hid), f"ip={hid}  {a.get('platform', '')[:60]}  seen from {via}",
+            "A switch or router that announces itself over LLDP/CDP and is on the network, but no credential worked: unmanaged, or missing from the handover")
     for d in inv.devices.values():
         quiet = [e for e in d.errors if e == "no answer on rescan"]
         if quiet:
@@ -535,7 +574,7 @@ def finding_rows(s: Snapshot) -> list[dict]:
         if ip in inv.hosts and inv.hosts[ip].snmp_failed:
             continue
         add("info", "No SNMP answer", ip, ip, f"probed via {via}", "Probed inside the scope and silent: a host, filtered, or different credentials")
-    rows.sort(key=lambda r: (_SEV_ORDER.get(r["severity"], 9), r["category"], sort_key("ip", r["item"])))
+    rows.sort(key=lambda r: (_SEV_ORDER.get(r["severity"].lower(), 9), r["category"], sort_key("ip", r["item"])))
     return rows
 
 

@@ -32,6 +32,7 @@ ROW_ROLE = Qt.UserRole + 2
 SORT_ROLE = Qt.UserRole + 3
 
 SEVERITY_COLORS = {"attention": "#dc2626", "check": "#d97706", "info": "#64748b"}
+ICON_COLUMNS = {"name", "cidr", "a", "device", "ip"}
 
 
 def display(col: Column, v) -> str:
@@ -91,7 +92,7 @@ class RowsModel(QAbstractTableModel):
             return row.get("_id")
         if role == ROW_ROLE:
             return row
-        if role == Qt.DecorationRole and index.column() == 0 and (row.get("_role") or row.get("_kind") == "subnet"):
+        if role == Qt.DecorationRole and index.column() == 0 and col.key in ICON_COLUMNS and (row.get("_role") or row.get("_kind") == "subnet"):
             key = (row.get("_role"), row.get("_kind"))
             if key not in self._icons:
                 kind = row.get("_kind")
@@ -102,7 +103,7 @@ class RowsModel(QAbstractTableModel):
             return s if len(s) > 30 else None
         if role == Qt.ForegroundRole:
             if col.key == "severity":
-                return QBrush(QColor(SEVERITY_COLORS.get(str(v), "#64748b")))
+                return QBrush(QColor(SEVERITY_COLORS.get(str(v).lower(), "#64748b")))
             if col.key == "status" and v in ("down", "disabled"):
                 return QBrush(QColor("#94a3b8"))
             if (col.key == "speed" and row.get("_mismatch")) or (col.key == "names" and row.get("_conflict")):

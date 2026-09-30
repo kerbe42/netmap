@@ -74,7 +74,12 @@ def classify_role(dev: Device) -> str:
     if is_router and not is_switch:
         return "router"
     if is_switch or dev.fdb:
-        return "l3switch" if l3 else "switch"
+        # sysServices says "routing" on nearly every managed switch, even an access switch whose
+        # only address is its management SVI. Call it L3 only with evidence that it routes:
+        # addresses on two or more interfaces, or routes other than connected and default.
+        addressed = sum(1 for i in dev.interfaces if i.ips)
+        learned = any(r.dest != "0.0.0.0/0" and r.type != 3 and r.nexthop not in ("", "0.0.0.0") for r in dev.routes)
+        return "l3switch" if l3 and (addressed >= 2 or learned) else "switch"
     if re.search(r"vmware esx|esxi|\bwindows\b|\blinux\b|freebsd|ubuntu|debian|centos|red hat|net-snmp", d):
         return "server"
     if l3:

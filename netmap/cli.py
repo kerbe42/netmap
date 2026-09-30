@@ -98,6 +98,11 @@ def _outputs(inv: Inventory, args) -> None:
     if getattr(args, "dot", None):
         export_dot(g, args.dot)
         log.info("wrote %s", args.dot)
+    if getattr(args, "drawio", None):
+        from .diagram import export_drawio
+
+        export_drawio(inv, g, args.drawio)
+        log.info("wrote %s", args.drawio)
     if getattr(args, "xlsx", None):
         export_xlsx(inv, g, args.xlsx)
     if getattr(args, "csv", None):
@@ -177,12 +182,30 @@ def cmd_render(args) -> int:
     return 0
 
 
+def cmd_diff(args) -> int:
+    import csv
+
+    from .diff import compare
+
+    d = compare(Inventory.load(args.old), Inventory.load(args.new))
+    print(d.text())
+    if args.csv:
+        with open(args.csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["kind", "change", "item", "name", "detail"])
+            for c in d.changes:
+                w.writerow([c.kind, c.change, c.item, c.name, c.detail])
+        log.info("wrote %s", args.csv)
+    return 0
+
+
 def _add_output_args(p, html_default=None):
     p.add_argument("--html", default=html_default, help="write interactive HTML map")
     p.add_argument("--graphml", help="write GraphML (yEd, Gephi, Cytoscape)")
     p.add_argument("--dot", help="write Graphviz DOT")
     p.add_argument("--csv", help="write CSV inventory files with this prefix, e.g. out/mna-")
     p.add_argument("--xlsx", help="write a multi-sheet Excel inventory workbook (devices, IPAM, VLANs, links, hosts, gaps)")
+    p.add_argument("--drawio", help="write a draw.io diagram (physical and logical pages; opens in diagrams.net, converts to Visio)")
     p.add_argument("--no-summary", dest="summary", action="store_false", help="don't print the text summary")
 
 
@@ -213,7 +236,7 @@ def _add_sweep_args(p):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="netmap", description="Crawl a network via SNMP (LLDP/CDP/ARP/routes/FDB) and build a topology map.")
+    p = argparse.ArgumentParser(prog="netmap", description="Inventory a network over SNMP (LLDP/CDP, routes, ARP, MAC tables, VLANs, hardware) and map its topology.")
     p.add_argument("--version", action="version", version=f"netmap {__version__}")
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v info (default), -vv debug")
     p.add_argument("-q", "--quiet", action="store_true")
@@ -254,6 +277,14 @@ def build_parser():
 
     sh = sub.add_parser("show", help="print the text summary of a saved map")
     sh.add_argument("--map", "-m", default="netmap.json")
+
+    df = sub.add_parser("diff", help="what changed between two scans of the same network")
+    df.add_argument("old", help="earlier map / project")
+    df.add_argument("new", help="later map / project")
+    df.add_argument("--csv", help="also write the changes to this CSV file")
+
+    gu = sub.add_parser("gui", help="open the desktop app (needs the 'gui' extra: pip install netmap[gui])")
+    gu.add_argument("project", nargs="?", help="project to open")
     return p
 
 
@@ -280,6 +311,15 @@ def main(argv=None) -> None:
         inv = Inventory.load(args.map)
         print(text_summary(inv, build_graph(inv)))
         rc = 0
+    elif args.cmd == "diff":
+        rc = cmd_diff(args)
+    elif args.cmd == "gui":
+        try:
+            from .gui.app import main as gui_main
+        except ImportError as e:
+            log.error("the desktop app needs PySide6: pip install 'netmap[gui]' (%s)", e)
+            sys.exit(2)
+        sys.exit(gui_main([args.project] if args.project else []))
     else:
         rc = 2
     sys.exit(rc)

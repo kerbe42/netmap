@@ -5,7 +5,7 @@ import ipaddress
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QSizePolicy, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QGridLayout, QLabel, QSizePolicy, QToolTip, QVBoxLayout, QWidget
 
 from ..views import subnet_addresses
 
@@ -107,18 +107,19 @@ class IpGrid(QWidget):
         self.block.currentIndexChanged.connect(self._show_block)
         self.cells = _Cells()
         self.cells.nodeClicked.connect(self.nodeClicked)
-        legend = QHBoxLayout()
-        legend.setSpacing(10)
-        for st in ("gateway", "device", "host", "silent", "free"):
+        legend = QGridLayout()
+        legend.setHorizontalSpacing(6)
+        legend.setVerticalSpacing(2)
+        for n, st in enumerate(("gateway", "device", "host", "silent", "free")):
             sw = QLabel()
             sw.setFixedSize(11, 11)
             colr = STATE_COLORS.get(st, "#e2e8f0")
             sw.setStyleSheet(f"background:{colr}; border-radius:2px; border:1px solid #94a3b8;")
-            legend.addWidget(sw)
             t = QLabel(STATE_TITLES[st])
             t.setObjectName("muted")
-            legend.addWidget(t)
-        legend.addStretch(1)
+            legend.addWidget(sw, n // 3, (n % 3) * 2)
+            legend.addWidget(t, n // 3, (n % 3) * 2 + 1)
+        legend.setColumnStretch(6, 1)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.block)

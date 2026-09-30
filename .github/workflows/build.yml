@@ -1,9 +1,9 @@
 name: build
 
-# Tests on every push; single-file binaries for Windows and Linux on every push and tag.
-# The Windows .exe is the artefact that matters: it needs no Python on the machine that
-# runs it, which is the only thing you can count on when working inside someone else's
-# network. Tag a release (v0.2.0) and the binaries are attached to it.
+# Every push: the test suite on Linux and on Windows (core, GUI and real-SNMP end-to-end
+# tests), the single-file command-line binaries, and the Windows desktop app - which is
+# started in its self-test mode (every page, every export) and screenshotted before it is
+# packaged as an installer and a portable zip. A v* tag attaches all of it to a release.
 on:
   push:
     branches: [main]
@@ -16,25 +16,35 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e . pytest snmpsim pysmi
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 fonts-dejavu-core
+      - run: pip install -e ".[gui]" pytest snmpsim pysmi
       - run: python -m pytest -q tests
 
-  build:
+  cli:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            artifact: netmap-windows-x64
+            artifact: netmap-cli-windows-x64
             binary: dist/netmap.exe
           - os: ubuntu-latest
-            artifact: netmap-linux-x64
+            artifact: netmap-cli-linux-x64
             binary: dist/netmap
     runs-on: ${{ matrix.os }}
     steps:
@@ -44,31 +54,95 @@ jobs:
           python-version: "3.12"
       - run: pip install -e . pyinstaller
       - run: pyinstaller netmap.spec --noconfirm
-      # Smoke-test the frozen binary: --version proves it starts, and rendering the example
-      # map proves the bundled vis-network and OUI table came along and openpyxl works.
+      # --version proves it starts; rendering the example map proves the bundled
+      # vis-network and OUI table came along and openpyxl works.
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         run: |
           .\dist\netmap.exe --version
-          .\dist\netmap.exe render -m examples/lab-map.json --html smoke.html --xlsx smoke.xlsx --csv smoke- --no-summary
+          .\dist\netmap.exe render -m examples/lab-map.json --html smoke.html --xlsx smoke.xlsx --csv smoke- --drawio smoke.drawio --no-summary
           if ((Get-Item smoke.html).Length -lt 100000) { throw "vis-network was not embedded" }
           if (!(Test-Path smoke.xlsx)) { throw "xlsx export failed" }
+          if (!(Test-Path smoke.drawio)) { throw "drawio export failed" }
           if (!(Select-String -Path smoke-hosts.csv -Pattern "." -Quiet)) { throw "csv export failed" }
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: |
           ./dist/netmap --version
-          ./dist/netmap render -m examples/lab-map.json --html smoke.html --xlsx smoke.xlsx --csv smoke- --no-summary
+          ./dist/netmap render -m examples/lab-map.json --html smoke.html --xlsx smoke.xlsx --csv smoke- --drawio smoke.drawio --no-summary
           test "$(stat -c%s smoke.html)" -gt 100000 || { echo "vis-network was not embedded"; exit 1; }
           test -s smoke.xlsx || { echo "xlsx export failed"; exit 1; }
+          test -s smoke.drawio || { echo "drawio export failed"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
 
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[gui]" pyinstaller
+      - name: Build the app folder
+        run: pyinstaller packaging/netmap-gui.spec --noconfirm
+      - name: Version
+        id: ver
+        shell: bash
+        run: echo "version=$(python -c 'import netmap; print(netmap.__version__)')" >> "$GITHUB_OUTPUT"
+      - name: Self-test the frozen app (offscreen)
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath dist\NetMap\NetMap.exe -ArgumentList "--selftest","--screenshots","shots-offscreen","netmap\data\sample-campus.netmap" -Wait -PassThru
+          Get-Content shots-offscreen\selftest.txt
+          if ($p.ExitCode -ne 0) { throw "self-test failed ($($p.ExitCode))" }
+          .\dist\NetMap\netmap-cli.exe --version
+          .\dist\NetMap\netmap-cli.exe show -m netmap\data\sample-campus.netmap | Select-Object -First 5
+      - name: Screenshots on the real Windows desktop
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath dist\NetMap\NetMap.exe -ArgumentList "--selftest","--screenshots","shots-native","netmap\data\sample-campus.netmap" -Wait -PassThru
+          if (Test-Path shots-native\selftest.txt) { Get-Content shots-native\selftest.txt }
+          if ($p.ExitCode -ne 0) { throw "native self-test failed ($($p.ExitCode))" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netmap-desktop-screenshots
+          path: |
+            shots-offscreen
+            shots-native
+          if-no-files-found: ignore
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          # the marker file makes the app keep its settings beside itself instead of in the registry
+          Set-Content -Path dist\NetMap\netmap-portable.ini -Value "; NetMap keeps its settings in this folder while this file exists."
+          Compress-Archive -Path dist\NetMap -DestinationPath "dist\NetMap-${{ steps.ver.outputs.version }}-portable.zip"
+          Remove-Item dist\NetMap\netmap-portable.ini
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" packaging\netmap.iss
+          if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
+          Get-ChildItem dist\*.exe, dist\*.zip | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netmap-desktop-windows-x64
+          path: |
+            dist/NetMap-*-setup.exe
+            dist/NetMap-*-portable.zip
+          if-no-files-found: error
+
   release:
-    needs: [test, build]
+    needs: [test, cli, desktop]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -76,11 +150,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Name the binaries after their platform
+      - name: Collect release files
         run: |
           mkdir -p release
-          cp artifacts/netmap-windows-x64/netmap.exe release/netmap.exe
-          cp artifacts/netmap-linux-x64/netmap release/netmap-linux-x64
+          cp artifacts/netmap-desktop-windows-x64/* release/
+          cp artifacts/netmap-cli-windows-x64/netmap.exe release/netmap.exe
+          cp artifacts/netmap-cli-linux-x64/netmap release/netmap-linux-x64
           chmod +x release/netmap-linux-x64
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
       - uses: softprops/action-gh-release@v2
