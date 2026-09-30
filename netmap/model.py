@@ -45,6 +45,20 @@ class Interface:
     mode: str = ""  # access | trunk | "" (unknown / routed)
     lag: str = ""  # name of the port-channel / aggregate this port belongs to
     last_change_s: int = 0  # sysUpTime at the last oper-status change, in seconds
+    duplex: str = ""  # full | half | ""
+    in_octets: int = 0
+    out_octets: int = 0
+    in_errors: int = 0
+    out_errors: int = 0
+    in_discards: int = 0
+    out_discards: int = 0
+    counters_at: float = 0.0  # when the counters above were read
+    in_util_pct: float = 0.0  # utilisation over the last interval (needs two scans)
+    out_util_pct: float = 0.0
+    err_rate: float = 0.0  # errors per second over the last interval
+    poe_class: str = ""  # PoE class (e.g. "3", "4")
+    poe_watts: float = 0.0  # power drawn, watts
+    poe_status: str = ""  # delivering | searching | fault | disabled | ""
 
 
 @dataclass
@@ -132,6 +146,8 @@ class Device:
     redundancy: list = field(default_factory=list)  # FHRP groups: {proto:hsrp|vrrp, group, vip, state, priority, if_index}
     peers: list = field(default_factory=list)  # routing adjacencies: {proto:ospf|bgp, addr, state, extra}
     stp: dict = field(default_factory=dict)  # {root, root_port, priority, is_root}
+    poe_budget_w: float = 0.0  # total PoE the switch can supply (watts)
+    poe_used_w: float = 0.0  # PoE currently drawn (watts)
     ips: list[str] = field(default_factory=list)
     macs: list[str] = field(default_factory=list)
     collected_at: float = 0.0
