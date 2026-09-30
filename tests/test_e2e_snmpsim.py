@@ -28,7 +28,7 @@ def test_cli_crawl_v2c(agents, tmp_path):
     inv = json.loads((tmp_path / "map.json").read_text())
     assert set(inv["devices"]) == {"127.0.0.1", "127.0.0.2", "127.1.0.2"}
     sw1 = inv["devices"]["127.0.0.2"]
-    assert sw1["name"] == "dist-sw1" and sw1["role"] == "l3switch" and sw1["serial"] == "FOC1234SW1X" and sw1["credential"] == "v2c:lab***"
+    assert sw1["name"] == "dist-sw1" and sw1["role"] == "l3switch" and sw1["serial"] == "FOC1234SW1X" and sw1["credential"].startswith("v2c #") and "lab" not in sw1["credential"]
     assert {n["remote_name"] for n in sw1["neighbors"]} == {"acc-sw2", "ap-lobby", "branch-fw", "core-rtr.example.test"}
     assert any(f["mac"] == labnet.MAC_C and f["vlan"] == 20 and f["if_index"] == 5 for f in sw1["fdb"])
     assert any(r_["dest"] == "0.0.0.0/0" and r_["nexthop"] == "127.0.0.1" for r_ in sw1["routes"])
@@ -89,7 +89,7 @@ def test_cli_target_subnets_without_seeds(agents, tmp_path):
     # a named range that answers nothing is reported rather than silently dropped
     r2 = _run_cli(["crawl", "--target", "127.9.9.0/30", "--probe-all", "--sweep-max-size", "30", "--port", str(PORT),
                    "-C", "lab", "--timeout", "1", "--retries", "0", "--out", "empty.json", "--no-summary"], cwd=tmp_path)
-    assert r2.returncode == 0 and "none replied" in r2.stderr
+    assert r2.returncode == 1 and "none replied" in r2.stderr
 
 
 def test_cli_crawl_v3_fallback(agents, tmp_path):
