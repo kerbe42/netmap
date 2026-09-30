@@ -263,6 +263,18 @@ Beyond the network gear, NetMap can go deeper where you have credentials:
 * **Switch faceplate**: a switch's **Ports panel** tab draws its ports as they sit on the front of the unit,
   coloured by up/down/disabled/errors, marking PoE ports and ports with a neighbour.
 
+## Broad discovery (unauthenticated)
+
+Beyond SNMP and the usual host probes, NetMap fingerprints assets across many protocols with no
+credentials — the way runZero does — as part of **Identify hosts**:
+
+* **WS-Discovery** (printers, ONVIF cameras, Windows), **IPMI** (server lights-out/BMC controllers), and
+  **OT/ICS**: **Modbus**, **BACnet** and **EtherNet/IP** — so industrial controllers, building-automation
+  controllers and BMCs are found and typed (roles: PLC, building automation, BMC) with vendor/model where the
+  protocol gives it.
+* **Coverage gaps**: every private network the routing tables reference but the scan never reached is flagged
+  ("Subnet not yet scanned"), so you can see and close what you have not covered.
+
 ## Query and automation
 
 * **Query / search** (**Tools ▸ Query**, Ctrl+Shift+F): a small query language over the whole inventory —

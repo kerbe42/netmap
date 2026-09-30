@@ -197,6 +197,13 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
 
             m = await probe_management(inv)
             log.info("management-plane check: %d device(s) expose a management port", m)
+            try:
+                from .probes_extra import probe_extra
+
+                x = await probe_extra(inv)
+                log.info("broad protocol probes: %d host(s) answered (WS-Discovery/IPMI/OT)", x)
+            except ImportError:
+                pass
         if req.port_scan:
             from .sweep import nmap_inspect
 
