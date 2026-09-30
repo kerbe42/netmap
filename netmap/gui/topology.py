@@ -61,6 +61,7 @@ LAYOUTS = {"layered": "Layered (core on top)", "organic": "Organic", "radial": "
 EDGE_TITLES = {"lldp": "LLDP", "cdp": "CDP", "l3": "Routing", "member": "Subnet", "fdb": "MAC table"}
 
 NODE_SIZE = {"device": 40.0, "host": 26.0, "subnet": 30.0}
+LABEL_MAX_SCALE = 1.7
 
 
 def map_label(name: str) -> str:
@@ -124,8 +125,8 @@ class NodeItem(QGraphicsObject):
 
     def boundingRect(self) -> QRectF:
         s = self.size
-        w = max(s + (s * 0.6 if self.kind == "subnet" else 0), self._text_w) + 8
-        return QRectF(-w / 2, -s / 2 - 5, w, s + 8 + self._text_h + 4)
+        w = max(s + (s * 0.6 if self.kind == "subnet" else 0), self._text_w * LABEL_MAX_SCALE) + 8
+        return QRectF(-w / 2, -s / 2 - 8, w, s + 12 + self._text_h * LABEL_MAX_SCALE + 4)
 
     def shape(self):
         p = QPainterPath()
@@ -162,7 +163,13 @@ class NodeItem(QGraphicsObject):
             return
         text = QColor("#e5e7eb") if dark else QColor("#111827")
         muted = QColor("#94a3b8") if dark else QColor("#4b5563")
-        y = self.size / 2 + 3
+        # zoomed out to fit a whole site, 8pt captions become unreadable: let them grow in
+        # the diagram as the view shrinks (up to a limit), so they keep a legible size on screen
+        k = min(max(1.0, 0.85 / max(lod, 0.01)), LABEL_MAX_SCALE)
+        painter.save()
+        painter.translate(0, self.size / 2 + 3)
+        painter.scale(k, k)
+        y = 0.0
         tr = QRectF(-self._text_w / 2, y, self._text_w, self._text_h)
         bg = QColor(pal.color(QPalette.Base))
         bg.setAlpha(200)
@@ -177,6 +184,7 @@ class NodeItem(QGraphicsObject):
             painter.setFont(self._small)
             painter.setPen(muted)
             painter.drawText(QRectF(tr.left(), y + fm.height(), tr.width(), tr.height() - fm.height()), Qt.AlignHCenter | Qt.AlignTop, self._sub)
+        painter.restore()
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:

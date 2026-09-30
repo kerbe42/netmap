@@ -112,6 +112,8 @@ jobs:
           $p = Start-Process -FilePath dist\NetMap\NetMap.exe -ArgumentList "--selftest","--screenshots","shots-native","netmap\data\sample-campus.netmap" -Wait -PassThru
           if (Test-Path shots-native\selftest.txt) { Get-Content shots-native\selftest.txt }
           if ($p.ExitCode -ne 0) { throw "native self-test failed ($($p.ExitCode))" }
+          # and once in the app's own light theme, independent of the runner's classic Windows look
+          $p = Start-Process -FilePath dist\NetMap\NetMap.exe -ArgumentList "--selftest","--theme","light","--screenshots","shots-light","netmap\data\sample-campus.netmap" -Wait -PassThru
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -119,6 +121,7 @@ jobs:
           path: |
             shots-offscreen
             shots-native
+            shots-light
           if-no-files-found: ignore
       - name: Portable zip
         shell: pwsh

@@ -300,7 +300,8 @@ class DataPage(QWidget):
         if not self._sorted_once and rows:
             self._sorted_once = True
             hdr = self.view.horizontalHeader()
-            if hdr.sortIndicatorSection() >= self.model.columnCount():
+            if not self._restored or hdr.sortIndicatorSection() >= self.model.columnCount():
+                # Qt's default indicator is descending; a fresh list reads A-Z by its first column
                 self.view.sortByColumn(0, Qt.AscendingOrder)
             else:
                 self.view.sortByColumn(hdr.sortIndicatorSection(), hdr.sortIndicatorOrder())
@@ -396,9 +397,10 @@ class DataPage(QWidget):
 
     def _restore_state(self):
         st = QSettings().value(f"tables/{self.key}/header")
+        self._restored = False
         if st is not None:
             try:
-                self.view.horizontalHeader().restoreState(st)
+                self._restored = bool(self.view.horizontalHeader().restoreState(st))
             except TypeError:
                 pass
         self.view.horizontalHeader().sectionResized.connect(lambda *_: self._save_state())
