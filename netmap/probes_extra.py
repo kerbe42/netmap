@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import socket
 import struct
 import xml.etree.ElementTree as ET
@@ -287,25 +288,52 @@ def parse_modbus_id(data: bytes) -> dict:
     }
 
 
+def _recv_exact(sock, n: int) -> bytes:
+    """Read exactly n bytes (or fewer at EOF/timeout)."""
+    buf = bytearray()
+    while len(buf) < n:
+        try:
+            chunk = sock.recv(n - len(buf))
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+    return bytes(buf)
+
+
+def _modbus_exchange(sock, unit: int, txid: int) -> bytes:
+    """One Read-Device-Identification round trip: send, then read the 7-byte MBAP header and
+    the `length-1` PDU bytes it announces (bounded to a Modbus ADU)."""
+    sock.sendall(_build_modbus_request(unit=unit, txid=txid))
+    head = _recv_exact(sock, 7)
+    if len(head) < 7:
+        return head
+    length = struct.unpack(">H", head[4:6])[0]
+    remaining = max(0, min(length - 1, 253))
+    return head + (_recv_exact(sock, remaining) if remaining else b"")
+
+
 def modbus_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
-    """Connect to TCP/502, send a Read-Device-ID request, parse the reply. None on failure."""
+    """Connect to TCP/502, send a Read-Device-ID request (function 43/14, read-only), parse the
+    reply. Unit id 0xFF (the Modbus/TCP convention for 'the device itself') is tried first,
+    then 0x01 if that produced no identification objects. None on failure."""
     if not is_usable_ip(ip):
         return None
     sock = None
     try:
         sock = socket.create_connection((ip, 502), timeout=timeout)
         sock.settimeout(timeout)
-        sock.sendall(_build_modbus_request())
-        chunks = bytearray()
-        while len(chunks) < 4096:
-            buf = sock.recv(2048)
-            if not buf:
-                break
-            chunks += buf
-            if len(chunks) >= 7:  # once the MBAP length is known we have enough to parse
-                break
-        res = parse_modbus_id(bytes(chunks))
-        return res or None
+        best: Optional[dict] = None
+        for txid, unit in ((1, 0xFF), (2, 0x01)):
+            try:
+                res = parse_modbus_id(_modbus_exchange(sock, unit, txid))
+            except OSError:
+                res = {}
+            if res and res.get("objects"):
+                return res
+            best = best or (res or None)
+        return best
     except OSError:
         return None
     finally:
@@ -374,6 +402,8 @@ def parse_bacnet(data: bytes) -> Optional[dict]:
         return None
     try:
         off = 4                              # skip BVLC type, function, length
+        if data[1] == 0x04:                  # Forwarded-NPDU (via a BBMD): 6-byte original source address
+            off += 6
         off += 1                             # NPDU version
         control = data[off]
         off += 1
@@ -403,6 +433,8 @@ def parse_bacnet(data: bytes) -> Optional[dict]:
                 continue
             if tag_num == 12 and len(val) == 4:              # BACnetObjectIdentifier
                 objid = struct.unpack(">I", val)[0]
+                if (objid >> 22) != BACNET_OBJ_DEVICE:        # an I-Am names the *device* object
+                    return None
                 device_id = objid & 0x3FFFFF                  # low 22 bits = instance number
             elif tag_num == 2 and val:                       # application unsigned integer
                 unsigned_vals.append(int.from_bytes(val, "big"))
@@ -416,8 +448,67 @@ def parse_bacnet(data: bytes) -> Optional[dict]:
     return {"bacnet": True, "device_id": device_id, "vendor_id": vendor_id}
 
 
+BACNET_OBJ_DEVICE = 8
+# device-object properties worth reading after an I-Am (all read-only ReadProperty)
+BACNET_PROPS = {"name": 77, "vendor": 121, "model": 70}  # object-name, vendor-name, model-name
+_BACNET_READPROP = 0x0C
+
+
+def _build_bacnet_readprop(device_instance: int, prop: int, invoke_id: int = 1) -> bytes:
+    """A confirmed ReadProperty request for one property of the device object.
+
+    ReadProperty only reads; it cannot alter anything on the controller."""
+    objid = (BACNET_OBJ_DEVICE << 22) | (device_instance & 0x3FFFFF)
+    apdu = bytes([0x00, 0x05, invoke_id & 0xFF, _BACNET_READPROP])   # confirmed req, max APDU 1476, invoke, service
+    apdu += bytes([0x0C]) + struct.pack(">I", objid)                 # context tag 0, len 4: object identifier
+    apdu += bytes([0x19, prop & 0xFF])                               # context tag 1, len 1: property id
+    npdu = bytes([0x01, 0x04])                                       # version 1, expecting reply
+    body = npdu + apdu
+    return bytes([0x81, 0x0A]) + struct.pack(">H", 4 + len(body)) + body
+
+
+def parse_bacnet_readprop(data: bytes) -> Optional[str]:
+    """The character-string value out of a ReadProperty Complex-ACK. None if not one."""
+    if not data or len(data) < 8 or data[0] != 0x81:
+        return None
+    try:
+        off = 4
+        if data[1] == 0x04:
+            off += 6
+        off += 1
+        control = data[off]
+        off += 1
+        if control & 0x20:
+            off += 2
+            off += 1 + data[off]
+        if control & 0x08:
+            off += 2
+            off += 1 + data[off]
+        if control & 0x20:
+            off += 1
+        if (data[off] & 0xF0) != 0x30:      # Complex-ACK
+            return None
+        off += 2                             # PDU type byte, invoke id
+        if data[off] != _BACNET_READPROP:
+            return None
+        off += 1
+        inside = False
+        for tag_num, is_context, val in _bacnet_tags(data, off):
+            if is_context and tag_num == 3 and not val:
+                inside = not inside          # opening/closing tag 3 wraps the value
+                continue
+            if inside and not is_context and tag_num == 7 and val:   # application tag 7: CharacterString
+                charset, text = val[0], val[1:]
+                enc = {0: "utf-8", 1: "utf-16-be", 3: "utf-32-be", 4: "iso-8859-1", 5: "iso-8859-1"}.get(charset, "utf-8")
+                return text.decode(enc, "replace").strip("\x00").strip() or None
+    except (IndexError, struct.error):
+        return None
+    return None
+
+
 def bacnet_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
-    """Send a BACnet Who-Is to UDP/47808 and parse the I-Am reply. None on failure."""
+    """Send a BACnet Who-Is to UDP/47808 and parse the I-Am reply; then read the device's
+    object-name, vendor-name and model-name with ReadProperty (read-only). None on failure."""
     if not is_usable_ip(ip):
         return None
     sock = None
@@ -426,7 +517,18 @@ def bacnet_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
         sock.settimeout(timeout)
         sock.sendto(_build_bacnet_whois(), (ip, 47808))
         data, _ = sock.recvfrom(1500)
-        return parse_bacnet(data)
+        res = parse_bacnet(data)
+        if not res:
+            return None
+        for i, (key, prop) in enumerate(BACNET_PROPS.items(), start=1):
+            res[key] = None
+            try:
+                sock.sendto(_build_bacnet_readprop(res["device_id"], prop, invoke_id=i), (ip, 47808))
+                reply, _ = sock.recvfrom(1500)
+                res[key] = parse_bacnet_readprop(reply)
+            except OSError:
+                break  # a controller that does not answer ReadProperty: keep the I-Am facts
+        return res
     except OSError:
         return None
     finally:
@@ -572,8 +674,36 @@ def dns_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
                 pass
 
 
+def _build_ntp_readvar() -> bytes:
+    """An NTP mode-6 control message, opcode 2 READVAR for the system variables (assoc 0).
+    Read-only: it asks the daemon to print its variables, nothing more."""
+    return struct.pack(">BBHHHHH", 0x16, 0x02, 1, 0, 0, 0, 0)  # LI=0 VN=2 Mode=6; R/E/M=0 op=2; seq 1
+
+
+def parse_ntp_readvar(data: bytes) -> dict:
+    """Decode a mode-6 READVAR response's 'key=value, ...' payload into a dict (quotes dropped)."""
+    if not data or len(data) < 12 or (data[0] & 0x07) != 6 or not (data[1] & 0x80):  # mode 6, response bit
+        return {}
+    try:
+        count = struct.unpack(">H", data[10:12])[0]
+    except struct.error:
+        return {}
+    payload = data[12:12 + count].decode("utf-8", "replace")
+    out: dict = {}
+    for part in re.split(r",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", payload):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        if k:
+            out[k] = v.strip().strip('"')
+    return out
+
+
 def ntp_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
-    """Send an NTP client request to UDP/123; a 48-byte reply means an NTP server."""
+    """Send an NTP client request to UDP/123; a 48-byte reply means an NTP server. Then ask
+    for the system variables with a mode-6 readvar (version, refid, OS) - many servers
+    refuse mode 6 (noquery), in which case only the stratum is recorded."""
     if not is_usable_ip(ip):
         return None
     sock = None
@@ -584,8 +714,17 @@ def ntp_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
         data, _ = sock.recvfrom(256)
         if len(data) < 48 or (data[0] & 0x07) not in (2, 4, 5):  # server/broadcast mode in reply
             return None
-        stratum = data[1]
-        return {"ntp": True, "stratum": stratum}
+        res = {"ntp": True, "stratum": data[1]}
+        try:
+            sock.sendto(_build_ntp_readvar(), (ip, 123))
+            reply, _ = sock.recvfrom(2048)
+            var = parse_ntp_readvar(reply)
+            for key in ("version", "system", "refid", "processor"):
+                if var.get(key):
+                    res[key] = var[key][:120]
+        except OSError:
+            pass
+        return res
     except OSError:
         return None
     finally:
@@ -672,8 +811,11 @@ async def probe_extra(
 
     log.info("extra-probing %d hosts with: %s", len(targets), ", ".join(enabled))
     loop = asyncio.get_running_loop()
+    # Bounded per probe call (see discover.identify_hosts): `workers` probes in flight, a
+    # pool of exactly that many threads, and a ceiling that counts from when the probe runs.
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="netmap-xid")
     sem = asyncio.Semaphore(workers)
+    ceiling = max(timeout, 0.5) * 4 + 2.0  # BACnet/NTP make up to four bounded round trips
     answered = 0
 
     def _call_for(name: str, ip: str):
@@ -685,16 +827,16 @@ async def probe_extra(
 
     async def _run(name: str, ip: str):
         call = _call_for(name, ip)
-        try:
-            return await asyncio.wait_for(loop.run_in_executor(pool, call), timeout + 1.0)
-        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
-            return None
+        async with sem:
+            try:
+                return await asyncio.wait_for(loop.run_in_executor(pool, call), ceiling)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
+                return None
 
     async def one(ip: str):
         nonlocal answered
         host = inv.hosts[ip]
-        async with sem:
-            results = await asyncio.gather(*(_run(name, ip) for name in enabled))
+        results = await asyncio.gather(*(_run(name, ip) for name in enabled))
         got = False
         for name, res in zip(enabled, results):
             if not res or not isinstance(res, dict):

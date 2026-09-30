@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import socket
 import ssl
@@ -417,14 +416,22 @@ def _build_msearch(ip: str, st: str = "ssdp:all", mx: int = 1) -> bytes:
     ).encode("ascii", "replace")
 
 
-def _fetch_upnp_description(location: str, timeout: float = 2.0, cap: int = 64 * 1024) -> dict:
-    """GET the LOCATION XML (short timeout, small body cap) and parse it. {} on failure."""
+def _fetch_upnp_description(location: str, timeout: float = 2.0, cap: int = 64 * 1024,
+                            ip: Optional[str] = None) -> dict:
+    """GET the LOCATION XML (short timeout, small body cap) and parse it. {} on failure.
+
+    When `ip` (the probed address) is given the URL must point at that same address: a
+    device may advertise any LOCATION it likes, and following it elsewhere would send
+    traffic to an address that was never in scope. Such a LOCATION is recorded raw only."""
     import http.client
     from urllib.parse import urlsplit
 
     try:
         u = urlsplit(location)
         if u.scheme not in ("http", "https") or not u.hostname:
+            return {}
+        if ip is not None and u.hostname != ip:
+            log.debug("ssdp %s: LOCATION %s points elsewhere; not fetched", ip, location)
             return {}
         conn_cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
         kwargs = {"timeout": timeout}
@@ -483,7 +490,7 @@ def ssdp_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
     }
     if result.get("location"):
         try:
-            out.update({k: v for k, v in _fetch_upnp_description(result["location"], timeout).items() if v})
+            out.update({k: v for k, v in _fetch_upnp_description(result["location"], timeout, ip=ip).items() if v})
         except Exception:  # noqa: BLE001  - a bad description must never sink the probe
             pass
     return out
@@ -503,7 +510,7 @@ def parse_http_head(data: bytes) -> dict:
     status = None
     if lines:
         parts = lines[0].split(None, 2)
-        if len(parts) >= 2 and parts[1].isdigit():
+        if len(parts) >= 2 and parts[1].isascii() and parts[1].isdigit():
             status = int(parts[1])
     headers: dict[str, str] = {}
     for ln in lines[1:]:
@@ -547,14 +554,20 @@ def _rdn_value(rdns, keys) -> Optional[str]:
     return None
 
 
+def cert_subject_org(cert: Optional[dict]) -> Optional[str]:
+    """The subject organizationName of a getpeercert()-style dict (the vendor of an appliance's
+    self-signed certificate, typically). None if absent."""
+    if not cert:
+        return None
+    return _rdn_value(cert.get("subject"), ("organizationName", "O"))
+
+
 def cert_fields(cert: Optional[dict]) -> dict:
     """Reduce a getpeercert()-style dict to CN / SANs / issuer / expiry."""
     out = {"cert_cn": None, "cert_san": [], "cert_issuer": None, "cert_expires": None}
     if not cert:
         return out
-    out["cert_cn"] = _rdn_value(cert.get("subject"), ("commonName", "CN")) or _rdn_value(
-        cert.get("subject"), ("organizationName", "O")
-    )
+    out["cert_cn"] = _rdn_value(cert.get("subject"), ("commonName", "CN")) or cert_subject_org(cert)
     out["cert_issuer"] = _rdn_value(cert.get("issuer"), ("commonName", "CN")) or _rdn_value(
         cert.get("issuer"), ("organizationName", "O")
     )
@@ -563,31 +576,63 @@ def cert_fields(cert: Optional[dict]) -> dict:
     return out
 
 
-def _decode_peer_cert(der: Optional[bytes]) -> Optional[dict]:
-    """Decode a DER cert to a getpeercert-style dict via stdlib, without verifying it.
+# X.509 name attribute OIDs -> the names ssl.getpeercert() uses
+_X509_ATTR_NAMES = {
+    "2.5.4.3": "commonName", "2.5.4.10": "organizationName", "2.5.4.11": "organizationalUnitName",
+    "2.5.4.6": "countryName", "2.5.4.7": "localityName", "2.5.4.8": "stateOrProvinceName",
+    "2.5.4.5": "serialNumber", "1.2.840.113549.1.9.1": "emailAddress",
+}
 
-    ssl.getpeercert() returns {} under CERT_NONE, so we take the binary form and decode it
-    through the same routine the standard library uses for getpeercert.
+
+def _x509_name(name) -> tuple:
+    """A cryptography Name as getpeercert()'s tuple-of-RDN-tuples."""
+    out = []
+    for rdn in name.rdns:
+        out.append(tuple((_X509_ATTR_NAMES.get(a.oid.dotted_string, a.oid.dotted_string), str(a.value)) for a in rdn))
+    return tuple(out)
+
+
+def decode_der_cert(der: Optional[bytes]) -> Optional[dict]:
+    """Decode a DER certificate to a getpeercert()-style dict without verifying it.
+
+    ssl.getpeercert() returns {} under CERT_NONE, so the binary form is parsed with the
+    ``cryptography`` package (no private stdlib hooks, no temp files). None if unparseable.
     """
     if not der:
         return None
-    import tempfile
-
-    path = None
     try:
-        pem = ssl.DER_cert_to_PEM_cert(der)
-        with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False, encoding="utf-8") as f:
-            f.write(pem)
-            path = f.name
-        return ssl._ssl._test_decode_cert(path)  # type: ignore[attr-defined]
+        from cryptography import x509
+        from cryptography.x509.oid import ExtensionOID
+
+        cert = x509.load_der_x509_certificate(der)
+        out: dict = {"subject": _x509_name(cert.subject), "issuer": _x509_name(cert.issuer)}
+        try:
+            not_after = cert.not_valid_after_utc
+        except AttributeError:  # cryptography < 42
+            not_after = cert.not_valid_after
+        out["notAfter"] = not_after.strftime("%b %d %H:%M:%S %Y GMT")
+        try:
+            not_before = cert.not_valid_before_utc
+        except AttributeError:
+            not_before = cert.not_valid_before
+        out["notBefore"] = not_before.strftime("%b %d %H:%M:%S %Y GMT")
+        out["serialNumber"] = format(cert.serial_number, "X")
+        sans: list = []
+        try:
+            ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+            for dns in ext.get_values_for_type(x509.DNSName):
+                sans.append(("DNS", dns))
+            for ipa in ext.get_values_for_type(x509.IPAddress):
+                sans.append(("IP Address", str(ipa)))
+        except Exception:  # noqa: BLE001 - no SAN extension
+            pass
+        out["subjectAltName"] = tuple(sans)
+        return out
     except Exception:  # noqa: BLE001
         return None
-    finally:
-        if path:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+
+
+_decode_peer_cert = decode_der_cert
 
 
 def http_banner(ip: str, port: int, timeout: float = 2.0, tls: Optional[bool] = None) -> Optional[dict]:
@@ -650,6 +695,7 @@ def http_banner(ip: str, port: int, timeout: float = 2.0, tls: Optional[bool] = 
         "realm": head.get("realm"),
         "status": head.get("status"),
         "cert_cn": cf["cert_cn"],
+        "cert_org": cert_subject_org(cert),
         "cert_san": cf["cert_san"],
         "cert_issuer": cf["cert_issuer"],
         "cert_expires": cf["cert_expires"],
@@ -723,10 +769,37 @@ def _add_source(host, source: str) -> None:
 _SSH_OS = [
     ("ubuntu", "linux", "Ubuntu"), ("debian", "linux", "Debian"), ("raspbian", "linux", "Raspberry Pi OS"),
     ("el7", "linux", "RHEL/CentOS 7"), ("el8", "linux", "RHEL/CentOS 8"), ("el9", "linux", "RHEL/CentOS 9"),
-    ("freebsd", "linux", "FreeBSD"), ("openbsd", "linux", "OpenBSD"),
+    ("freebsd", "bsd", "FreeBSD"), ("openbsd", "bsd", "OpenBSD"), ("netbsd", "bsd", "NetBSD"),
     ("windows", "windows", "Windows (OpenSSH)"), ("cisco", "ios", "Cisco"), ("mikrotik", "routeros", "MikroTik"),
     ("dropbear", "embedded", "embedded (Dropbear)"), ("rosssh", "routeros", "MikroTik"),
 ]
+
+
+def _ssh_ident_line(data: bytes) -> str:
+    """The identification line out of what an SSH server sent first. RFC 4253 lets the
+    server precede it with other lines (a banner, a warning); the first line starting with
+    'SSH-' within the first few lines is the ident. '' if none."""
+    for raw in data.split(b"\n")[:8]:
+        line = raw.decode("latin-1", "replace").strip()
+        if line.startswith("SSH-"):
+            return line
+    return ""
+
+
+def _read_ssh_ident(s, max_bytes: int = 4096) -> bytes:
+    """Read from a connected socket until an 'SSH-' line has arrived (or a few lines / bytes)."""
+    buf = bytearray()
+    while len(buf) < max_bytes:
+        try:
+            chunk = s.recv(512)
+        except (OSError, socket.timeout):
+            break
+        if not chunk:
+            break
+        buf += chunk
+        if _ssh_ident_line(bytes(buf)) or buf.count(b"\n") >= 8:
+            break
+    return bytes(buf)
 
 
 def ssh_banner(ip: str, timeout: float) -> Optional[dict]:
@@ -737,15 +810,15 @@ def ssh_banner(ip: str, timeout: float) -> Optional[dict]:
     try:
         with socket.create_connection((ip, 22), timeout) as s:
             s.settimeout(timeout)
-            data = s.recv(256)
+            data = _read_ssh_ident(s)
             try:
                 s.sendall(b"SSH-2.0-NetMap\r\n")  # polite ident so the server doesn't log a scan-abort
             except OSError:
                 pass
     except (OSError, socket.timeout):
         return None
-    line = data.split(b"\n", 1)[0].decode("latin-1", "replace").strip()
-    if not line.startswith("SSH-"):
+    line = _ssh_ident_line(data)
+    if not line:
         return None
     parts = line.split("-", 2)
     software = parts[2] if len(parts) > 2 else ""
@@ -800,8 +873,16 @@ async def identify_hosts(
 
     log.info("identifying %d hosts with probes: %s", len(targets), ", ".join(enabled))
     loop = asyncio.get_running_loop()
+    # Concurrency is bounded per *probe call*, not per host: `workers` probes may be in
+    # flight at once and the pool has exactly that many threads, so a submitted probe
+    # starts immediately and the safety ceiling below counts from when it actually runs.
+    # (Bounding per host while fanning each host into several probes in a same-size pool
+    # queued most probes behind the pool and their timers expired while waiting.)
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="netmap-id")
     sem = asyncio.Semaphore(workers)
+    # Each probe bounds itself with socket timeouts (the HTTP probe may try two ports);
+    # this ceiling only catches a probe that ignores them.
+    ceiling = max(timeout, 0.5) * 4 + 2.0
     answered = 0
 
     def _call_for(name: str, ip: str, host):
@@ -822,16 +903,16 @@ async def identify_hosts(
 
     async def _run(name: str, ip: str, host):
         call = _call_for(name, ip, host)
-        try:
-            return await asyncio.wait_for(loop.run_in_executor(pool, call), timeout + 1.0)
-        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
-            return None
+        async with sem:
+            try:
+                return await asyncio.wait_for(loop.run_in_executor(pool, call), ceiling)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
+                return None
 
     async def one(ip: str):
         nonlocal answered
         host = inv.hosts[ip]
-        async with sem:
-            results = await asyncio.gather(*(_run(name, ip, host) for name in enabled))
+        results = await asyncio.gather(*(_run(name, ip, host) for name in enabled))
         got = False
         for name, res in zip(enabled, results):
             if not res or not isinstance(res, dict):
