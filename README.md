@@ -1,253 +1,334 @@
-# netmap
+# NetMap
 
-Inventory a network you did not build and come back with a topology.
+Inventory a network you look after — especially one you did not build — and see how it is wired.
 
-`netmap` reads devices over SNMP and works out how they are wired together: LLDP and CDP adjacencies,
-routing next-hops, subnet gateways, bridge tables and ARP. The result is an inventory (devices,
-interfaces, VLANs, subnets, addresses in use, hosts) plus a typed graph of Layer-2 links, Layer-3
-adjacencies, subnet membership and host-to-switch-port placement, rendered as an interactive HTML map and
-exported to Excel, GraphML, DOT and CSV.
+NetMap reads the network's own devices over SNMP (read-only) and works out what is there and how it
+connects: LLDP and CDP neighbours, routing tables, ARP and MAC address tables, VLANs, interfaces and
+hardware. The result is an inventory (devices, hosts, subnets, VLANs, links, interfaces, serial numbers)
+and a topology diagram, which you can document as you go, keep current with rescans, and export to
+Excel, draw.io/Visio, PDF or CSV.
 
-It was written for M&A due diligence: you get read-only SNMP credentials, a list of ranges you may touch,
-you need a picture of what is actually there, and you must not wander outside those ranges.
+It comes as a **Windows desktop app** and as a **command-line tool** that share one project file.
 
-**Point it at a network in either of two ways, or both at once:**
+![Overview](docs/screenshots/overview.png)
 
-| | |
+## Download
+
+From the [latest release](https://github.com/kerbe42/netmap/releases/latest):
+
+| File | What it is |
 |---|---|
-| **Targeted subnets** — you were given a list of ranges | `netmap crawl --target 10.20.0.0/24 --target 10.30.0.0/24` or `--target-file ranges.txt`. Every live address in those subnets is probed for SNMP; whatever answers is inventoried and whatever does not is still recorded as a host. The targets become the scope, so nothing outside them is touched. |
-| **Spider from a seed** — you were given a core device | `netmap crawl --seed 10.10.0.1 --scope 10.10.0.0/16`. netmap follows LLDP/CDP neighbours, route next-hops and subnet gateways outwards, staying inside `--scope`. |
+| `NetMap-<version>-setup.exe` | The desktop app, installed for your user account (no administrator rights needed). Start menu entry, optional desktop shortcut, opens `.netmap` files. |
+| `NetMap-<version>-portable.zip` | The same app as a folder: unzip anywhere (a USB stick, a jump host) and run `NetMap.exe`. Keeps its settings in that folder. |
+| `netmap.exe` | The command line as a single file, no Python needed. |
+| `netmap-linux-x64` | The command line for Linux. |
 
-On Windows, [download `netmap.exe`](https://github.com/kerbe42/netmap/releases/latest) — one file, no
-Python, no installer.
+Check a download against `SHA256SUMS.txt`: `Get-FileHash .\NetMap-0.3.0-setup.exe -Algorithm SHA256`.
+The binaries are built by this repository's GitHub Actions workflow and are not code-signed, so SmartScreen
+may ask for confirmation the first time.
+
+To see what NetMap does before pointing it at anything, open **Help ▸ Explore the sample network**: a
+simulated campus with a firewall, a core pair, floor and warehouse switches, a server room and about 500
+endpoints.
+
+## The desktop app
+
+### 1. Credentials
+
+**Scan ▸ SNMP credentials**: add the read-only SNMPv2c community or SNMPv3 user (SHA/SHA-2 and AES) for
+the devices, and use *Test against a device* to check one. Credentials are tried in order on every
+device and the one that worked is recorded against it. Secrets are encrypted with your Windows account
+(DPAPI) and are never written into project files, so a project can be handed to someone else safely.
+
+### 2. Scan
+
+**Scan ▸ New scan** (Ctrl+R):
+
+* **Address ranges to inventory** — the subnets you are responsible for, pasted as they come: CIDR,
+  single addresses, or ranges like `10.20.0.10-60`, one per line or comma separated. Every live address in
+  them is checked.
+* **Start from devices** (optional) — a core switch or router. NetMap follows LLDP/CDP neighbours, routing
+  next-hops and subnet gateways outwards from it.
+* **Never touch** — ranges that must not be sent anything (OT, medical, partner links).
+
+Nothing outside the ranges you gave is ever contacted; the dialog shows exactly what will be before you
+start. If ping is blocked, choose *Query every address with SNMP*. Tick *Ping-sweep every subnet* for exact
+address counts, and *Name devices and hosts from reverse DNS* to pick up PTR names.
+
+Results appear while the scan runs. **Stop** keeps everything found so far. When the project has been
+saved, it is saved again automatically at the end of every scan.
+
+### 3. Understand it
+
+**Topology map** — two views of the same network:
+
+* **Physical** — what is cabled to what, from LLDP/CDP: firewalls and routers on top, then the core, then
+  access switches, access points and anything announced but not polled. Turn on *Hosts* to see every
+  endpoint on the switch port it is plugged into.
+* **Logical** — how it routes: routers, L3 switches and firewalls with the subnets they have addresses in,
+  each labelled with its VLAN.
+
+![Physical map](docs/screenshots/map-physical.png)
+
+Drag devices to tidy the diagram; positions are saved in the project for each view. Right-click a device
+to focus on its neighbourhood, open its web page, SSH to it, ping it or rescan it. Port names are shown at
+both ends of every cable. *Layout* switches between layered, organic and radial arrangements.
+
+![Logical map](docs/screenshots/map-logical.png)
+
+**Lists** — network devices, hosts (with the switch, port and VLAN each one is on), subnets with an IP
+address map, VLANs (with every name each switch gives them), links with speeds at both ends, every
+interface (status, speed, VLAN, access/trunk, LAG, neighbour, MACs learned), and hardware: chassis, stack
+members, modules, power supplies, fans and transceivers with serial numbers. Filter any list with words, or
+`column:value` — `role:switch vendor:cisco`, `vlan:20`, `status:down`. Select anything for its details.
+
+![Device details](docs/screenshots/device.png)
+
+![Subnet IP map](docs/screenshots/subnet.png)
+
+![Hosts on their switch ports](docs/screenshots/map-hosts.png)
+
+**Needs attention** — what to look at before relying on the inventory:
+
+| Finding | Usually means |
+|---|---|
+| Neighbour not polled | A switch, router or AP announces itself over LLDP/CDP but no credential works: unmanaged, or missing from the handover |
+| Link speed mismatch | The two ends of one cable report different speeds: a negotiation problem or a wrong patch |
+| VLAN named differently | Switches disagree on what a VLAN is for |
+| Address seen with several MACs | A first-hop redundancy address, a recent hardware swap, or an address conflict |
+| Subnet with no gateway found | The router for a range you listed was not reached |
+| Address outside every known subnet | In use, but in no subnet any device reported: missing from the address plan |
+| Starting device did not answer | A device you named as a starting point: wrong address or credentials, or SNMP filtered |
+| Next-hop router not polled | Traffic is routed through it but no credential worked |
+| Device stopped answering | It answered before and was silent on the last rescan |
+| Subnet not swept | Its utilisation is a floor, not a count |
+
+![Needs attention](docs/screenshots/findings.png)
+
+### 4. Document it
+
+Select a device, host, subnet or VLAN and open the **Notes** tab in the details panel: name, role, site,
+owner, asset tag, status (*Verified*, *Needs review*, *Unknown owner*, *To be replaced*, …), tags and free
+notes. They are saved in the project, never overwritten by a rescan, shown on the map and in the lists,
+and included in the Excel export. A role you set corrects a wrong automatic guess everywhere.
+
+### 5. Keep it current
+
+* **F5** re-polls every known device and follows any new links.
+* Right-click a device ▸ *Rescan this device*, or a subnet ▸ *Find every live address in this subnet*.
+* **Tools ▸ Compare with another scan** lists devices added, removed, moved (same serial, new address) or
+  changed (model, serial, OS version, ports up/down, reboots), links and VLANs added or removed, and hosts
+  that appeared, vanished or changed MAC address.
+* **Scan history** records every scan: what was asked, how long it took, what it found.
+* **Tools** (bottom panel): ping, traceroute, DNS (with a forward/reverse consistency check) and an SNMP
+  test against any address.
+
+### 6. Share it
+
+**File ▸ Export**:
+
+| Export | Contents |
+|---|---|
+| Excel workbook | Summary, Devices, IPAM, VLANs, Links, Hosts, Interfaces, Hardware and Gaps sheets, with your notes |
+| draw.io diagram | Physical and logical pages with your layout, Cisco-style icons and port labels. Opens in [diagrams.net](https://app.diagrams.net) (desktop or web), which can save it as Visio `.vsdx` |
+| Map as PDF / SVG / PNG / Print | The current view as you arranged it |
+| Interactive HTML map | One offline web page anyone can open in a browser |
+| CSV files, GraphML, DOT | For scripts, yEd/Gephi, Graphviz |
+
+Every list also exports what it shows (after filtering) with *Export CSV*, and Ctrl+C copies the selected
+rows in a form that pastes straight into Excel.
+
+### Settings and files
+
+* The project (`.netmap`) is a single JSON file holding the inventory, your notes, map layouts and scan
+  history — never credentials.
+* Settings live in the registry under `HKCU\Software\netmap\NetMap`, or beside the program in the portable
+  build. The log is `%LOCALAPPDATA%\NetMap\netmap.log` (**Help ▸ Open the log folder**).
+* **View ▸ Theme**: follow Windows, light or dark.
+
+![Dark theme](docs/screenshots/dark.png)
 
 ## What it collects per device
 
 | Source (SNMP) | Gives you |
 |---|---|
-| system group | name, description, vendor, OS version, location, uptime |
-| ENTITY-MIB | model and serial, plus the hardware an asset register tracks: stack members, modules, power supplies, fans and transceivers, with serials, revisions and FRU flag |
+| system group | name, description, vendor, OS version, location, contact, uptime |
+| ENTITY-MIB | model and serial, plus stack members, modules, power supplies, fans and transceivers with serials, revisions and FRU flag |
 | IF-MIB, ipAddrTable | interfaces, speeds, MACs, descriptions, last status change, IPs and subnets |
-| LLDP-MIB, CISCO-CDP-MIB | Layer-2 links, with local and remote port names and neighbour mgmt addresses |
+| LLDP-MIB, CISCO-CDP-MIB | Layer-2 links, with local and remote port names and neighbour management addresses |
 | ipCidrRouteTable / ipRouteTable | routes and next-hops (Layer-3 adjacency, new subnets to explore) |
 | ipNetToMediaTable | ARP: every IP/MAC the device has talked to |
 | BRIDGE-MIB / Q-BRIDGE-MIB | MAC forwarding table: which switch port each host sits on, per VLAN |
 | Q-BRIDGE / CISCO-VTP-MIB | VLAN ids and names |
-| Q-BRIDGE / CISCO-VTP-MIB / CISCO-VLAN-MEMBERSHIP-MIB | each switch port's access or native VLAN, and whether it is a trunk |
+| Q-BRIDGE / CISCO-VLAN-MEMBERSHIP-MIB | each switch port's access or native VLAN, and whether it is a trunk |
 | IEEE8023-LAG-MIB | which ports are bundled into which LAG / port-channel |
 
-Hosts that do not speak SNMP still appear: from ARP, from LLDP/CDP announcements (phones, APs), and from an
-optional `nmap` ping sweep of every discovered subnet with light service fingerprinting.
+Hosts that do not speak SNMP still appear: from ARP, from LLDP/CDP announcements (phones, APs), from
+reverse DNS, and from an optional `nmap` ping sweep with light service identification.
 
 Every MAC address is matched against a bundled copy of the IEEE OUI registry, so a host known only from an
-ARP table is still attributed to an organization and typed. That works offline and without `nmap`, and it is
-usually what turns a bare address into "a Zebra label printer" or "a Synology NAS". Device types assigned:
+ARP table is still attributed to a manufacturer and typed, offline and without `nmap`. Types assigned:
 router, l3switch, switch, firewall, wireless, server, vm, database, windows, workstation, printer, phone,
-camera, nas, ups, host, and `unpolled` for something a neighbour announced that we could not get into.
+camera, nas, ups, host, and *unpolled* for something a neighbour announced that could not be polled. An
+access switch is only called an L3 switch with evidence that it routes (addresses on more than one
+interface, or learned routes), not because sysServices says so.
 
-## Install
+## Staying inside your ranges
 
-```bash
-cd netmap
-python3 -m venv .venv && .venv/bin/pip install -e .
-sudo apt install nmap          # optional, for --sweep (ARP/ICMP discovery needs root)
-```
+* Nothing outside the scope is ever sent a packet. Target ranges are always inside it; when no wider scope
+  is given they *are* the scope. With neither, a scan is limited to RFC1918 space and says so. *Never
+  touch* always wins, including inside a target. Loopback, link-local, multicast and 0/8 are never probed.
+* Probing every address is capped (default: nothing larger than a /22 per range) so a mistyped prefix
+  cannot turn into tens of thousands of probes; it refuses the range and says so.
+* Everything is read-only: SNMP GET/GETBULK, ICMP/TCP pings, reverse DNS, and — only if you tick it — an
+  `nmap` top-25-port service check of hosts that answered.
+* Pace: *Devices polled at once* (default 12), one SNMP walk at a time per device, GETBULK with 25
+  repetitions. Lower it for fragile gear.
 
-Requires Python 3.11+. Dependencies: `pysnmp`, `cryptography` (SNMPv3 privacy), `networkx`.
+## Command line
 
-### Windows: the single executable
-
-Download **`netmap.exe`** from the [latest release](https://github.com/kerbe42/netmap/releases/latest).
-It is one self-contained file — Python, pysnmp, the OUI table and the map viewer are all inside it. Nothing
-is installed, nothing is left behind, and it runs from a USB stick or a jump-box desktop:
-
-```powershell
-cd $env:USERPROFILE\Desktop
-$env:NETMAP_COMMUNITY = 'their-ro-string'
-.\netmap.exe crawl --target-file ranges.txt -C $env:NETMAP_COMMUNITY `
-             --out acme.json --html acme.html --xlsx acme.xlsx
-```
-
-Verify the download against `SHA256SUMS.txt` on the release page:
-`Get-FileHash .\netmap.exe -Algorithm SHA256`.
-
-Notes for running it in the field:
-
-* **Nmap is optional.** Without it, `--target` falls back to ICMP ping for host discovery and `--sweep`
-  cannot fingerprint services; SNMP, LLDP/CDP, ARP, routing and the OUI-based typing all work regardless.
-  With `--probe-all` no pinging happens at all. To get MAC addresses and service detail on sweeps, install
-  [Nmap for Windows](https://nmap.org/download.html) and accept the bundled **Npcap** installer.
-* **Run as Administrator** for `--sweep` and `--fingerprint` so nmap can use ARP and ICMP; unprivileged it
-  falls back to TCP connect pings and finds fewer hosts.
-* Windows Defender Firewall does not block outbound SNMP, but a corporate endpoint agent might. If
-  everything times out, try one device with `--target 10.10.0.1/32 --probe-all -vv` and see whether replies
-  arrive at all.
-* SmartScreen may warn on a binary this new and unsigned — the release is built by the GitHub Actions
-  workflow in this repo, and the checksums come from that run.
-* WSL2 works too, but its NAT-ed network hides ARP, so prefer the native `.exe` for sweeps.
-
-Prefer to run from source on Windows? Install Python 3.11+ (tick **Add python.exe to PATH**), then from the
-folder holding `pyproject.toml`:
-
-```powershell
-py -m venv .venv
-.venv\Scripts\pip install -e .
-.venv\Scripts\netmap crawl --target-file ranges.txt -C $env:NETMAP_COMMUNITY --out acme.json --html acme.html
-```
-
-### Building the executable yourself
+The same scanner and the same project file, for scripting and scheduled runs. `netmap.exe` on Windows,
+`netmap-cli.exe` inside the installed app's folder, or from source:
 
 ```bash
-pip install -e . pyinstaller
-pyinstaller netmap.spec          # -> dist/netmap  (or dist\netmap.exe on Windows)
+python3 -m venv .venv && .venv/bin/pip install -e .          # command line only
+.venv/bin/pip install -e ".[gui]"                            # plus the desktop app (netmap-gui)
 ```
 
-The spec is the same on both platforms. A Windows `.exe` has to be built on Windows: pushing a tag runs
-`.github/workflows/build.yml`, which builds both, smoke-tests each frozen binary and attaches them to the
-release with checksums.
-
-## Quick start
+Requires Python 3.11+.
 
 ```bash
 export NETMAP_COMMUNITY='their-ro-string'
 
-# You were handed a list of ranges: inventory exactly those and nothing else.
-netmap crawl --target 10.20.0.0/24 --target 10.30.0.0/24 --community "$NETMAP_COMMUNITY" \
-             --out acme.json --html acme.html --xlsx acme.xlsx
+# Inventory the ranges you are responsible for, and nothing else.
+netmap crawl --target 10.20.0.0/24 --target 10.30.0.0/24 -C "$NETMAP_COMMUNITY" \
+             --dns --out site.netmap --xlsx site.xlsx --drawio site.drawio
 
-# The same list, from a file (one subnet per line, '#' comments allowed).
-netmap crawl --target-file ranges.txt -C "$NETMAP_COMMUNITY" --out acme.json --xlsx acme.xlsx
+# The same list from a file (one subnet per line, '#' comments allowed).
+netmap crawl --target-file ranges.txt -C "$NETMAP_COMMUNITY" --out site.netmap
 
 # ICMP is filtered: skip the ping and try SNMP on every address in the targets.
-netmap crawl --target 10.20.0.0/24 --probe-all -C "$NETMAP_COMMUNITY" --out acme.json
+netmap crawl --target 10.20.0.0/24 --probe-all -C "$NETMAP_COMMUNITY" --out site.netmap
 
-# You were handed a core switch instead: spider outwards, bounded by --scope.
-netmap crawl --seed 10.10.0.1 --scope 10.10.0.0/16 --community "$NETMAP_COMMUNITY" \
-             --out acme.json --html acme.html --csv out/acme-
+# Spider outwards from a core device, bounded by --scope.
+netmap crawl --seed 10.10.0.1 --scope 10.10.0.0/16 -C "$NETMAP_COMMUNITY" --out site.netmap
+
+# Later: re-poll everything already in the project and follow new links; notes and layout are kept.
+netmap crawl --resume --refresh --seed 10.10.0.1 --scope 10.10.0.0/16 -C "$NETMAP_COMMUNITY" --out site.netmap
+
+netmap show   -m site.netmap                                      # text summary
+netmap render -m site.netmap --xlsx site.xlsx --drawio site.drawio --csv out/site-   # outputs, no network
+netmap sweep  -m site.netmap --subnet 10.10.50.0/24               # ping-sweep one more subnet
+netmap diff   last-month.netmap site.netmap --csv changes.csv     # what changed
+netmap gui    site.netmap                                         # open it in the desktop app
 ```
 
-`ranges.txt` is meant to take the range list as it arrives — one subnet or address per line, or several
-separated by commas, with `#` comments:
-
-```
-# Acme HQ, agreed 2026-09-20
-10.20.0.0/24      # user VLANs
-10.30.0.0/24, 10.31.0.0/24
-192.168.5.10      # the one server in the DMZ we may touch
-```
-
-Then open `acme.html`. Toggle hosts and FDB links on, search by name/IP/MAC/serial, click anything for
-details, export a PNG. The JSON file is the source of truth and is written after every device, so a crawl
-that is interrupted can be continued with `--resume`.
-
-For anything real, use a config file (see `netmap.toml.example`) so scope, exclusions and SNMPv3 credentials
-are explicit and reviewable:
+For anything repeatable, keep scope, exclusions and SNMPv3 credentials in a config file (see
+`netmap.toml.example`); secrets can be given as `env:VARIABLE` rather than written into it:
 
 ```bash
-netmap crawl -c acme.toml --sweep --fingerprint --out acme.json --html acme.html --xlsx acme.xlsx --csv out/acme- --graphml acme.graphml
-netmap show  -m acme.json               # text summary: devices, links, VLANs, IPAM, unpolled neighbours
-netmap render -m acme.json --xlsx acme.xlsx --dot acme.dot   # rebuild outputs without re-crawling
-netmap sweep -m acme.json --subnet 10.10.50.0/24 --fingerprint  # sweep one more subnet later
+netmap crawl -c site.toml --sweep --fingerprint --out site.netmap --xlsx site.xlsx
 ```
 
-## Scope and safety
+`ranges.txt` takes the range list as it arrives — one subnet or address per line, or several separated by
+commas, with `#` comments:
 
-* Nothing outside `--scope` is ever sent a packet. `--target` subnets are added to the scope, and when no
-  `--scope` is given they *are* the scope — so naming your ranges is enough to stay inside them. With
-  neither, the crawl is limited to RFC1918 space and says so. `--exclude` always wins, including inside a
-  target. Loopback, link-local, multicast and 0/8 are never probed.
-* `--probe-all` is capped by `--sweep-max-size` (default /22) so a mistyped prefix cannot turn into tens of
-  thousands of probes; it refuses the subnet and says so rather than proceeding.
-* Everything is read-only: SNMP GET/GETBULK, ICMP/TCP pings and, with `--fingerprint`, a top-25-port
-  connect scan of hosts that answered the sweep. No SNMP SET, no exploitation, no credential guessing beyond
-  the list you supply.
-* Credentials are tried in the order given; the first that works on a device is recorded by label in the
-  inventory so you can see which population uses the legacy string. Put secrets in environment variables
-  (`env:NAME` in the config) rather than in the file.
-* Rate: `--workers` devices in parallel, one SNMP walk at a time per device, GETBULK with 25 repetitions.
-  Lower `--workers` for fragile gear. Sweeps run four subnets at a time.
+```
+# Head office, agreed 2026-09-20
+10.20.0.0/24      # user VLANs
+10.30.0.0/24, 10.31.0.0/24
+192.168.5.10      # the one server in the DMZ we look after
+```
 
-## How the graph is built
+### Outputs
 
-* **Device nodes** are things that answered SNMP. Identity is by management IP, but a box reached again via
-  another of its addresses is merged, not duplicated.
-* **LLDP/CDP edges** are matched to a known device by neighbour management address, chassis MAC, or system
-  name (domain-stripped). One edge per port pair, whichever side reported it, with port names normalised
-  (`GigabitEthernet1/0/2` = `Gi1/0/2`). A neighbour we could not poll becomes a grey *unpolled* stub, or,
-  if its MAC/IP shows up in an ARP table, is attached to that host and typed from its LLDP capabilities
-  (AP, phone, router, bridge).
-* **L3 edges** connect a device to the device owning its route next-hop, labelled with the route count.
-  They are suppressed where an L2 link already exists between the pair.
-* **Subnet nodes** come from interface addresses; devices and hosts are members.
-* **FDB edges** place a host on the access port where its MAC was learned. Ports carrying an LLDP/CDP
-  neighbour or more than 8 MACs are treated as uplinks and skipped.
-* **Host roles** come from LLDP capabilities, nmap MAC vendor and open ports (printer, phone, camera,
-  windows, server, database, vm, workstation).
-
-## Outputs
-
-| File | Contents |
+| Option | Contents |
 |---|---|
-| `*.json` | full inventory; input for `render`, `show`, `sweep`, `--resume` |
-| `*.html` | self-contained interactive map (vis-network embedded; works offline) |
-| `*.graphml` | for yEd / Gephi / Cytoscape; every attribute carried as a property |
-| `*.dot` | Graphviz: `dot -Tsvg map.dot > map.svg` or `sfdp` for big maps |
-| `*.xlsx` | Excel workbook, the hand-over artefact: Summary, Devices, IPAM, VLANs, Links, Hosts, Interfaces, Hardware, Gaps |
-| `<prefix>devices.csv` | one row per device: role, vendor, model, OS version, serial, IPs, counts, credential used |
-| `<prefix>links.csv` | L2/L3 links with both port names |
-| `<prefix>hosts.csv` | every host: IP, name, MAC, vendor, role, subnet, switch, port, VLAN, open ports |
-| `<prefix>ipam.csv` | per-subnet address accounting: size, usable, in use, free, utilisation %, VLAN, gateways |
-| `<prefix>vlans.csv` | VLAN id, every name seen for it, and which devices carry it |
-| `<prefix>subnets.csv` | subnets with gateways and host counts |
-| `<prefix>interfaces.csv` | every interface on every device, with its VLAN, access/trunk mode and LAG |
-| `<prefix>hardware.csv` | every chassis, stack member, module, supply, fan and transceiver, with model, serial and revisions |
+| `--out` (`.netmap` / `.json`) | the project: full inventory, notes, layouts, scan history; written after every device, so `--resume` continues an interrupted scan |
+| `--xlsx` | Excel workbook: Summary, Devices, IPAM, VLANs, Links, Hosts, Interfaces, Hardware, Gaps |
+| `--drawio` | draw.io diagram, physical and logical pages |
+| `--html` | self-contained interactive map (works offline) |
+| `--csv PREFIX` | devices, links, hosts, subnets, IPAM, VLANs, interfaces and hardware as CSV |
+| `--graphml`, `--dot` | for yEd / Gephi / Cytoscape, and Graphviz |
 
-The **IPAM** numbers count addresses actually observed in use — device interfaces, ARP and bridge-table
-entries, sweep replies — so utilisation is evidence, not an estimate. A subnet that was never swept is
-flagged, because its count is a floor rather than a total.
+**IPAM** counts addresses actually observed in use — device interfaces, ARP and bridge-table entries, sweep
+replies — so utilisation is evidence, not an estimate. A subnet that was never swept is flagged, because
+its count is a floor rather than a total.
 
-The workbook's **Gaps** sheet is the one to read first on a due-diligence job. It lists neighbours that were
-announced but never polled (no credentials, or outside the handover), addresses that were probed and never
-answered, and subnets whose utilisation cannot be trusted yet — which is usually where the undocumented part
-of the estate turns out to be.
+## How the topology is worked out
 
-`examples/` holds the output of a crawl against the simulated lab used by the tests.
+* **Devices** are things that answered SNMP. Identity is by management IP, but a box reached again via
+  another of its addresses is merged, not duplicated.
+* **LLDP/CDP links** are matched to a known device by neighbour management address, chassis MAC or system
+  name (domain-stripped). One link per port pair, whichever side reported it, with port names normalised
+  (`GigabitEthernet1/0/2` = `Gi1/0/2`). A neighbour that could not be polled becomes an *unpolled* device,
+  or, if its address answers in ARP, is attached to that host and typed from its LLDP capabilities.
+* **Routing links** connect a device to the device owning its route next-hop. They are not drawn where a
+  cable between the pair is already known.
+* **Subnets** come from interface addresses; devices and hosts are members. Their VLAN comes from the SVI
+  that holds the address.
+* **Hosts on ports** come from MAC tables: a host is placed on the access port where its MAC was learned.
+  Ports carrying an LLDP/CDP neighbour, or more than 8 MACs, are treated as uplinks and skipped.
 
-## Suggested M&A workflow
+## Running it well
 
-1. Get from the target: read-only SNMP (v3 preferred), the address plan they believe in, two or three core
-   device addresses, and a written list of ranges you may and may not touch. Put the ranges in
-   `ranges.txt` and the rest in the TOML.
-2. Run from a VM or jump host inside their network — SNMP is almost always filtered at the edge.
-3. Prove the credentials on one subnet before doing anything wide:
-   `netmap crawl --target 10.20.0.0/24 -C "$NETMAP_COMMUNITY" --out probe.json`.
-4. Then the real pass: `netmap crawl -c acme.toml --target-file ranges.txt --sweep --fingerprint
-   --out acme.json --html acme.html --xlsx acme.xlsx`. Add `--seed` for their core devices as well, so
-   LLDP/CDP fills in the wiring between the ranges.
-5. Read the **Gaps** sheet and the IPAM table against what they told you. The interesting findings are the
-   discrepancies: subnets with no known gateway, neighbours nobody has credentials for, devices whose
-   sysDescr does not match the asset list, ARP entries from ranges that are not in the plan at all, and
-   subnets they described as full that are 4% used.
-6. Add `--probe-hosts` to find SNMP-speaking APs, printers, UPSs and servers that no switch announces.
-7. Re-run later with `--resume` to pick up devices that were down, and diff the JSON.
+1. Run it from a machine inside the network (a jump host or a laptop on the management VLAN): SNMP is
+   almost always filtered at the edge.
+2. Prove the credentials on one device first: *Test against a device* in the credential dialog, or the
+   SNMP test in Tools.
+3. Scan the ranges, with one or two core devices as starting points so LLDP/CDP fills in the wiring
+   between them. Tick *Ping-sweep every subnet* for exact address counts.
+4. Read **Needs attention** and the IPAM figures against what you were told about the network.
+5. Document as you go, tidy the diagram, export the workbook and the draw.io file for the team.
+6. Rescan periodically (F5) and use *Compare with another scan* to see what moved.
+
+## Windows notes
+
+* **Nmap is optional.** Without it, target ranges are pinged with Windows' own `ping` and service
+  identification is unavailable; SNMP, LLDP/CDP, ARP, routing, DNS and MAC-based typing all work regardless.
+  NetMap finds Nmap in its default install folder even when it is not on `PATH`.
+* **Run as Administrator** only if you use Nmap sweeps and want ARP/ICMP discovery; unprivileged, Nmap falls
+  back to TCP connect pings and finds fewer hosts.
+* Windows Defender Firewall does not block outbound SNMP, but a corporate endpoint agent might. If
+  everything times out, try one device with the SNMP test in Tools and see whether an answer arrives at all.
+* WSL2 works for the command line, but its NAT-ed network hides ARP, so prefer the native build for sweeps.
+
+## Building
+
+```bash
+pip install -e ".[gui]" pyinstaller
+pyinstaller packaging/netmap-gui.spec --noconfirm   # -> dist/NetMap/ (NetMap.exe + netmap-cli.exe)
+pyinstaller netmap.spec --noconfirm                 # -> dist/netmap(.exe), the single-file command line
+iscc /DAppVersion=0.3.0 packaging\netmap.iss        # -> dist/NetMap-0.3.0-setup.exe (Inno Setup, Windows)
+```
+
+A Windows build has to be made on Windows: pushing to `main` or a `v*` tag runs
+`.github/workflows/build.yml`, which runs the tests on Linux and Windows, builds everything, starts the
+frozen app with `--selftest` (every page, every export, screenshots) and, for a tag, attaches the installer,
+the portable zip and the command-line binaries to the release with checksums.
+
+## Testing
+
+```bash
+pip install -e ".[gui]" pytest snmpsim pysmi
+QT_QPA_PLATFORM=offscreen python -m pytest -q
+```
+
+* `tests/labnet.py` — a small three-tier network (Cisco ISR, Catalyst 3850 stack, HP 2530, an AP, a phone,
+  an out-of-scope firewall) as raw SNMP tables.
+* `tests/demonet.py` — a mid-sized campus (11 devices, ~470 hosts) with the untidiness real networks have;
+  it is also the sample project shipped with the app (`python -m tests.demonet` regenerates it).
+* Unit tests crawl both through an in-memory SNMP stand-in. End-to-end tests serve the lab with `snmpsim` on
+  loopback and drive the real command line over SNMPv2c and SNMPv3, and the desktop app's scan worker
+  thread (including stopping a scan and rescanning a device). The GUI tests run headless and exercise every
+  page and export.
 
 ## Limits
 
 * IPv4 only. IPv6 addresses and routes are not collected yet.
 * Routes are read from the default routing table; VRFs are not enumerated.
-* Cisco IOS per-VLAN bridge tables need `--cisco-vlan-fdb` (community@vlan indexing, or `vlan-N` contexts
-  for v3). Q-BRIDGE-capable devices (IOS-XE, NX-OS, Junos, Arista, HP/Aruba) work without it.
-* LLDP neighbours that advertise no management address and never appear in an ARP table stay as stubs.
-* Devices behind NAT, or that answer SNMP on a non-standard port, need separate seeds/`--port`.
-
-## Testing
-
-```bash
-.venv/bin/pip install pytest snmpsim pysmi
-.venv/bin/python -m pytest -q
-```
-
-`tests/labnet.py` defines a simulated three-tier network (Cisco ISR, Catalyst 3850, HP 2530 plus an AP, a
-phone, an out-of-scope firewall and a few hosts) as raw OID tables. The unit tests run the crawler against
-an in-memory SNMP stand-in; the end-to-end tests serve the same data with `snmpsim` on loopback and drive
-the real CLI over SNMPv2c and SNMPv3. Set `NETMAP_ALLOW_LOOPBACK=1` to crawl simulators bound on 127/8.
+* Cisco IOS per-VLAN bridge tables need *Read per-VLAN MAC tables* (`--cisco-vlan-fdb`): community@vlan
+  indexing, or `vlan-N` contexts for v3. Q-BRIDGE-capable devices work without it.
+* LLDP neighbours that advertise no management address and never appear in an ARP table stay as unpolled
+  stubs.
+* Devices behind NAT, or answering SNMP on a non-standard port, need their own scan with the right port.

@@ -570,10 +570,15 @@ def finding_rows(s: Snapshot) -> list[dict]:
             continue
         if not any(a in n for n in known_nets):
             add("check", "Address outside every known subnet", ip, ip, f"seen via {' '.join(h.sources)}", "In use but in no subnet a device reported: a range missing from the address plan")
+    # Silence is normal for most addresses (PCs, phones, guessed gateways); it matters for a
+    # device you named as a starting point, and for a router other devices route through.
     for ip, via in inv.unreachable.items():
-        if ip in inv.hosts and inv.hosts[ip].snmp_failed:
-            continue
-        add("info", "No SNMP answer", ip, ip, f"probed via {via}", "Probed inside the scope and silent: a host, filtered, or different credentials")
+        if via == "seed" and ip not in inv.hosts:
+            add("attention", "Starting device did not answer", ip, ip, "given as a device to start from",
+                "Wrong address or credentials, SNMP not enabled for this address, or filtered between here and there")
+        elif via.startswith("nexthop"):
+            add("check", "Next-hop router not polled", ip, ip, f"route next-hop of {via.split(':', 1)[-1]}",
+                "Traffic is routed through it but no credential worked: part of the routed path is undocumented")
     rows.sort(key=lambda r: (_SEV_ORDER.get(r["severity"].lower(), 9), r["category"], sort_key("ip", r["item"])))
     return rows
 
