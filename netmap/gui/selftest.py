@@ -49,7 +49,7 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             fail("project has no devices (pass a project file)")
         s = win.snapshot
         shot("01-overview")
-        order = ["map", "devices", "hosts", "subnets", "vlans", "links", "interfaces", "hardware", "findings", "compliance", "history"]
+        order = ["map", "devices", "hosts", "subnets", "vlans", "links", "dependencies", "interfaces", "hardware", "findings", "compliance", "history"]
         for i, key in enumerate(order, 2):
             win.navigate(key)
             _pump(200)
@@ -90,6 +90,13 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             shot("22-subnet-ipmap")
             ok(f"subnet details {cidr}")
         # a device with stored configs shows a Config tab with a diff
+        insp = next((ip for ip, h in inv.hosts.items() if getattr(h, "system", None)), None)
+        if insp:
+            win.open_node(insp)
+            _pump(200)
+            tabs = [win.details.tabs.tabText(i) for i in range(win.details.tabs.count())]
+            (ok if "System" in tabs else fail)(f"inspection tabs: {[t for t in tabs if t in ('System','Software','Connections','Dependencies')]}")
+            shot("24-host-inspected")
         cfg_dev = next((d for d in inv.configs), None)
         if cfg_dev:
             win.open_node(cfg_dev)

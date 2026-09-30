@@ -207,11 +207,20 @@ class ScanDialog(QDialog):
         self.maxpfx.setRange(8, 32)
         self.maxpfx.setPrefix("/")
         self.maxpfx.setValue(d.get("sweep_max_prefix", 22))
+        self.maxpfx.setToolTip("Subnets larger than this are skipped when sweeping/probing, to stop a mistyped prefix\n"
+                               "becoming a huge scan. Lower the number to allow bigger ranges: /16 = 65,536 addresses.")
+        self.maxpfx_hint = QLabel()
+        self.maxpfx_hint.setObjectName("muted")
+        self.maxpfx.valueChanged.connect(self._maxpfx_hint)
+        mp = QHBoxLayout()
+        mp.addWidget(self.maxpfx)
+        mp.addWidget(self.maxpfx_hint, 1)
         g4l.addRow("Devices polled at once", self.workers)
         g4l.addRow("SNMP timeout (seconds)", self.timeout)
         g4l.addRow("SNMP retries", self.retries)
         g4l.addRow("SNMP port", self.port)
-        g4l.addRow("Largest range to sweep", self.maxpfx)
+        g4l.addRow("Largest subnet to sweep/probe", mp)
+        self._maxpfx_hint()
         ol.addWidget(g4)
         ol.addStretch(1)
         tabs.addTab(ow, "Options")
@@ -312,6 +321,11 @@ class ScanDialog(QDialog):
             lines.append(f"<span style='color:#dc2626'>Not understood: {', '.join(bad[:6])}</span>")
         self.summary.setText("<br>".join(lines))
         self.bb.button(QDialogButtonBox.Ok).setEnabled(ok and not bad)
+
+    def _maxpfx_hint(self):
+        n = 2 ** (32 - self.maxpfx.value())
+        warn = "  — large!" if self.maxpfx.value() < 20 else ""
+        self.maxpfx_hint.setText(f"allows up to {n:,} addresses per range{warn}")
 
     def _accept(self):
         creds, _ = self.selected_credentials()

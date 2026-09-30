@@ -697,6 +697,23 @@ def compliance_rows(s: Snapshot) -> list[dict]:
     return rows
 
 
+DEPENDENCY_COLUMNS = [
+    Column("client", "Client", width=180),
+    Column("server", "Server", width=180),
+    Column("service", "Service", width=100),
+    Column("port", "Port", "int", 60),
+    Column("proto", "Proto", width=55),
+    Column("count", "Connections", "int", 90),
+    Column("processes", "Process", width=160),
+]
+
+
+def dependency_rows_view(s: Snapshot) -> list[dict]:
+    from .deps import dependency_rows
+
+    return dependency_rows(s.inv, s)
+
+
 PAGES: dict[str, tuple[list[Column], Callable[[Snapshot], list[dict]]]] = {
     "devices": (DEVICE_COLUMNS, device_rows),
     "hosts": (HOST_COLUMNS, host_rows),
@@ -707,5 +724,6 @@ PAGES: dict[str, tuple[list[Column], Callable[[Snapshot], list[dict]]]] = {
     "hardware": (HARDWARE_COLUMNS, hardware_rows),
     "findings": (FINDING_COLUMNS, finding_rows),
     "compliance": (COMPLIANCE_COLUMNS, compliance_rows),
+    "dependencies": (DEPENDENCY_COLUMNS, dependency_rows_view),
     "history": (HISTORY_COLUMNS, history_rows),
 }

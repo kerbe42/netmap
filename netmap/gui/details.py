@@ -488,6 +488,7 @@ class DetailsPanel(QWidget):
             from .capturedlg import ConfigView
 
             self.tabs.addTab(ConfigView(revs), "Config")
+        self._add_deps_tab(s, d.id)
         self._add_path_tab(s, d.id)
 
     def _add_path_tab(self, s: Snapshot, node_id: str):
@@ -566,7 +567,56 @@ class DetailsPanel(QWidget):
         if h.evidence:
             ecols = _cols(("source", "Signal", "text", 90), ("observed", "What was seen", "text", 220), ("implies", "Suggests", "text", 150))
             self.tabs.addTab(_table(ecols, [{"_id": "", "_role": "", **e} for e in h.evidence]), "Why")
+        self._add_inspection_tabs(s, ip, h)
+        self._add_deps_tab(s, ip)
         self._add_path_tab(s, ip)
+
+    def _add_inspection_tabs(self, s, ip, h):
+        """System / Software / Connections tabs when a host has been inspected over SSH/WinRM."""
+        sysd = getattr(h, "system", {}) or {}
+        if sysd:
+            from ..views import fmt_duration
+            pairs = [("Reported OS", sysd.get("os")), ("Kernel", sysd.get("kernel")), ("CPU", sysd.get("cpu")),
+                     ("Cores", sysd.get("cores")), ("Memory (MB)", sysd.get("memory_mb")), ("Manufacturer", sysd.get("manufacturer")),
+                     ("Model", sysd.get("product")), ("Serial", sysd.get("serial")), ("Domain", sysd.get("domain")),
+                     ("Logged on", sysd.get("logged_on")), ("Uptime", fmt_duration(sysd.get("uptime_s", 0))),
+                     ("Inspected", fmt_time(h.inspected_at) + (f" over {h.inspect_source.upper()}" if h.inspect_source else ""))]
+            self.tabs.addTab(self._facts(pairs), "System")
+        if getattr(h, "software", None):
+            rows = [{"_id": "", "_role": "", "name": x.get("name", ""), "version": x.get("version", "")} for x in h.software]
+            self.tabs.addTab(_table(_cols(("name", "Software", "text", 260), ("version", "Version", "text", 120)), rows), f"Software ({len(rows)})")
+        conns = getattr(h, "connections", None)
+        if conns:
+            rows = [{"_id": c.get("raddr", ""), "_role": s.role(c.get("raddr", "")), "_kind": "host",
+                     "proto": c.get("proto", ""), "local": f"{c.get('laddr','')}:{c.get('lport','')}",
+                     "remote": f"{c.get('raddr','')}:{c.get('rport','')}", "_rname": s.name(c.get("raddr", "")),
+                     "peer": s.name(c.get("raddr", "")), "state": c.get("state", ""), "process": c.get("process", "")} for c in conns]
+            ccols = _cols(("proto", "Proto", "text", 55), ("local", "Local", "text", 150), ("peer", "Remote", "text", 160),
+                          ("remote", "Remote addr:port", "text", 150), ("state", "State", "text", 90), ("process", "Process", "text", 120))
+            self.tabs.addTab(_table(ccols, rows, self.openNode), f"Connections ({len(rows)})")
+
+    def _add_deps_tab(self, s, node_id):
+        """What this node talks to and what talks to it, from inspected connections."""
+        from ..deps import dependencies_of
+
+        try:
+            d = dependencies_of(s.inv, node_id, s)
+        except Exception:  # noqa: BLE001
+            return
+        if not d["uses"] and not d["used_by"]:
+            return
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        if d["uses"]:
+            lay.addWidget(QLabel("<b>Depends on</b> (this node is the client)"))
+            rows = [{"_id": u["_id"], "_role": s.role(u["_id"]), "server": u["server"], "service": u["service"], "port": u["port"], "count": u["count"]} for u in d["uses"]]
+            lay.addWidget(_table(_cols(("server", "Server", "text", 180), ("service", "Service", "text", 100), ("port", "Port", "int", 60), ("count", "Conns", "int", 70)), rows, self.openNode))
+        if d["used_by"]:
+            lay.addWidget(QLabel("<b>Used by</b> (this node is the server)"))
+            rows = [{"_id": u["_id"], "_role": s.role(u["_id"]), "client": u["client"], "service": u["service"], "port": u["port"], "count": u["count"]} for u in d["used_by"]]
+            lay.addWidget(_table(_cols(("client", "Client", "text", 180), ("service", "Service", "text", 100), ("port", "Port", "int", 60), ("count", "Conns", "int", 70)), rows, self.openNode))
+        self.tabs.addTab(self._scroll(w), "Dependencies")
 
     def _subnet(self, s: Snapshot, cidr: str):
         inv = s.inv

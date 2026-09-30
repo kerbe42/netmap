@@ -529,6 +529,33 @@ def _inject_probes(inv, rng):
             h.probes["ssdp"] = {"server": "Linux/3.10 UPnP/1.0 Synology/1.0", "manufacturer": "Synology", "model": "DS920+",
                                 "device_type": "urn:schemas-upnp-org:device:MediaServer:1", "friendly_name": h.hostname or "nas"}
             h.probes["http"] = {"5000": {"port": 5000, "tls": False, "server": "nginx", "title": "Synology DiskStation", "realm": "", "cert_cn": "", "cert_san": []}}
+    # a few inspected servers + clients, so the System/Software/Connections tabs and the
+    # dependency map have data
+    srv = [ip for ip, h in hosts if h.role in ("server", "vm") and inv.subnet_for_ip(ip) and inv.subnet_for_ip(ip).startswith("10.30.")][:3]
+    clients = [ip for ip, h in hosts if h.role in ("workstation", "windows", "host") and inv.subnet_for_ip(ip) and inv.subnet_for_ip(ip).startswith("10.10.")][:12]
+    if srv:
+        web, db = srv[0], (srv[1] if len(srv) > 1 else srv[0])
+        inv.hosts[web].system = {"os": "Ubuntu 22.04.3 LTS", "kernel": "5.15.0-91-generic", "cpu": "Intel Xeon Silver 4210", "cores": 8,
+                                 "memory_mb": 16384, "manufacturer": "VMware, Inc.", "product": "VMware Virtual Platform", "uptime_s": 86400 * 63, "logged_on": ""}
+        inv.hosts[web].software = [{"name": n, "version": v} for n, v in (("nginx", "1.18.0"), ("openssl", "3.0.2"), ("python3", "3.10.12"), ("postgresql-client", "14"))]
+        inv.hosts[web].services = [{"name": s2, "state": "running"} for s2 in ("nginx", "ssh", "cron")]
+        inv.hosts[web].inspect_source = "ssh"
+        import time as _t
+        inv.hosts[web].inspected_at = _t.time() - 3600
+        inv.hosts[web].sources.append("ssh")
+        # web -> db on postgres
+        inv.hosts[web].connections = [{"proto": "tcp", "laddr": web, "lport": 44100, "raddr": db, "rport": 5432, "state": "ESTAB", "process": "gunicorn"}]
+        if db != web:
+            inv.hosts[db].system = {"os": "Ubuntu 22.04.3 LTS", "kernel": "5.15.0-91-generic", "cores": 4, "memory_mb": 8192, "uptime_s": 86400 * 63}
+            inv.hosts[db].software = [{"name": "postgresql-14", "version": "14.10"}]
+            inv.hosts[db].inspect_source = "ssh"
+            inv.hosts[db].sources.append("ssh")
+        # clients -> web on https
+        for c in clients:
+            inv.hosts[c].connections = [{"proto": "tcp", "laddr": c, "lport": 50000 + (int(c.split(".")[-1]) % 5000), "raddr": web, "rport": 443, "state": "ESTAB", "process": "chrome.exe"}]
+            if "ssh" not in inv.hosts[c].sources and inv.hosts[c].role in ("windows", "workstation"):
+                inv.hosts[c].inspect_source = "winrm"
+                inv.hosts[c].sources.append("winrm")
     # a Windows domain controller among the servers
     for ip, h in hosts:
         if (h.hostname or "").startswith("dc") or ip.endswith(".31"):

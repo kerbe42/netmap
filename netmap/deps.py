@@ -52,11 +52,16 @@ class Dependency:
 def build_dependencies(inv) -> list[Dependency]:
     """Aggregate every inspected host's connections into client -> server:port dependencies."""
     agg: dict[tuple, Dependency] = {}
+    seen: set = set()  # the same connection reported by both ends is one link, not two
     for ip, h in inv.hosts.items():
         for c in getattr(h, "connections", []) or []:
             dep = _edge_from_conn(ip, c)
             if dep is None:
                 continue
+            fourtuple = frozenset({(c.get("laddr"), int(c.get("lport") or 0)), (c.get("raddr"), int(c.get("rport") or 0))})
+            if fourtuple in seen:
+                continue
+            seen.add(fourtuple)
             key = (dep.client, dep.server, dep.port, dep.proto)
             cur = agg.get(key)
             if cur is None:

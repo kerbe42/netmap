@@ -202,6 +202,24 @@ def cmd_diff(args) -> int:
     return 0
 
 
+def cmd_inspect(args) -> int:
+    from .hostinfo import inspect_hosts
+
+    inv = Inventory.load(args.map)
+    creds = {}
+    if args.linux_user or args.linux_key:
+        creds["linux"] = {"username": args.linux_user or "", "password": args.linux_pass or "", "key_filename": args.linux_key}
+    if args.win_user:
+        creds["windows"] = {"username": args.win_user, "password": args.win_pass or "", "transport": "ntlm"}
+    if not creds:
+        log.error("give --linux-user/--linux-key and/or --win-user")
+        return 2
+    result = asyncio.run(inspect_hosts(inv, creds))
+    inv.save(args.map)
+    print(f"inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed. saved {args.map}")
+    return 0
+
+
 def cmd_capture(args) -> int:
     import getpass
 
@@ -357,6 +375,11 @@ def build_parser():
     cap.add_argument("--port", type=int, default=22)
     cap.add_argument("--device", action="append", help="only capture this device IP (repeatable); default: all in the map")
 
+    ins = sub.add_parser("inspect", help="collect OS/hardware/software/connections from hosts over SSH (Linux) and WinRM (Windows)")
+    ins.add_argument("--map", "-m", default="netmap.json")
+    ins.add_argument("--linux-user"), ins.add_argument("--linux-pass"), ins.add_argument("--linux-key")
+    ins.add_argument("--win-user"), ins.add_argument("--win-pass")
+
     gu = sub.add_parser("gui", help="open the desktop app (needs the 'gui' extra: pip install netmap[gui])")
     gu.add_argument("project", nargs="?", help="project to open")
     return p
@@ -391,6 +414,8 @@ def main(argv=None) -> None:
         rc = cmd_check(args)
     elif args.cmd == "capture":
         rc = cmd_capture(args)
+    elif args.cmd == "inspect":
+        rc = cmd_inspect(args)
     elif args.cmd == "gui":
         try:
             from .gui.app import main as gui_main

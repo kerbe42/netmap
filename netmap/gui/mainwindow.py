@@ -70,6 +70,7 @@ NAV = [
     ("subnets", "Subnets & IP addresses", ("subnet", "subnet")),
     ("vlans", "VLANs", None),
     ("links", "Links", None),
+    ("dependencies", "Dependencies", None),
     ("interfaces", "Interfaces", None),
     ("hardware", "Hardware", None),
     (None, "Review", None),
@@ -86,6 +87,7 @@ PAGE_TITLES = {
     "links": ("Links", ""),
     "interfaces": ("Interfaces", ""),
     "hardware": ("Hardware", "Chassis, stack members, modules, power supplies, fans and transceivers with serial numbers."),
+    "dependencies": ("Dependencies", "Which host talks to which server and on what service, from the connections seen during server inspection."),
     "findings": ("Needs attention", ""),
     "compliance": ("Compliance", "Where the network does not meet common enterprise hardening standards. Everything here is read-only and best-effort - confirm before acting."),
     "history": ("Scan history", ""),
@@ -148,7 +150,7 @@ class MainWindow(QMainWindow):
         st = self.style()
         std = {"overview": QStyle.SP_FileDialogInfoView, "map": QStyle.SP_DriveNetIcon, "vlans": QStyle.SP_FileDialogListView,
                "links": QStyle.SP_ArrowRight, "interfaces": QStyle.SP_FileDialogDetailedView, "hardware": QStyle.SP_ComputerIcon,
-               "findings": QStyle.SP_MessageBoxWarning, "compliance": QStyle.SP_DialogApplyButton, "history": QStyle.SP_BrowserReload}
+               "dependencies": QStyle.SP_FileDialogContentsView, "findings": QStyle.SP_MessageBoxWarning, "compliance": QStyle.SP_DialogApplyButton, "history": QStyle.SP_BrowserReload}
         for key, title, icon in NAV:
             it = QTreeWidgetItem([title])
             if key is None:
@@ -298,6 +300,8 @@ class MainWindow(QMainWindow):
         self._act(em, "Copy selected rows", self._copy_rows)
         em.addSeparator()
         self._act(em, "&SNMP credentials…", self.manage_credentials)
+        em.addSeparator()
+        self._act(em, "&Preferences…", self.preferences, QKeySequence.Preferences)
 
         sm = mb.addMenu("&Scan")
         self.a_scan = self._act(sm, "&New scan…", self.new_scan, "Ctrl+R", "Discover and inventory devices", st.standardIcon(QStyle.SP_MediaPlay))
@@ -328,6 +332,7 @@ class MainWindow(QMainWindow):
         self._act(tm, "Ping / traceroute / DNS / SNMP test", lambda: (self.tools_dock.show(), self.tools_dock.raise_(), self.tools.target.setFocus()))
         self._act(tm, "&Compare with another scan…", self.compare)
         self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/Excel list of devices you were given")
+        self._act(tm, "&Inspect servers (SSH / WinRM)…", self.inspect_servers, tip="Collect OS, hardware, software, services and connections from hosts you have login for")
         self._act(tm, "Capture device &configs (SSH)…", self.capture_configs, tip="Log in read-only and save each device's running-config, to read and diff over time")
         self._act(tm, "&Listen for syslog / SNMP traps…", self.listen_events, tip="Watch messages devices send while you are on site")
 
@@ -834,11 +839,21 @@ class MainWindow(QMainWindow):
     def manage_credentials(self):
         CredentialsDialog(self.store, self).exec()
 
+    def preferences(self):
+        from .prefs import PreferencesDialog
+
+        dlg = PreferencesDialog(self)
+        if dlg.exec():
+            self.set_theme(dlg.chosen_theme())
+            self.statusBar().showMessage("Preferences saved. New scans use these defaults.", 6000)
+
     def new_scan(self):
         if self.worker is not None:
             QMessageBox.information(self, "Scan running", "A scan is already running.")
             return
-        defaults = dict(self.inv.project.get("scan", {}))
+        from .prefs import scan_defaults
+
+        defaults = {**scan_defaults(), **self.inv.project.get("scan", {})}
         dlg = ScanDialog(self.store, defaults, has_data=bool(self.inv.devices), parent=self)
         if not dlg.exec():
             return
@@ -1143,6 +1158,47 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "DHCP imported",
                                f"{summary['leases']} leases: named {summary['named']} host(s), filled {summary['macs_filled']} MAC(s), "
                                f"added {summary['new_hosts']} host(s), marked {summary['scopes']} subnet(s) as DHCP scopes.")
+
+    def inspect_servers(self):
+        if self.worker is not None or getattr(self, "_cap_worker", None) is not None or getattr(self, "_insp_worker", None) is not None:
+            QMessageBox.information(self, "Busy", "A scan, capture or inspection is already running.")
+            return
+        if not self.inv.hosts:
+            QMessageBox.information(self, "No hosts", "Scan the network first; then inspect the hosts found.")
+            return
+        from .inspectdlg import InspectDialog, InspectWorker
+
+        dlg = InspectDialog(self)
+        if not dlg.exec():
+            return
+        creds = dlg.creds()
+        if not creds:
+            QMessageBox.warning(self, "Credentials needed", "Enter SSH and/or WinRM credentials.")
+            return
+        self.activity_dock.show()
+        self.activity_dock.raise_()
+        self.log_view.appendPlainText(f"\n=== Inspecting servers — {time.strftime('%H:%M:%S')} ===")
+        self.scan_phase.setText("Inspecting servers over SSH / WinRM…")
+        self.scan_bar.show()
+        w = InspectWorker(self.inv, creds, self)
+        self._insp_worker = w
+
+        def finished(result):
+            self._insp_worker = None
+            self.scan_bar.hide()
+            self.set_dirty(True)
+            self.refresh()
+            if result.get("error"):
+                self.scan_phase.setText(f"Inspection failed: {result['error']}")
+            else:
+                msg = f"Inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed."
+                self.scan_phase.setText(msg)
+                self.statusBar().showMessage(msg, 12000)
+                if self.path:
+                    self._write(self.path)
+
+        w.done.connect(finished)
+        w.start()
 
     def capture_configs(self, node_id: str = ""):
         if self.worker is not None or getattr(self, "_cap_worker", None) is not None:
