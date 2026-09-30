@@ -2,11 +2,12 @@
 
 Devices are matched by management address, and failing that by serial number, so a
 switch that was readdressed shows up as *moved* rather than as one removal and one
-addition. Hosts are matched by address. Links are compared as unordered pairs of
-(device, normalised port).
+addition. Hosts are matched by address, then by MAC (a host that got a new address is
+*readdressed*). Links are compared as unordered pairs of (device, normalised port).
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 from .graph import build_graph, edge_ports, norm_port
@@ -15,11 +16,32 @@ from .model import Inventory
 DEVICE_FIELDS = [("name", "Name"), ("model", "Model"), ("serial", "Serial"), ("os_version", "OS version"), ("vendor", "Vendor"),
                  ("role", "Role"), ("location", "Location"), ("contact", "Contact")]
 
+# what vendors put in the serial field when there is none
+_PLACEHOLDER_SERIALS = {"", "n/a", "na", "none", "null", "0", "00000000", "not specified", "not available", "unknown", "unspecified",
+                        "to be filled by o.e.m.", "default string", "system serial number", "-"}
+REBOOT_MARGIN_S = 3600  # clock skew between the two collections we tolerate
+
+
+def _serial_key(serial: str) -> str:
+    """A serial that can identify a device, normalised, or "" for a placeholder."""
+    s = (serial or "").strip()
+    if len(s) < 5 or s.lower() in _PLACEHOLDER_SERIALS or set(s) <= set("0-. "):
+        return ""
+    return s.upper()
+
+
+def _serial_index(inv: Inventory) -> dict[str, str]:
+    """serial -> device id, for serials that are real and unique within this inventory
+    (two devices reporting the same serial is a shared placeholder, or a stack member's)."""
+    keys = {did: _serial_key(d.serial) for did, d in inv.devices.items()}
+    counts = Counter(k for k in keys.values() if k)
+    return {k: did for did, k in keys.items() if k and counts[k] == 1}
+
 
 @dataclass
 class Change:
     kind: str  # device | host | subnet | link | vlan
-    change: str  # added | removed | changed | moved
+    change: str  # added | removed | changed | moved | readdressed
     item: str  # node id or description
     name: str = ""
     detail: str = ""
@@ -49,10 +71,38 @@ class Diff:
                 continue
             lines.append(f"{kind.upper()}S ({len(items)} changes)")
             for c in items:
-                sign = {"added": "+", "removed": "-", "changed": "~", "moved": ">"}.get(c.change, "?")
+                sign = {"added": "+", "removed": "-", "changed": "~", "moved": ">", "readdressed": ">"}.get(c.change, "?")
                 lines.append(f"  {sign} {c.name or c.item:32} {c.detail}")
             lines.append("")
         return "\n".join(lines).rstrip()
+
+
+UPTIME_WRAP_S = 2**32 / 100  # sysUpTime is a 32-bit count of centiseconds: 497.1 days
+
+
+def _rebooted(od, nd) -> bool:
+    """Did the device restart between the two collections? The uptime went down, and it is
+    shorter than the time between the collections (a device that stayed up has an uptime
+    at least that long). A counter that wrapped also went down, but then the new value is
+    what the old one plus the elapsed time would read modulo the wrap - not a reboot."""
+    if not (od.uptime_s and nd.uptime_s and nd.uptime_s < od.uptime_s):
+        return False
+    elapsed = nd.collected_at - od.collected_at
+    if elapsed <= 0 or nd.uptime_s >= elapsed + REBOOT_MARGIN_S:
+        return False
+    expected_after_wrap = od.uptime_s + elapsed - UPTIME_WRAP_S
+    if abs(nd.uptime_s - expected_after_wrap) <= REBOOT_MARGIN_S:
+        return False
+    return True
+
+
+def _ip_key(ip: str):
+    import ipaddress
+
+    try:
+        return (0, int(ipaddress.ip_address(ip)))
+    except ValueError:
+        return (1, ip)
 
 
 def _links(inv: Inventory) -> dict[tuple, str]:
@@ -72,13 +122,15 @@ def _links(inv: Inventory) -> dict[tuple, str]:
 def compare(old: Inventory, new: Inventory) -> Diff:
     d = Diff()
     add = d.changes.append
-    old_by_serial = {x.serial: x for x in old.devices.values() if x.serial}
+    old_by_serial = _serial_index(old)
+    new_by_serial = _serial_index(new)
     matched_old = set()
     for did, nd in new.devices.items():
         od = old.devices.get(did)
-        if od is None and nd.serial and nd.serial in old_by_serial:
-            od = old_by_serial[nd.serial]
-            add(Change("device", "moved", did, nd.name or did, f"was {od.id}, now {did} (same serial {nd.serial})"))
+        sk = _serial_key(nd.serial)
+        if od is None and sk and sk in old_by_serial and new_by_serial.get(sk) == did and old_by_serial[sk] not in new.devices:
+            od = old.devices[old_by_serial[sk]]
+            add(Change("device", "moved", did, nd.name or did, f"was {od.id}, now {did} (same serial {nd.serial.strip()})"))
         if od is None:
             add(Change("device", "added", did, nd.name or did, " ".join(x for x in (nd.vendor, nd.model, nd.os_version) if x)))
             continue
@@ -98,7 +150,7 @@ def compare(old: Inventory, new: Inventory) -> Diff:
             if went_down:
                 bits.append(f"{len(went_down)} port(s) down" + (f" ({', '.join(went_down[:4])}{'…' if len(went_down) > 4 else ''})" if went_down else ""))
             diffs.append("; ".join(bits))
-        if od.uptime_s and nd.uptime_s and nd.uptime_s < od.uptime_s and nd.collected_at > od.collected_at:
+        if _rebooted(od, nd):
             diffs.append("rebooted since the earlier scan")
         if diffs:
             add(Change("device", "changed", did, nd.name or did, "; ".join(diffs)))
@@ -126,10 +178,28 @@ def compare(old: Inventory, new: Inventory) -> Diff:
 
     oh = {ip: h for ip, h in old.hosts.items() if ip not in old.ip_to_device}
     nh = {ip: h for ip, h in new.hosts.items() if ip not in new.ip_to_device}
-    for ip in sorted(nh.keys() - oh.keys()):
+    added_ips = nh.keys() - oh.keys()
+    removed_ips = oh.keys() - nh.keys()
+    # a host that went away at one address and appeared at another with the same MAC moved
+    # address (DHCP, a re-IP), it was not replaced. Only unambiguous MACs pair up.
+    def _unique_macs(ips, hosts):
+        c = Counter(hosts[ip].mac for ip in ips if hosts[ip].mac)
+        return {hosts[ip].mac: ip for ip in ips if hosts[ip].mac and c[hosts[ip].mac] == 1}
+
+    old_mac = _unique_macs(removed_ips, oh)
+    new_mac = _unique_macs(added_ips, nh)
+    readdressed = {}  # new ip -> old ip
+    for mac, old_ip in old_mac.items():
+        new_ip = new_mac.get(mac)
+        if new_ip:
+            readdressed[new_ip] = old_ip
+    for ip in sorted(readdressed, key=_ip_key):
+        h = nh[ip]
+        add(Change("host", "readdressed", ip, h.hostname or oh[readdressed[ip]].hostname or ip, f"was {readdressed[ip]}, now {ip} (same MAC {h.mac})"))
+    for ip in sorted(added_ips - readdressed.keys(), key=_ip_key):
         h = nh[ip]
         add(Change("host", "added", ip, h.hostname or ip, " ".join(x for x in (h.mac or "", h.vendor) if x)))
-    for ip in sorted(oh.keys() - nh.keys()):
+    for ip in sorted(removed_ips - set(readdressed.values()), key=_ip_key):
         h = oh[ip]
         add(Change("host", "removed", ip, h.hostname or ip, " ".join(x for x in (h.mac or "", h.vendor) if x)))
     for ip in sorted(nh.keys() & oh.keys()):

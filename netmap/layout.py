@@ -10,7 +10,10 @@ Three layouts, each a function from (nodes, edges) to {node id: (x, y)}:
 * ``radial``: rings around one chosen node, for "what is near this box".
 
 `nodes` maps id -> attributes (``kind``: device | host | subnet, ``role``, ``label``);
-`edges` is an iterable of (u, v) pairs, duplicates and self-loops allowed.
+`edges` is an iterable of (u, v) pairs or (u, v, attrs) triples - the attrs' ``kind``
+(lldp | cdp | l3 | fdb | member) lets the layered layout pack a host under the switch
+port it is on rather than treat its subnet membership as a second parent. Duplicates
+and self-loops are allowed.
 """
 from __future__ import annotations
 
@@ -21,13 +24,29 @@ from collections import defaultdict, deque
 from typing import Iterable, Optional
 
 TIER = {"firewall": 0, "router": 1, "l3switch": 2, "switch": 3}
+ATTACH_KINDS = {"fdb", "lldp", "cdp"}  # the edge that says which port something hangs off
+WIDTH_BUDGET = 4000.0  # a layer wider than this wraps its blocks into further rows
 
 Pos = dict[str, tuple[float, float]]
 
 
+def _pairs(edges: Iterable) -> tuple[list[tuple[str, str]], dict[tuple[str, str], set]]:
+    """(u, v) pairs plus {(u, v): {edge kinds}} from edges given as pairs or triples."""
+    pairs: list[tuple[str, str]] = []
+    kinds: dict[tuple[str, str], set] = defaultdict(set)
+    for e in edges:
+        u, v = e[0], e[1]
+        pairs.append((u, v))
+        if len(e) > 2 and isinstance(e[2], dict) and e[2].get("kind"):
+            key = (u, v) if u <= v else (v, u)
+            kinds[key].add(e[2]["kind"])
+    return pairs, kinds
+
+
 def _adjacency(nodes: dict, edges: Iterable) -> dict[str, set]:
     adj: dict[str, set] = {n: set() for n in nodes}
-    for u, v in edges:
+    for e in edges:
+        u, v = e[0], e[1]
         if u != v and u in adj and v in adj:
             adj[u].add(v)
             adj[v].add(u)
@@ -113,8 +132,10 @@ def layered(
     leaf_h: float = 84.0,
     pack_min: int = 4,
     comp_gap: float = 220.0,
+    width_budget: float = WIDTH_BUDGET,
 ) -> Pos:
-    adj = _adjacency(nodes, edges)
+    pairs, kinds = _pairs(edges)
+    adj = _adjacency(nodes, pairs)
     comps = [c for c in _components(adj) if len(c) > 1]
     isolated = sorted((n for n in adj if not adj[n]), key=lambda n: natural_key(nodes, n))
     comps.sort(key=lambda c: (-len(c), min(c)))
@@ -122,7 +143,7 @@ def layered(
     x0 = 0.0
     bottom = 0.0
     for comp in comps:
-        p = _layered_component(comp, nodes, adj, hgap, vgap, leaf_w, leaf_h, pack_min)
+        p = _layered_component(comp, nodes, adj, hgap, vgap, leaf_w, leaf_h, pack_min, kinds, width_budget)
         minx = min(x for x, _ in p.values())
         maxx = max(x for x, _ in p.values())
         for n, (x, y) in p.items():
@@ -139,8 +160,27 @@ def layered(
     return pos
 
 
-def _layered_component(comp, nodes, adj, hgap, vgap, leaf_w, leaf_h, pack_min) -> Pos:
-    cset = set(comp)
+def _attach_parent(n: str, nodes: dict, adj: dict, kinds: dict) -> Optional[str]:
+    """The one node a leaf hangs off. A node with a single neighbour hangs off it. A host
+    with one port-level link (fdb/lldp/cdp) whose other links are only subnet membership
+    hangs off the switch: the subnet is where it lives, not what it is plugged into."""
+    nb = adj[n]
+    if len(nb) == 1:
+        return next(iter(nb))
+    if not kinds or nodes.get(n, {}).get("kind") != "host":
+        return None
+    ports = []
+    for m in nb:
+        k = kinds.get((n, m) if n <= m else (m, n), set())
+        if k & ATTACH_KINDS:
+            ports.append(m)
+        elif k - {"member"}:
+            return None  # some other kind of link: not a simple leaf
+    return ports[0] if len(ports) == 1 else None
+
+
+def _layered_component(comp, nodes, adj, hgap, vgap, leaf_w, leaf_h, pack_min, kinds=None, width_budget=WIDTH_BUDGET) -> Pos:
+    kinds = kinds or {}
     layer: dict[str, int] = {}
     tiers = {n: _tier(nodes.get(n, {})) for n in comp}
     for n in comp:
@@ -190,10 +230,9 @@ def _layered_component(comp, nodes, adj, hgap, vgap, leaf_w, leaf_h, pack_min) -
     # leaves under one parent become a packed block in the layer below it
     children: dict[str, list[str]] = defaultdict(list)
     for n in comp:
-        if len(adj[n]) == 1:
-            (p,) = tuple(adj[n])
-            if layer[n] > layer[p] and len(adj[p]) > 1:
-                children[p].append(n)
+        p = _attach_parent(n, nodes, adj, kinds)
+        if p is not None and len(adj[p]) > 1 and (layer[n] > layer[p] or len(adj[n]) > 1):
+            children[p].append(n)
     blocks: dict[str, list[str]] = {}
     for p, kids in children.items():
         if len(kids) >= pack_min:
@@ -260,49 +299,77 @@ def _layered_component(comp, nodes, adj, hgap, vgap, leaf_w, leaf_h, pack_min) -
                 keyed.sort(key=lambda t: (t[0], t[1]))
                 items[li] = [it for _, _, it in keyed]
 
+    # A layer of packed blocks can be far wider than a screen (60 switches x 250 hosts is
+    # 2.6 million pixels in one row). Wrap such a layer into rows of at most width_budget,
+    # in the crossing-reduced order, so neighbouring blocks share a row; each row is then
+    # placed on its own, pulled under its parents without overlapping within the row.
+    sub_rows: list[list[list]] = []  # per layer: [[items of row 0], [items of row 1], ...]
+    for li in range(nlayers):
+        row = items[li]
+        total = sum(width(it) for it in row) + 20.0 * max(len(row) - 1, 0)
+        if total <= width_budget or not any(it[0] == "b" for it in row):
+            sub_rows.append([row])
+            continue
+        chunks: list[list] = [[]]
+        cur = 0.0
+        for it in row:
+            w = width(it)
+            if chunks[-1] and cur + w > width_budget:
+                chunks.append([])
+                cur = 0.0
+            chunks[-1].append(it)
+            cur += w + 20.0
+        sub_rows.append(chunks)
+
     # x: start packed, then pull each item over what it connects to, without overlaps
     x: dict = {}
     for li in range(nlayers):
-        cur = 0.0
-        for it in items[li]:
-            w = width(it)
-            x[it] = cur + w / 2
-            cur += w + 20
+        for chunk in sub_rows[li]:
+            cur = 0.0
+            for it in chunk:
+                w = width(it)
+                x[it] = cur + w / 2
+                cur += w + 20
     for _ in range(8):
         for rng, up in ((range(1, nlayers), True), (range(nlayers - 2, -1, -1), False)):
             for li in rng:
-                row = items[li]
-                desired = []
-                for it in row:
-                    ns = [x[key_of(m)] for m in links(it, up) if key_of(m) in x]
-                    desired.append(sum(ns) / len(ns) if ns else x[it])
-                xs = _pav(desired, [width(it) for it in row], 24.0)
-                for it, v in zip(row, xs):
-                    x[it] = v
+                for chunk in sub_rows[li]:
+                    desired = []
+                    for it in chunk:
+                        ns = [x[key_of(m)] for m in links(it, up) if key_of(m) in x]
+                        desired.append(sum(ns) / len(ns) if ns else x[it])
+                    xs = _pav(desired, [width(it) for it in chunk], 24.0)
+                    for it, v in zip(chunk, xs):
+                        x[it] = v
 
-    # y: layers top to bottom, with room for the blocks
-    ys = []
+    def block_extent(it):
+        if it[0] != "b":
+            return 0.0
+        rows = int(math.ceil(len(blocks[it[1]]) / cols_of(it[1])))
+        return (rows - 1) * leaf_h
+
+    # y: layers top to bottom, with room for the blocks and the wrapped rows
+    item_y: dict = {}
     y = 0.0
     for li in range(nlayers):
-        ys.append(y)
-        extent = 0.0
-        for kind, n in items[li]:
-            if kind == "b":
-                rows = int(math.ceil(len(blocks[n]) / cols_of(n)))
-                extent = max(extent, (rows - 1) * leaf_h)
-        y += extent + vgap
+        for chunk in sub_rows[li]:
+            for it in chunk:
+                item_y[it] = y
+            extent = max((block_extent(it) for it in chunk), default=0.0)
+            y += extent + (vgap if chunk is sub_rows[li][-1] else leaf_h + vgap * 0.5)
     pos: Pos = {}
     for li in range(nlayers):
         for it in items[li]:
             kind, n = it
+            yi = item_y[it]
             if kind == "n":
-                pos[n] = (x[it], ys[li])
+                pos[n] = (x[it], yi)
             else:
                 cols = cols_of(n)
                 kids = blocks[n]
                 left = x[it] - (cols - 1) * leaf_w / 2
                 for i, k in enumerate(kids):
-                    pos[k] = (left + (i % cols) * leaf_w, ys[li] + (i // cols) * leaf_h)
+                    pos[k] = (left + (i % cols) * leaf_w, yi + (i // cols) * leaf_h)
     return pos
 
 

@@ -18,6 +18,8 @@ from .model import Inventory
 
 log = logging.getLogger("netmap.report")
 
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
 HEADER_FILL = "FF1F3864"
 BANDS = {"device": "FFDDEBF7", "host": "FFF2F2F2", "subnet": "FFE2EFDA"}
 
@@ -34,6 +36,11 @@ def _sheet(wb, title, headers, rows, widths=None, freeze="A2"):
         c.alignment = Alignment(vertical="center", wrap_text=True)
     for r in rows:
         ws.append(r)
+        # text that came off the network (a sysName, an ifAlias, a location) starting with
+        # = + - @ would otherwise be stored as a formula and evaluated when opened
+        for c in ws[ws.max_row]:
+            if isinstance(c.value, str) and c.value.startswith(_FORMULA_LEAD):
+                c.data_type = "s"
     ws.freeze_panes = freeze
     if rows:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(rows) + 1}"
@@ -46,6 +53,24 @@ def _sheet(wb, title, headers, rows, widths=None, freeze="A2"):
     return ws
 
 
+def _support_rows(inv: Inventory) -> list[list]:
+    """One row per polled device: where it stands against the vendor's support dates, or
+    "no record" when the bundled table does not know the platform."""
+    try:
+        from .eol import annotate_device
+    except Exception:  # noqa: BLE001
+        return []
+    rows = []
+    for d in sorted(inv.devices.values(), key=lambda x: (x.depth, ipaddress.ip_address(x.id))):
+        e = annotate_device(d) or {}
+        status = e.get("status") or "no record"
+        rows.append([inv.display_name(d.id), d.id, d.vendor, d.model, e.get("family", ""), status, e.get("eos", ""), e.get("eol", ""),
+                     e.get("days_to_eol", ""), e.get("note", "") if e else "platform not in the bundled support table; check with the vendor"])
+    order = {"end-of-support": 0, "end-of-sale": 1, "active": 2, "unknown": 3, "no record": 4}
+    rows.sort(key=lambda r: (order.get(r[5], 9), r[0]))
+    return rows
+
+
 def export_xlsx(inv: Inventory, g, path: str) -> str:
     """Write the whole inventory as a multi-sheet workbook. Returns the path written."""
     try:
@@ -53,8 +78,11 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
     except ImportError as e:  # pragma: no cover - dependency is declared, but say so clearly
         raise RuntimeError("openpyxl is required for --xlsx (pip install openpyxl)") from e
 
+    from .views import Snapshot, compliance_rows, device_rows, finding_rows
+
     wb = Workbook()
     wb.remove(wb.active)
+    snap = Snapshot(inv)  # the same derived views the desktop app shows (graph is cached)
 
     roles = Counter(d.role for d in inv.devices.values())
     vendors = Counter(d.vendor or "unknown" for d in inv.devices.values())
@@ -81,17 +109,25 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
     summary += [[], ["Links by kind"]] + [[f"  {k}", n] for k, n in edge_kinds.most_common()]
     _sheet(wb, "Summary", ["Item", "Value"], summary, widths={"Item": 44, "Value": 30}, freeze="A2")
 
+    # what was collected, plus what people documented on top of it (name, site, owner, status, notes)
+    dev_view = {r["_id"]: r for r in device_rows(snap)}
     _sheet(
         wb, "Devices",
-        ["IP", "Name", "Role", "Vendor", "Model", "OS version", "Serial", "Location", "Contact", "OS / sysDescr", "All IPs",
-         "Interfaces", "VLANs", "LLDP", "CDP", "ARP", "Routes", "FDB", "Uptime (days)", "Depth", "Discovered via", "Credential", "Errors"],
+        ["IP", "Name", "Role", "Vendor", "Model", "OS version", "Serial", "Site", "Owner", "Status", "Asset tag", "Tags", "Notes",
+         "SNMP location", "Contact", "OS / sysDescr", "All IPs", "Interfaces", "Ports up", "Free ports", "VLANs", "LLDP", "CDP", "ARP", "Routes", "FDB",
+         "Uptime (days)", "Depth", "Discovered via", "Credential", "Errors"],
         [
-            [d.id, d.name, d.role, d.vendor, d.model, d.os_version, d.serial, d.location, d.contact, d.sysdescr[:300], " ".join(d.ips),
-             len(d.interfaces), len(d.vlans), sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors),
+            [d.id, inv.display_name(d.id), note.get("role") or d.role, d.vendor, d.model, d.os_version, d.serial,
+             note.get("site") or d.location, note.get("owner", ""), note.get("status", ""), note.get("asset_tag", ""),
+             ", ".join(note.get("tags", [])), note.get("notes", ""),
+             d.location, d.contact, d.sysdescr[:300], " ".join(d.ips),
+             len(d.interfaces), sum(1 for i in d.interfaces if i.oper_up), dev_view.get(d.id, {}).get("free_ports", ""), len(d.vlans),
+             sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors),
              len(d.arp), len(d.routes), len(d.fdb), d.uptime_s // 86400, d.depth, d.discovered_via, d.credential, "; ".join(d.errors)[:300]]
             for d in sorted(inv.devices.values(), key=lambda x: (x.depth, ipaddress.ip_address(x.id)))
+            for note in [inv.note(d.id)]
         ],
-        widths={"OS / sysDescr": 50, "Errors": 40},
+        widths={"OS / sysDescr": 50, "Errors": 40, "Notes": 40},
     )
 
     _sheet(
@@ -153,9 +189,45 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
     )
 
     _sheet(
+        wb, "Findings",
+        ["Level", "Finding", "Item", "Detail", "Why it matters"],
+        [[r["severity"], r["category"], r["item"], r["detail"], r["why"]] for r in finding_rows(snap)],
+        widths={"Detail": 46, "Why it matters": 70},
+    )
+
+    _sheet(
+        wb, "Compliance",
+        ["Level", "Standard", "Item", "Finding", "What the standard expects"],
+        [[r["severity"], r["category"], r["item"], r["found"], r["standard"]] for r in compliance_rows(snap)],
+        widths={"Finding": 40, "What the standard expects": 70},
+    )
+
+    _sheet(
+        wb, "Hardware support",
+        ["Device", "IP", "Vendor", "Model", "Family", "Status", "End of sale", "End of support", "Days to end of support", "Note"],
+        _support_rows(inv),
+        widths={"Note": 50},
+    )
+
+    try:
+        from .deps import dependency_rows
+
+        dep_rows = [[r["client"], r["server"], r["service"], r["port"], r["proto"], r["count"], r["processes"]] for r in dependency_rows(inv, snap)]
+    except Exception as e:  # noqa: BLE001 - a missing optional table must not lose the workbook
+        log.warning("dependencies sheet skipped: %s", e)
+        dep_rows = []
+    _sheet(
+        wb, "Dependencies",
+        ["Client", "Server", "Service", "Port", "Proto", "Connections", "Process"],
+        dep_rows,
+    )
+
+    _sheet(
         wb, "Gaps",
         ["What", "Identifier", "Detail", "Why it matters"],
-        [["Unpolled neighbour", a.get("label"), f"ip={a.get('ip') or '-'} chassis={a.get('chassis_id', '') or '-'} {a.get('model', '')[:60]}",
+        [["Endpoint announced, no address seen" if a.get("endpoint") else "Unpolled neighbour", a.get("label"),
+          f"ip={a.get('ip') or '-'} chassis={a.get('chassis_id', '') or '-'} {a.get('model', '')[:60]}",
+          "Told a switch what it is over LLDP/CDP but no address was seen for it" if a.get("endpoint") else
           "Announced by a neighbour but no credentials worked - an unmanaged device or one outside the handover"] for _, a in unpolled]
         + [["No SNMP answer", ip, f"first seen via {via}", "Probed inside scope and never answered - host, filtered, or different credentials"]
            for ip, via in sorted(inv.unreachable.items(), key=lambda kv: ipaddress.ip_address(kv[0]))[:2000]]

@@ -19,7 +19,9 @@ TRUNK_MAC_THRESHOLD = 8
 
 # names/types that mark an interface as a link-aggregation bundle (an uplink that
 # learns every downstream MAC on its port-channel ifIndex, not the physical member)
-_LAG_NAME_RE = re.compile(r"^(po|port-?channel|bundle-ether|be\d|ae\d|bond\d|lag\d|team)", re.I)
+# "po" needs a digit right after it: "Port 1" / "port 24" are ordinary access ports on
+# small-business switches, and treating them as bundles left every host unplaced
+_LAG_NAME_RE = re.compile(r"^(po\d|port-?channel|bundle-ether|be\d|ae\d|bond\d|lag\d|team\d?(\W|$))", re.I)
 _LAG_IFTYPE = {161}  # ieee8023adLag
 
 
@@ -98,21 +100,36 @@ def _register_vips(inv: Inventory) -> None:
         inv.ip_to_device.setdefault(vip, did)  # never clobber a device that truly owns the IP
 
 
+MULTIHOME_MAX = 8  # a NIC with this many addresses in one subnet is aliasing, not a router
+
+
 def _drop_shared_macs(inv: Inventory) -> None:
     """A MAC that shows up on many different host IPs is a next-hop router or a scan artifact,
     not those hosts' own address. nmap on Windows reports one placeholder for every host it
     cannot ARP, and a routed ARP entry carries the gateway's MAC. Blank the MAC on hosts where
     it is over-shared, unless it belongs to a device we actually polled (a real shared uplink).
 
-    A MAC seen on more than two host IPs, and not owned by a polled device, is dropped.
+    A server with a few IP aliases on one NIC also shares its MAC across addresses, but all
+    of them sit in one subnet: that is kept (up to MULTIHOME_MAX). Anything else seen on
+    more than two host IPs is dropped, and the drop is recorded in ``inv.shared_macs`` so
+    the Findings page can say so.
     """
-    from collections import Counter
-
     counts: Counter = Counter()
+    ips_of: dict[str, list[str]] = defaultdict(list)
     for h in inv.hosts.values():
         if h.mac and h.ip not in inv.ip_to_device:
             counts[h.mac] += 1
-    over = {m for m, n in counts.items() if n > 2 and m not in inv.mac_to_device}
+            ips_of[h.mac].append(h.ip)
+    inv.shared_macs = []
+    over: set = set()
+    for m, n in counts.items():
+        if n <= 2 or m in inv.mac_to_device:
+            continue
+        subnets = {inv.subnet_for_ip(ip) for ip in ips_of[m]}
+        if n <= MULTIHOME_MAX and len(subnets) == 1 and None not in subnets:
+            continue  # aliases on one interface
+        over.add(m)
+        inv.shared_macs.append({"mac": m, "count": n, "subnets": sorted(x for x in subnets if x), "ips": sorted(ips_of[m], key=_ip_sort)})
     if not over:
         return
     for h in inv.hosts.values():
@@ -120,6 +137,13 @@ def _drop_shared_macs(inv: Inventory) -> None:
             h.mac = None
             if h.vendor and not h.ports:
                 h.vendor = ""
+
+
+def _ip_sort(ip: str):
+    try:
+        return (0, int(ipaddress.ip_address(ip)))
+    except ValueError:
+        return (1, 0)
 
 
 def subnet_vlans(inv: Inventory) -> dict[str, set]:
@@ -130,7 +154,9 @@ def subnet_vlans(inv: Inventory) -> dict[str, set]:
             if not i.ips:
                 continue
             m = re.search(r"vlan\s*\.?0*(\d+)", f"{i.name} {i.descr}", re.I)
-            if not m and i.vlan and i.mode != "trunk":
+            # a routed port reports PVID 1 like any other port; only an access port's VLAN
+            # says which VLAN the addressed segment is
+            if not m and i.vlan and i.mode == "access":
                 vid = i.vlan
             elif m:
                 vid = int(m.group(1))
@@ -209,11 +235,12 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
     # inventory, which bumps inv.rev (and, during a live scan, replaces the whole object),
     # so cache the result and reuse it for refreshes that changed nothing - page switches,
     # filtering, resizing, selecting a node.
-    key = (inv.rev, include_hosts, include_subnets, fdb_links)
+    cache_key = (inv.rev, include_hosts, include_subnets, fdb_links)
     cache = getattr(inv, "_graph_cache", ())
-    if cache and cache[:4] == key:
+    if cache and cache[:4] == cache_key:
         return cache[4]
     enrich_inventory(inv)
+    cache_key = (inv.rev, include_hosts, include_subnets, fdb_links)  # enrichment may move rev
     g = nx.MultiGraph()
     # --- device nodes ---
     for d in inv.devices.values():
@@ -280,6 +307,7 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                         model=nb.remote_platform,
                         chassis_id=nb.remote_chassis_id,
                         caps=nb.remote_caps,
+                        endpoint=stub_endpoint_role(nb),
                     )
                 tgt = sid
             if tgt == d.id:
@@ -290,10 +318,10 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                 if h is not None:  # keep the inventory (and so every export) in step with the map
                     h.role = g.nodes[tgt]["role"]
                     h.hostname = h.hostname or g.nodes[tgt].get("hostname", "")
-            key = tuple(sorted([(d.id, norm_port(nb.local_port)), (tgt, norm_port(nb.remote_port))]))
-            if key in seen_l2:
+            l2_key = tuple(sorted([(d.id, norm_port(nb.local_port)), (tgt, norm_port(nb.remote_port))]))
+            if l2_key in seen_l2:
                 continue
-            seen_l2.add(key)
+            seen_l2.add(l2_key)
             g.add_edge(d.id, tgt, kind=nb.proto, src=d.id, src_port=nb.local_port, dst_port=nb.remote_port, label=f"{nb.local_port} - {nb.remote_port}")
 
     # --- L3 adjacency (routes) ---
@@ -307,12 +335,12 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
             if tgt and tgt != d.id:
                 nh_count[tgt] += 1
         for tgt, n in nh_count.items():
-            key = tuple(sorted([d.id, tgt]))
-            if key in seen_l3 or g.has_edge(d.id, tgt):
+            l3_key = tuple(sorted([d.id, tgt]))
+            if l3_key in seen_l3 or g.has_edge(d.id, tgt):
                 # don't clutter a LLDP-linked pair with a parallel l3 edge, but keep the count
-                seen_l3.add(key)
+                seen_l3.add(l3_key)
                 continue
-            seen_l3.add(key)
+            seen_l3.add(l3_key)
             g.add_edge(d.id, tgt, kind="l3", label=f"{n} routes", routes=n)
 
     # --- subnets ---
@@ -334,8 +362,7 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                     cidr = str(net)
                     if cidr in g and net.prefixlen < 31:
                         g.add_edge(d.id, cidr, kind="member", label=f"{i.name or i.descr} {ipc}", port=i.name or i.descr, addr=ipc)
-                        if d.id not in inv.subnets[cidr].gateways:
-                            inv.subnets[cidr].gateways.append(d.id)
+    compute_gateways(inv)
 
     # --- hosts ---
     if include_hosts:
@@ -360,11 +387,15 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
             # We exclude the definite uplinks, then reconcile each MAC to the *leaf* -
             # the candidate access port carrying the fewest MACs (uplinks carry many).
             candidates: dict = defaultdict(list)  # mac -> [(count, dev_id, ifidx, is_access)]
+            fdb_vlan: dict[str, dict] = {}  # dev id -> {(mac, ifidx): vlan}
             for d in inv.devices.values():
                 per_port: dict = defaultdict(set)
+                vl = fdb_vlan[d.id] = {}
                 for f in d.fdb:
                     if f.if_index is not None:
                         per_port[f.if_index].add(f.mac)
+                        if f.vlan is not None:
+                            vl.setdefault((f.mac, f.if_index), f.vlan)
                 for ifidx, macs in per_port.items():
                     if ifidx in uplink_ports[d.id] or _is_uplink_iface(d, ifidx):
                         continue
@@ -385,15 +416,67 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                 d = inv.devices[dev_id]
                 if g.has_edge(d.id, hip):
                     continue
-                vlan = next((f.vlan for f in d.fdb if f.mac == mac and f.if_index == ifidx), None)
+                vlan = fdb_vlan.get(d.id, {}).get((mac, ifidx))
                 label = d.iface_label(ifidx)
                 g.add_edge(d.id, hip, kind="fdb", label=label, port=label, vlan=vlan)
                 seen = {"device": d.id, "interface": label, "vlan": vlan, "via": "fdb"}
                 if seen not in inv.hosts[hip].seen_on:
                     inv.hosts[hip].seen_on.append(seen)
     apply_annotations(g, inv)
-    inv._graph_cache = (*key, g)
+    inv._graph_cache = (*cache_key, g)
     return g
+
+
+ROUTING_ROLES = {"router", "l3switch", "firewall"}
+
+
+def _forwards_for_others(d) -> bool:
+    """True if the device carries routes it must forward for: anything beyond its own
+    connected networks and a default route (an L2 switch's management gateway)."""
+    for r in d.routes:
+        if r.nexthop in ("", "0.0.0.0") or r.type == 3:  # connected / local
+            continue
+        if r.dest in ("0.0.0.0/0", "::/0"):
+            continue
+        return True
+    return False
+
+
+def compute_gateways(inv: Inventory) -> None:
+    """Rebuild ``Subnet.gateways`` for every subnet: the devices that route for it.
+
+    A device qualifies when it has an address in the subnet and either routes by role
+    (router, L3 switch, firewall) or carries routes for other networks, or when it is the
+    active owner of a first-hop redundancy address (HSRP/VRRP VIP) in the subnet. An L2
+    access switch's management SVI is a *member* of the subnet, not its gateway.
+    """
+    gws: dict[str, list[str]] = {cidr: [] for cidr in inv.subnets}
+    for d in inv.devices.values():
+        routes_for_others = None
+        for i in d.interfaces:
+            for ipc in i.ips:
+                try:
+                    net = ipaddress.ip_network(ipc, strict=False)
+                except ValueError:
+                    continue
+                cidr = str(net)
+                if cidr not in gws or net.prefixlen >= 31 or d.id in gws[cidr]:
+                    continue
+                if d.role in ROUTING_ROLES:
+                    gws[cidr].append(d.id)
+                    continue
+                if routes_for_others is None:
+                    routes_for_others = _forwards_for_others(d)
+                if routes_for_others:
+                    gws[cidr].append(d.id)
+        for r in getattr(d, "redundancy", []) or []:
+            vip = r.get("vip")
+            if vip and r.get("state") in ("active", "master"):
+                cidr = inv.subnet_for_ip(vip)
+                if cidr in gws and d.id not in gws[cidr]:
+                    gws[cidr].append(d.id)
+    for cidr, s in inv.subnets.items():
+        s.gateways = gws.get(cidr, [])
 
 
 def apply_annotations(g: nx.MultiGraph, inv: Inventory) -> None:
@@ -431,6 +514,27 @@ def _add_host_nodes(g: nx.MultiGraph, inv: Inventory) -> None:
             ports=[f"{p['port']}/{p['proto']} {p['service']} {p['product']}".strip() for p in h.ports],
             snmp_failed=h.snmp_failed,
         )
+
+
+def stub_endpoint_role(nb) -> str:
+    """For a neighbour we could not poll and have no address for: what its LLDP/CDP
+    capabilities say it is when that is an endpoint (phone, access point, plain station),
+    or "" when it claims to route or bridge - network kit that should have answered."""
+    caps = (nb.remote_caps or "").lower()
+    plat = (nb.remote_platform or "").lower()
+    routes = "router" in caps
+    bridges = "bridge" in caps or "switch" in caps
+    if routes and bridges:
+        return ""  # claims to route and to bridge: a layer-3 switch, not an endpoint
+    # an explicit phone / access-point claim is taken at face value: phones carry a small
+    # bridge for the PC behind them and access points often claim "router"
+    if "wlan-ap" in caps or re.search(r"\bap\b|access point", plat):
+        return "wireless"
+    if "telephone" in caps or "phone" in caps or re.search(r"\bphone\b|\bsip-t|\bvvx\b", plat):
+        return "phone"
+    if ("station" in caps or "host" in caps) and not routes and not bridges:
+        return "host"
+    return ""
 
 
 def _upgrade_host(attrs: dict, nb) -> None:
@@ -517,18 +621,48 @@ def export_dot(g: nx.MultiGraph, path: str) -> None:
         f.write("\n".join(lines) + "\n")
 
 
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def spreadsheet_text(v):
+    """A cell value a spreadsheet application will read as text, not as a formula.
+
+    Anything we export came off the network - sysName, ifAlias, a location string, an
+    LLDP system description - and a value starting with = + - @ or a tab would be
+    evaluated by a spreadsheet application when the CSV is opened. Prefix those with
+    an apostrophe, the convention those applications use for "this is text".
+    """
+    if isinstance(v, str) and v.startswith(_FORMULA_LEAD):
+        return "'" + v
+    return v
+
+
+class SafeCsvWriter:
+    """csv.writer with every text cell passed through spreadsheet_text()."""
+
+    def __init__(self, f, **kw):
+        self._w = csv.writer(f, **kw)
+
+    def writerow(self, row):
+        self._w.writerow([spreadsheet_text(v) for v in row])
+
+    def writerows(self, rows):
+        for r in rows:
+            self.writerow(r)
+
+
 def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     files = []
     p = f"{prefix}devices.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["ip", "name", "role", "vendor", "model", "os_version", "serial", "location", "contact", "all_ips", "interfaces", "vlans", "lldp_neighbors", "cdp_neighbors", "arp_entries", "routes", "fdb_entries", "uptime_days", "sysdescr", "discovered_via", "depth", "credential", "errors"])
         for d in inv.devices.values():
             w.writerow([d.id, d.name, d.role, d.vendor, d.model, d.os_version, d.serial, d.location, d.contact, " ".join(d.ips), len(d.interfaces), len(d.vlans), sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors), len(d.arp), len(d.routes), len(d.fdb), d.uptime_s // 86400, d.sysdescr[:200], d.discovered_via, d.depth, d.credential, "; ".join(d.errors)[:300]])
     files.append(p)
     p = f"{prefix}links.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["a", "a_name", "a_port", "b", "b_name", "b_port", "kind", "detail"])
         for u, v, a in g.edges(data=True):
             if a.get("kind") in ("lldp", "cdp", "l3"):
@@ -537,7 +671,7 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     files.append(p)
     p = f"{prefix}hosts.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["ip", "hostname", "mac", "vendor", "role", "subnet", "sources", "switch", "port", "vlan", "open_ports"])
         for ip, h in sorted(inv.hosts.items(), key=lambda kv: ipaddress.ip_address(kv[0])):
             if ip in inv.ip_to_device:
@@ -548,7 +682,7 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     files.append(p)
     p = f"{prefix}subnets.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["cidr", "size", "gateways", "hosts_seen", "sources", "swept"])
         for cidr, s in sorted(inv.subnets.items(), key=lambda kv: ipaddress.ip_network(kv[0])):
             n = ipaddress.ip_network(cidr)
@@ -557,20 +691,21 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     files.append(p)
     p = f"{prefix}ipam.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["cidr", "size", "usable", "used", "free", "utilisation_pct", "vlan", "gateways", "sources", "swept"])
-        w.writeheader()
-        w.writerows(ipam_rows(inv))
+        fields = ["cidr", "size", "usable", "used", "free", "utilisation_pct", "vlan", "gateways", "sources", "swept"]
+        w = SafeCsvWriter(f)
+        w.writerow(fields)
+        w.writerows([r.get(k, "") for k in fields] for r in ipam_rows(inv))
     files.append(p)
     p = f"{prefix}vlans.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["vlan", "name", "devices", "device_names"])
         for vid, (names, devs) in sorted(vlan_rows(inv).items()):
             w.writerow([vid, " / ".join(sorted(names)), len(devs), " ".join(sorted(devs))])
     files.append(p)
     p = f"{prefix}interfaces.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["device", "device_name", "ifindex", "name", "descr", "alias", "mac", "speed_mbps", "admin", "oper", "vlan", "mode", "lag", "ips"])
         for d in inv.devices.values():
             for i in d.interfaces:
@@ -579,7 +714,7 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     files.append(p)
     p = f"{prefix}hardware.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)
         w.writerow(["device", "device_name", "class", "name", "descr", "model", "serial", "hw_rev", "fw_rev", "sw_rev", "fru"])
         for d in inv.devices.values():
             for c in d.components:

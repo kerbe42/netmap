@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 from .graph import graph_to_dict
@@ -128,8 +129,19 @@ def _vis_tag(embed: bool) -> str:
     return CDN_TAG
 
 
+_PLACEHOLDER_RE = re.compile(r"__(VIS|DATA|COLORS|WHEN)__")
+
+
 def render_html(g, path: str, embed_js: bool = True) -> None:
     data = json.dumps(graph_to_dict(g), default=list).replace("</", "<\\/")
-    html = TEMPLATE.replace("__VIS__", _vis_tag(embed_js)).replace("__DATA__", data).replace("__COLORS__", json.dumps(ROLE_COLORS)).replace("__WHEN__", time.strftime("%Y-%m-%d %H:%M"))
+    values = {
+        "__VIS__": _vis_tag(embed_js),
+        "__DATA__": data,
+        "__COLORS__": json.dumps(ROLE_COLORS),
+        "__WHEN__": time.strftime("%Y-%m-%d %H:%M"),
+    }
+    # one pass over the template: a placeholder that appears inside the data (someone's
+    # note reading "__COLORS__") is data, and must not be substituted in turn
+    html = _PLACEHOLDER_RE.sub(lambda m: values[m.group(0)], TEMPLATE)
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
