@@ -202,6 +202,13 @@ class Host:
     ports: list[dict] = field(default_factory=list)  # {port, proto, service, product}
     probes: dict = field(default_factory=dict)  # raw results per probe: netbios | mdns | ssdp | http | tls
     evidence: list[dict] = field(default_factory=list)  # {source, observed, implies} - why we think what we think
+    # agentless deep inspection (SSH / WinRM), when credentials allow it
+    system: dict = field(default_factory=dict)  # {os, kernel, cpu, cores, memory_mb, serial, manufacturer, product, uptime_s, domain, logged_on}
+    software: list[dict] = field(default_factory=list)  # [{name, version}]
+    services: list[dict] = field(default_factory=list)  # [{name, state, ...}]
+    connections: list[dict] = field(default_factory=list)  # [{proto, laddr, lport, raddr, rport, state, process}]
+    inspected_at: float = 0.0
+    inspect_source: str = ""  # ssh | winrm
     snmp_failed: bool = False
     first_seen: float = 0.0
     last_seen: float = 0.0
