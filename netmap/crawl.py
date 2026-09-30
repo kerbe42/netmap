@@ -239,8 +239,20 @@ class Crawler:
         }
 
     async def run(self) -> Inventory:
-        if self.engine is None:
+        own_engine = self.engine is None
+        if own_engine:
             self.engine = SnmpEngine()
+        try:
+            return await self._run()
+        finally:
+            if own_engine:
+                # the desktop app runs many scans in one process: release the UDP sockets
+                try:
+                    self.engine.close_dispatcher()
+                except Exception:  # noqa: BLE001
+                    log.debug("closing the SNMP engine failed", exc_info=True)
+
+    async def _run(self) -> Inventory:
         for s in self.cfg.seeds:
             if not self.enqueue(s, 0, "seed"):
                 log.log(logging.INFO if s in self.inv.ip_to_device else logging.WARNING,
