@@ -104,7 +104,21 @@ def _vendor(sysobjectid: str, sysdescr: str) -> str:
 
 
 async def collect_system(sess: SnmpSession, dev: Device, sysinfo: Optional[dict] = None) -> None:
-    r = await sess.get(O.SYS_DESCR, O.SYS_OBJECTID, O.SYS_UPTIME, O.SYS_CONTACT, O.SYS_NAME, O.SYS_LOCATION, O.SYS_SERVICES)
+    # probe() already fetched descr/objectid/name/services - seed from it first so a
+    # transient failure on the fuller GET below can't lose data the device already gave.
+    if sysinfo:
+        dev.sysdescr = to_text(sysinfo.get(O.SYS_DESCR))
+        dev.sysobjectid = to_text(sysinfo.get(O.SYS_OBJECTID))
+        dev.name = to_text(sysinfo.get(O.SYS_NAME))
+        dev.services = int(sysinfo.get(O.SYS_SERVICES) or 0)
+    try:
+        r = await sess.get(O.SYS_DESCR, O.SYS_OBJECTID, O.SYS_UPTIME, O.SYS_CONTACT, O.SYS_NAME, O.SYS_LOCATION, O.SYS_SERVICES)
+    except Exception as e:  # noqa: BLE001 - keep the seeded sysinfo; don't drop the device
+        dev.errors.append(f"system: {type(e).__name__}: {e}")
+        if sysinfo:
+            dev.vendor = _vendor(dev.sysobjectid, dev.sysdescr)
+            dev.os_version = parse_os_version(dev.sysdescr, dev.vendor)
+        return
     dev.sysdescr = to_text(r.get(O.SYS_DESCR))
     dev.sysobjectid = to_text(r.get(O.SYS_OBJECTID))
     dev.uptime_s = int(r.get(O.SYS_UPTIME) or 0) // 100
@@ -724,7 +738,7 @@ async def collect_stp(sess: SnmpSession, dev: Device) -> None:
 async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysinfo: Optional[dict] = None) -> Device:
     t0 = time.time()
     dev = Device(id=ip, credential=sess.cred.label)
-    await collect_system(sess, dev)
+    await _safe(dev, "system", collect_system(sess, dev, sysinfo))
     await _safe(dev, "entity", collect_entity(sess, dev))
     await _safe(dev, "interfaces", collect_interfaces(sess, dev))
     await _safe(dev, "ipAddrTable", collect_ip_addrs(sess, dev))

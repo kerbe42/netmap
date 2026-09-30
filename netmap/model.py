@@ -181,7 +181,9 @@ class Device:
                     n = ipaddress.ip_network(cidr, strict=False)
                 except ValueError:
                     continue
-                if n.prefixlen >= 31 or n.is_loopback:
+                # /31,/32 are point-to-point/host, /0 is a bogus mask (0.0.0.0 on a
+                # tunnel/unnumbered iface) that would become a catch-all subnet
+                if n.prefixlen >= 31 or n.prefixlen == 0 or n.is_loopback:
                     continue
                 out.append(str(n))
         return sorted(set(out))

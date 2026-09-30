@@ -293,7 +293,9 @@ async def discover_targets(
     if probe_all:
         ips = []
         for net in nets:
-            hosts = list(net.hosts()) if net.prefixlen < 31 else [net.network_address]
+            # /31 (RFC 3021) has two usable p2p addresses - net.hosts() yields both;
+            # only a /32 is the single address.
+            hosts = [net.network_address] if net.prefixlen == 32 else list(net.hosts())
             if net.prefixlen < max_prefix:
                 log.warning("target %s is larger than /%d; --probe-all would send %d probes, skipping", net, max_prefix, len(hosts))
                 continue

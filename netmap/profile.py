@@ -76,7 +76,7 @@ FUNCTION_PORTS = [
     ("Virtualization host", {902, 903, 8006, 8697}),
     ("Container/orchestration", {2375, 2376, 6443, 10250}),
     ("Message queue", {5672, 15672, 9092, 61616}),
-    ("Monitoring", {9090, 3000, 19999}),
+    ("Monitoring", {9090, 19999}),  # 3000 dropped: far more often a dev server than Grafana
     ("Backup", {9392, 8014, 13724}),
 ]
 # database port -> product, so "Database" can be made specific (SQL Server, MySQL...)
@@ -182,8 +182,9 @@ BANNER_HINTS = [
     ("esxi", "VMware", "server", "linux", 7),
     ("idrac", "Dell", "server", "embedded", 7),
     ("ilo", "HPE", "server", "embedded", 7),
-    ("hp ", "HP", "printer", "printer", 3),
     ("laserjet", "HP", "printer", "printer", 8),
+    ("officejet", "HP", "printer", "printer", 8),
+    ("deskjet", "HP", "printer", "printer", 8),
     ("jetdirect", "HP", "printer", "printer", 8),
     ("brother", "Brother", "printer", "printer", 6),
     ("axis", "Axis", "camera", "embedded", 8),

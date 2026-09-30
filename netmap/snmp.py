@@ -215,7 +215,16 @@ class SnmpSession:
             ignoreNonIncreasingOid=True,
         )
         async for err_ind, err_stat, err_idx, var_binds in gen:
-            self._check(err_ind, err_stat, err_idx, var_binds)
+            try:
+                self._check(err_ind, err_stat, err_idx, var_binds)
+            except SnmpError:
+                # a mid-walk error after we already have rows -> a device returned a
+                # truncated table; keep what we gathered rather than dropping all of it.
+                # An error on the very first PDU is a real failure, so re-raise that.
+                if out:
+                    log.debug("%s: walk of %s truncated: %s rows kept", self.cred.label, base, len(out))
+                    break
+                raise
             for name, val in var_binds:
                 s = str(name)
                 if not s.startswith(base + "."):

@@ -402,6 +402,14 @@ def test_server_functions_from_ports():
     # no ports -> no functions, role unchanged
     assert server_functions(Host(ip="10.0.0.2")) == []
 
+    # regression: an Apache/PHP banner must NOT be read as an HP printer
+    # ("hp " once matched inside "PHP 7.4" and set os_family=printer)
+    php = Host(ip="10.0.0.3")
+    php.ports = [{"port": 80, "service": "http", "product": "Apache httpd 2.4.6 (CentOS) PHP 7.4.19"},
+                 {"port": 22, "service": "ssh", "product": "OpenSSH 8.0"}]
+    pp = profile_host(php)
+    assert pp.role != "printer" and pp.os_family != "printer"
+
 
 def test_device_os_family():
     from netmap.profile import device_os_family
