@@ -115,6 +115,7 @@ class Device:
     model: str = ""
     serial: str = ""
     os_version: str = ""
+    os_family: str = ""  # windows | linux | ios | nx-os | junos | fortios | network | …
     dns_name: str = ""
     role: str = "unknown"
     credential: str = ""
@@ -167,12 +168,20 @@ class Device:
 class Host:
     ip: str
     mac: Optional[str] = None
+    mac_source: str = ""  # where the MAC came from: fdb | arp | sweep | netbios | lldp
     hostname: str = ""
     vendor: str = ""
     role: str = "host"
-    sources: list[str] = field(default_factory=list)  # arp | fdb | sweep | lldp | cdp
+    os: str = ""  # e.g. "Windows 10/11", "iOS", "Linux 5.x", "IOS-XE 17.9"
+    os_family: str = ""  # windows | linux | macos | ios | android | network | embedded | printer
+    model: str = ""  # product/model where a probe revealed it
+    confidence: str = ""  # how sure the role/os is: high | medium | low
+    sources: list[str] = field(default_factory=list)  # arp | fdb | sweep | lldp | cdp | netbios | mdns | ssdp
+    names: dict = field(default_factory=dict)  # {dns|netbios|mdns|ssdp|lldp: name} - every name seen
     seen_on: list[dict] = field(default_factory=list)  # {device, interface, vlan, via}
     ports: list[dict] = field(default_factory=list)  # {port, proto, service, product}
+    probes: dict = field(default_factory=dict)  # raw results per probe: netbios | mdns | ssdp | http | tls
+    evidence: list[dict] = field(default_factory=list)  # {source, observed, implies} - why we think what we think
     snmp_failed: bool = False
     first_seen: float = 0.0
     last_seen: float = 0.0
