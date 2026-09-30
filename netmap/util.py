@@ -50,6 +50,42 @@ def norm_mac(s: Optional[str]) -> Optional[str]:
     return ":".join(hexs[i : i + 2].lower() for i in range(0, 12, 2))
 
 
+# MACs that are not a real endpoint's hardware address. `12:34:56:78:9a:bc` is a stock
+# example that nmap on Windows can emit for hosts it cannot actually ARP (e.g. across a
+# router or a VPN), which is why the same value turns up on many hosts at once.
+BOGUS_MACS = {
+    "00:00:00:00:00:00",
+    "ff:ff:ff:ff:ff:ff",
+    "12:34:56:78:9a:bc",
+    "01:23:45:67:89:ab",
+    "aa:bb:cc:dd:ee:ff",
+    "de:ad:be:ef:de:ad",
+    "11:22:33:44:55:66",
+    "00:11:22:33:44:55",
+    "88:88:88:88:88:88",
+    "02:00:4c:4f:4f:50",  # Npcap Loopback Adapter ("LOOP")
+}
+
+
+def plausible_mac(mac: Optional[str]) -> bool:
+    """True if `mac` could be a real host's hardware address.
+
+    Rejects all-zero / broadcast, multicast (a source/host MAC is never multicast), the
+    stock placeholders above, and single-octet-repeated values. It deliberately keeps
+    locally-administered addresses: modern phones and laptops use randomised MACs.
+    """
+    m = norm_mac(mac)
+    if not m or m in BOGUS_MACS:
+        return False
+    first = int(m[:2], 16)
+    if first & 0x01:  # group/multicast bit set - not an endpoint's own address
+        return False
+    octets = m.split(":")
+    if len(set(octets)) == 1:  # 11:11:11:11:11:11 and friends
+        return False
+    return True
+
+
 def ip_from_ints(parts: Iterable[int]) -> Optional[str]:
     parts = list(parts)
     if len(parts) != 4 or any(p < 0 or p > 255 for p in parts):

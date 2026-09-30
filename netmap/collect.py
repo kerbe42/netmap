@@ -19,6 +19,7 @@ from .util import (
     mask_to_prefix,
     oid_suffix,
     parse_os_version,
+    plausible_mac,
     portlist_ports,
     to_text,
 )
@@ -240,7 +241,7 @@ async def collect_arp(sess: SnmpSession, dev: Device) -> None:
             continue
         ip = ip_from_ints(parts[1:])
         mac = mac_from_bytes(val) if isinstance(val, bytes) else None
-        if ip and mac and is_usable_ip(ip) and mac not in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
+        if ip and mac and is_usable_ip(ip) and plausible_mac(mac):
             dev.arp.append(ArpEntry(if_index=parts[0], ip=ip, mac=mac))
 
 

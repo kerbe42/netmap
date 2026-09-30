@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 
 from .model import Inventory
-from .util import in_scope, norm_mac
+from .util import in_scope, norm_mac, plausible_mac
 
 log = logging.getLogger("netmap.sweep")
 
@@ -133,8 +133,10 @@ def _parse_nmap_xml(xml_text: str) -> list[dict]:
             if a.get("addrtype") == "ipv4":
                 rec["ip"] = a.get("addr")
             elif a.get("addrtype") == "mac":
-                rec["mac"] = norm_mac(a.get("addr"))
-                rec["vendor"] = a.get("vendor", "") or ""
+                m = norm_mac(a.get("addr"))
+                if m and plausible_mac(m):
+                    rec["mac"] = m
+                    rec["vendor"] = a.get("vendor", "") or ""
         hn = h.find("hostnames/hostname")
         if hn is not None:
             rec["hostname"] = hn.get("name", "")

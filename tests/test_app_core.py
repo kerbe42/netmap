@@ -10,7 +10,7 @@ from netmap import diagram, layout
 from netmap.crawl import CrawlConfig, Crawler
 from netmap.diff import compare
 from netmap.graph import build_graph
-from netmap.model import Inventory
+from netmap.model import Device, Inventory
 from netmap.scan import ScanRequest, resolve_scope, run_scan
 from netmap.snmp import Credential
 from netmap.views import PAGES, Snapshot, finding_rows, link_rows, short_port
@@ -281,3 +281,30 @@ def test_asset_list_check(campus, tmp_path):
     h2, r2 = read_table(str(tmp_path / "assets.xlsx"))
     rec2 = reconcile(campus, r2, guess_columns(h2))
     assert len(rec2.found) == 1
+
+
+def test_bogus_and_shared_macs_are_dropped():
+    from netmap.util import plausible_mac
+    from netmap.graph import enrich_inventory
+
+    assert not plausible_mac("12:34:56:78:9a:bc")   # nmap-on-Windows placeholder
+    assert not plausible_mac("ff:ff:ff:ff:ff:ff") and not plausible_mac("00:00:00:00:00:00")
+    assert not plausible_mac("01:00:5e:00:00:01")   # multicast bit set
+    assert not plausible_mac("aa:aa:aa:aa:aa:aa")
+    assert plausible_mac("00:50:56:ab:cd:ef")       # real VMware unicast
+    assert plausible_mac("a4:83:e7:11:22:33")       # real Apple, randomised-looking but fine
+
+    inv = Inventory()
+    # the same placeholder handed to five swept hosts, as nmap does across a router/VPN
+    for i in range(5):
+        inv.touch_host(f"10.9.0.{10 + i}", "sweep", "12:34:56:78:9a:bc")
+    # a genuinely shared uplink MAC that belongs to a polled device must be kept
+    d = Device(id="10.9.0.1", name="rtr", vendor="Cisco")
+    d.macs.append("00:11:22:aa:bb:cc")
+    d.ips.append("10.9.0.1")
+    inv.add_device(d)
+    for i in range(4):
+        inv.touch_host(f"10.9.9.{10 + i}", "arp", "00:11:22:aa:bb:cc")
+    enrich_inventory(inv)
+    assert all(inv.hosts[f"10.9.0.{10 + i}"].mac is None for i in range(5))       # bogus, dropped
+    assert all(inv.hosts[f"10.9.9.{10 + i}"].mac == "00:11:22:aa:bb:cc" for i in range(4))  # real device MAC, kept

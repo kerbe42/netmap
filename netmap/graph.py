@@ -13,7 +13,7 @@ import networkx as nx
 
 from .model import Inventory
 from .sweep import classify_host
-from .util import oui_vendor, parse_os_version, short_name
+from .util import oui_vendor, parse_os_version, plausible_mac, short_name
 
 TRUNK_MAC_THRESHOLD = 8
 
@@ -39,7 +39,10 @@ def enrich_inventory(inv: Inventory) -> None:
     Every MAC we learned - from ARP, from a bridge table, from a sweep - carries the
     organization that owns its OUI, which is often the only clue a host gives us.
     """
+    _drop_shared_macs(inv)
     for h in inv.hosts.values():
+        if h.mac and not plausible_mac(h.mac):
+            h.mac = None
         if not h.vendor and h.mac:
             h.vendor = oui_vendor(h.mac)
         if h.role in ("host", "", None):
@@ -52,6 +55,30 @@ def enrich_inventory(inv: Inventory) -> None:
                     d.vendor = v
                     break
         d.os_version = d.os_version or parse_os_version(d.sysdescr, d.vendor)  # maps saved before it was collected
+
+
+def _drop_shared_macs(inv: Inventory) -> None:
+    """A MAC that shows up on many different host IPs is a next-hop router or a scan artifact,
+    not those hosts' own address. nmap on Windows reports one placeholder for every host it
+    cannot ARP, and a routed ARP entry carries the gateway's MAC. Blank the MAC on hosts where
+    it is over-shared, unless it belongs to a device we actually polled (a real shared uplink).
+
+    A MAC seen on more than two host IPs, and not owned by a polled device, is dropped.
+    """
+    from collections import Counter
+
+    counts: Counter = Counter()
+    for h in inv.hosts.values():
+        if h.mac and h.ip not in inv.ip_to_device:
+            counts[h.mac] += 1
+    over = {m for m, n in counts.items() if n > 2 and m not in inv.mac_to_device}
+    if not over:
+        return
+    for h in inv.hosts.values():
+        if h.mac in over:
+            h.mac = None
+            if h.vendor and not h.ports:
+                h.vendor = ""
 
 
 def subnet_vlans(inv: Inventory) -> dict[str, set]:
