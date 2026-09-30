@@ -99,9 +99,12 @@ class CaptureWorker(QThread):
                     changed += 1
                 self.progress.emit(did, True, "captured" + (" (changed)" if this_changed else " (unchanged)"))
             else:
-                # the error text as the capture layer wrote it (including a host-key change
-                # warning, which the person must read before trusting that device again)
-                self.progress.emit(did, False, cap.error or "failed")
+                # the error text as the capture layer wrote it; a changed SSH host key is
+                # called out plainly - it must be read before trusting that device again
+                msg = cap.error or "failed"
+                if getattr(cap, "host_key_changed", False):
+                    msg = "HOST KEY CHANGED - " + msg
+                self.progress.emit(did, False, msg)
         self.done.emit(ok, changed)
 
 

@@ -128,10 +128,14 @@ class IpGrid(QWidget):
         self._all: list[dict] = []
 
     def set_subnet(self, snapshot, cidr: str):
+        net = ipaddress.ip_network(cidr)
+        self.set_cells(snapshot, cidr, subnet_addresses(snapshot, cidr, limit=min(net.num_addresses, 65536)))
+
+    def set_cells(self, snapshot, cidr: str, cells: list[dict]):
+        """Show already-computed address cells (the details panel shares one pass with its table)."""
         self.snapshot = snapshot
         self.cidr = cidr
-        net = ipaddress.ip_network(cidr)
-        self._all = subnet_addresses(snapshot, cidr, limit=min(net.num_addresses, 65536))
+        self._all = cells
         self.block.blockSignals(True)
         self.block.clear()
         if len(self._all) > PAGE:

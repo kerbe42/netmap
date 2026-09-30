@@ -146,6 +146,33 @@ def run_blocking(parent, title: str, fn: Callable, registry: Optional[JobRegistr
     return th.result
 
 
+def copy_inventory(inv):
+    """A deep, independent copy of an Inventory, built to be run on a thread.
+
+    `Inventory.copy()` serialises everything in one json.dumps/json.loads pair; those are
+    single C calls that hold the GIL for their whole duration, so the UI thread starves for
+    a second on a big project even though the work is "in the background". Round-tripping
+    each host, device and subnet on its own gives the interpreter a chance to switch
+    threads between items; the result is the same as copy()."""
+    import json
+
+    from ..model import Inventory
+
+    def rt(v):
+        return json.loads(json.dumps(v, default=list))
+
+    d = inv.to_dict()
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, dict) and len(v) > 64:
+            out[k] = {kk: rt(vv) for kk, vv in v.items()}
+        elif isinstance(v, list) and len(v) > 64:
+            out[k] = [rt(x) for x in v]
+        else:
+            out[k] = rt(v)
+    return Inventory.from_dict(out)
+
+
 def with_retry(fn: Callable, attempts: int = 4):
     """Serialising a live inventory on a thread can collide with a same-moment edit on the
     UI thread ("dictionary changed size during iteration"): try again, it is rare and short."""

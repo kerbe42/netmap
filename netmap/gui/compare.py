@@ -5,9 +5,10 @@ import csv
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
 from ..diff import Diff
+from .fileutil import ask_save_path
 
 COLORS = {"added": "#16a34a", "removed": "#dc2626", "changed": "#d97706", "moved": "#2563eb"}
 KINDS = [("device", "Devices"), ("link", "Links"), ("subnet", "Subnets"), ("vlan", "VLANs"), ("host", "Hosts")]
@@ -62,7 +63,7 @@ class CompareDialog(QDialog):
         self.resize(860, 560)
 
     def _export(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export changes", "changes.csv", "CSV files (*.csv)")
+        path = ask_save_path(self, "Export changes", "changes.csv", "CSV files (*.csv)")
         if not path:
             return
         with open(path, "w", newline="", encoding="utf-8-sig") as f:

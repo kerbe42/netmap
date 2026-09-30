@@ -61,6 +61,7 @@ LAYOUTS = {"layered": "Layered (core on top)", "organic": "Organic", "radial": "
 EDGE_TITLES = {"lldp": "LLDP", "cdp": "CDP", "l3": "Routing", "member": "Subnet", "fdb": "MAC table"}
 
 NODE_SIZE = {"device": 40.0, "host": 26.0, "subnet": 30.0}
+MAX_RENDER_SIDE = 8192  # a PNG's long side; beyond this a 32-bit image is hundreds of MB
 LABEL_MAX_SCALE = 1.7
 
 
@@ -441,6 +442,7 @@ class TopologyPage(QWidget):
     nodeActivated = Signal(str)
     contextRequested = Signal(str, object)  # node id, global pos
     layoutChanged = Signal()  # positions changed by the user (project is dirty)
+    layoutDiscarded = Signal(str, dict)  # Re-arrange dropped hand-placed positions: (preset, the old positions) for undo
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -455,6 +457,7 @@ class TopologyPage(QWidget):
         self.nodes: dict[str, NodeItem] = {}
         self.edges: list[EdgeItem] = []
         self._building = False
+        self._pending_fit = 0  # token of a deferred whole-map fit; any explicit fit/select cancels it
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(400)
@@ -521,12 +524,13 @@ class TopologyPage(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find on map: name, IP, MAC, serial…")
         self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(150)  # never collapses to "Fi…" when the toolbar is squeezed
         self.search.setMaximumWidth(260)
         self.search.returnPressed.connect(self.find_next)
         self.search.textChanged.connect(self._on_search)
         tb.addWidget(self.search)
         tb.addSeparator()
-        tb.addAction("Fit", lambda: self.view.fit()).setShortcut(QKeySequence("Ctrl+0"))
+        tb.addAction("Fit", lambda: self.fit()).setShortcut(QKeySequence("Ctrl+0"))
         tb.addAction("+", lambda: self.view.zoom_by(1.25)).setShortcut(QKeySequence.ZoomIn)
         tb.addAction("−", lambda: self.view.zoom_by(0.8)).setShortcut(QKeySequence.ZoomOut)
         self.export_btn = QToolButton()
@@ -657,6 +661,9 @@ class TopologyPage(QWidget):
             center = self.view.mapToScene(self.view.viewport().rect().center())
             zoom = self.view._zoom
             selected = {i.node_id for i in self.scene.selectedItems() if isinstance(i, NodeItem)}
+            # clear() deselects item by item and each step would emit selectionChanged: with
+            # several nodes selected the Details panel would flip to whichever went last
+            self.scene.blockSignals(True)
             self.scene.clear()
             self.nodes = {}
             self.edges = []
@@ -685,6 +692,9 @@ class TopologyPage(QWidget):
             for n in selected:
                 if n in self.nodes:
                     self.nodes[n].setSelected(True)
+            self.scene.blockSignals(False)
+            for e in self.edges:
+                e.update()
             br = self.scene.itemsBoundingRect()
             self.scene.setSceneRect(br.adjusted(-2000, -2000, 2000, 2000))
             self._update_legend(nodes, edges)
@@ -692,11 +702,25 @@ class TopologyPage(QWidget):
             if keep_view and self.nodes and zoom:
                 self.view.centerOn(center)
             else:
-                QTimer.singleShot(0, self.view.fit)
+                self._pending_fit += 1
+                QTimer.singleShot(0, lambda tok=self._pending_fit: self._deferred_fit(tok))
             if self.search.text():
                 self._on_search(self.search.text())
         finally:
+            self.scene.blockSignals(False)
             self._building = False
+
+    def _deferred_fit(self, token: int):
+        """The whole-map fit scheduled by rebuild(), unless something fitted or centred the
+        view since (a traced path, a selected node): the later, more specific view wins."""
+        if token == self._pending_fit:
+            self._pending_fit = 0
+            self.view.fit()
+
+    def fit(self, rect: Optional[QRectF] = None):
+        """Fit the view now and cancel any deferred whole-map fit."""
+        self._pending_fit = 0
+        self.view.fit(rect)
 
     def _positions(self, nodes: dict, edges: list) -> dict:
         saved = None if self.focus or self.inv is None else self.inv.layout.get(self._layout_key())
@@ -719,13 +743,34 @@ class TopologyPage(QWidget):
     def relayout(self):
         """Forget hand-placed positions for this view and arrange it afresh."""
         if self.inv is not None and self._layout_key() in self.inv.layout:
+            self.flush_positions()
+            old = dict(self.inv.layout.get(self._layout_key(), {}))
             del self.inv.layout[self._layout_key()]
             self.layoutChanged.emit()
+            self.layoutDiscarded.emit(self._layout_key(), old)
         self.rebuild(keep_view=False)
+
+    def restore_layout(self, key: str, positions: dict) -> None:
+        """Put back hand-placed positions (undo of Re-arrange) and redraw from them."""
+        if self.inv is None:
+            return
+        self._save_timer.stop()
+        self.inv.layout[key] = dict(positions)
+        if key == self._layout_key():
+            self.rebuild(keep_view=False)
 
     def node_moved(self, item: NodeItem):
         if not self._building:
             self._save_timer.start()
+
+    def flush_positions(self) -> bool:
+        """Write dragged positions into the project now instead of in 400 ms: called before
+        a save, so the last drag before Ctrl+S is in the file. True if there was one pending."""
+        if self._save_timer.isActive():
+            self._save_timer.stop()
+            self._store_positions()
+            return True
+        return False
 
     def _store_positions(self):
         if self.inv is None or self.focus:
@@ -776,7 +821,7 @@ class TopologyPage(QWidget):
             r = self.nodes[n].sceneBoundingRect()
             rect = r if rect is None else rect.united(r)
         if rect is not None:
-            self.view.fit(rect)
+            self.fit(rect)
         return True
 
     def clear_focus(self):
@@ -803,6 +848,7 @@ class TopologyPage(QWidget):
         it.setSelected(True)
         self.scene.blockSignals(False)
         if center:
+            self._pending_fit = 0
             self.view.centerOn(it)
             if self.view._zoom < 0.6:
                 self.view.zoom_by(0.9 / self.view._zoom)
@@ -832,6 +878,8 @@ class TopologyPage(QWidget):
         return self.select(node_id)
 
     def _on_selection(self):
+        if self._building:
+            return
         sel = [i for i in self.scene.selectedItems() if isinstance(i, NodeItem)]
         for e in self.edges:
             e.update()
@@ -918,10 +966,21 @@ class TopologyPage(QWidget):
         self.info.setText(" · ".join(parts) + ("   (hand-arranged)" if saved else ""))
 
     # ------------------------------------------------------------ output
-    def render_image(self, scale: float = 2.0, background: Optional[QColor] = None) -> QImage:
+    def render_size(self, scale: float = 2.0) -> tuple[float, int, int]:
+        """(effective scale, width, height) for a PNG: the long side is capped so the image
+        stays a few hundred MB at most rather than a gigabyte."""
         rect = self.scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
-        scale = min(scale, 16000 / max(rect.width(), 1), 16000 / max(rect.height(), 1))
-        img = QImage(max(1, int(rect.width() * scale)), max(1, int(rect.height() * scale)), QImage.Format_ARGB32_Premultiplied)
+        long_side = max(rect.width(), rect.height(), 1.0)
+        scale = max(0.01, min(scale, MAX_RENDER_SIDE / long_side))
+        return scale, max(1, int(rect.width() * scale)), max(1, int(rect.height() * scale))
+
+    def render_image(self, scale: float = 2.0, background: Optional[QColor] = None) -> QImage:
+        """The map as an image; a null QImage if the allocation failed (check isNull())."""
+        rect = self.scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
+        scale, w, h = self.render_size(scale)
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        if img.isNull():
+            return img
         img.fill(background or self.palette().color(QPalette.Base))
         p = QPainter(img)
         p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)

@@ -63,7 +63,7 @@ ROLE_LABELS = {
     "printer": "Printer",
     "phone": "Phone",
     "camera": "Camera",
-    "media": "Media / AV",
+    "media": "Media / AV device",
     "nas": "Storage / NAS",
     "ups": "UPS / power",
     "plc": "PLC / controller",
@@ -75,11 +75,22 @@ ROLE_LABELS = {
     "subnet": "Subnet",
 }
 
+# roles the discovery layer knows that this table does not list yet: take their labels
+try:  # pragma: no cover - depends on the core version
+    from ..profile import ROLE_LABELS_EXTRA as _EXTRA
+
+    for _k, _v in dict(_EXTRA).items():
+        ROLE_LABELS.setdefault(_k, _v)
+except Exception:  # noqa: BLE001
+    pass
+
 ROLES = list(ROLE_LABELS)
+GENERIC_ROLE = "host"  # what an unknown role key is drawn as
 
 
 def role_color(role: str) -> QColor:
-    return QColor(ROLE_COLORS.get(role or "unknown", ROLE_COLORS["unknown"]))
+    role = role or "unknown"
+    return QColor(ROLE_COLORS.get(role, ROLE_COLORS[GENERIC_ROLE if role not in ("unknown", "unpolled") else "unknown"]))
 
 
 def role_label(role: str) -> str:
@@ -99,8 +110,20 @@ def _arrow(path: QPainterPath, x1, y1, x2, y2, head=0.09):
 
 
 def glyph(role: str) -> tuple[QPainterPath, QPainterPath]:
-    """(stroke path, fill path) for a role's white glyph in a 0..1 box."""
-    return _glyph(role or "unknown")
+    """(stroke path, fill path) for a role's white glyph in a 0..1 box. A role key this
+    module has no drawing for (a new one from the discovery layer) gets the generic host
+    glyph rather than the "unknown" question mark, which means "we could not tell"."""
+    role = role or "unknown"
+    if role not in _DRAWN_ROLES and role not in ("unknown", "unpolled"):
+        role = GENERIC_ROLE
+    return _glyph(role)
+
+
+_DRAWN_ROLES = {
+    "router", "switch", "l3switch", "firewall", "wireless", "server", "nas", "hypervisor", "webserver", "fileserver",
+    "mailserver", "dnsserver", "dc", "vm", "database", "workstation", "host", "windows", "phone", "printer", "camera",
+    "media", "ups", "subnet", "plc", "ot", "bms", "bmc",
+}
 
 
 @lru_cache(maxsize=None)

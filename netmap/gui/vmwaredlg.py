@@ -20,7 +20,8 @@ class VmwareDialog(QDialog):
         self.port.setRange(1, 65535)
         self.port.setValue(443)
         self.insecure = QCheckBox("Accept a self-signed / untrusted certificate")
-        self.insecure.setChecked(True)
+        self.insecure.setChecked(False)  # the certificate is verified unless you say otherwise
+        self.insecure.setToolTip("Tick only for a vCenter/ESXi whose certificate is not trusted by this machine")
         f = QFormLayout()
         f.addRow("vCenter / ESXi host", self.host)
         f.addRow("Username", self.user)
@@ -51,15 +52,29 @@ class VmwareWorker(QThread):
 
     def __init__(self, inv, params, parent=None):
         super().__init__(parent)
-        self.inv = inv
+        self.inv = inv  # a copy of the project: results are merged on the UI thread when done
         self.params = params
+        self._stop_requested = False
+        self.result = None
+
+    def stop(self):
+        """Cooperative stop. The vSphere calls themselves cannot be interrupted, but a stop
+        asked before they begin skips them, and one asked during them discards the result."""
+        self._stop_requested = True
 
     def run(self):
         from ..vmware import discover
 
         p = self.params
+        if self._stop_requested:
+            self.result = {"cancelled": True}
+            self.done.emit(self.result)
+            return
         try:
             result = discover(self.inv, p["host"], p["username"], p["password"], port=p["port"], insecure=p["insecure"])
         except Exception as e:  # noqa: BLE001
             result = {"error": f"{type(e).__name__}: {e}"}
+        if self._stop_requested:
+            result = {"cancelled": True}
+        self.result = result
         self.done.emit(result)

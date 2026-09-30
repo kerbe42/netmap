@@ -4,11 +4,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
 from ..model import Inventory
 from ..scan import ScanEvents, ScanRequest, run_scan
+from ..views import Snapshot
 
 log = logging.getLogger("netmap.gui")
 
@@ -56,6 +58,10 @@ class ScanWorker(QThread):
         self._loop = None
         self._task = None
         self._stop_requested = False
+        # the result is also kept here, so the window can take it synchronously after
+        # wait() instead of depending on the queued signal being delivered in time
+        self.outcome: Optional[tuple] = None  # ("ok", inv, record) | ("failed", message)
+        self.consumed = False
 
     def stop(self):
         self._stop_requested = True
@@ -88,9 +94,45 @@ class ScanWorker(QThread):
 
         try:
             record = asyncio.run(main())
+            self.outcome = ("ok", self.inv, record)
             self.finished_ok.emit(self.inv, record)
         except asyncio.CancelledError:
+            self.outcome = ("ok", self.inv, {"cancelled": True})
             self.finished_ok.emit(self.inv, {"cancelled": True})
         except Exception as e:  # noqa: BLE001
             log.exception("scan failed")
+            self.outcome = ("failed", f"{type(e).__name__}: {e}")
             self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class SnapshotBuilder(QThread):
+    """Turns a scan's live snapshot (a plain dict) into an Inventory, a Snapshot and the
+    rows of the page on screen - all pure Python, all off the UI thread. The window only
+    swaps the results in, so a 14,000-host project no longer freezes it on every tick.
+
+    Annotations are copied for the build; the window re-attaches its live dicts when it
+    takes the result, so notes typed meanwhile are never lost."""
+
+    built = Signal(object, object, str, object)  # Inventory, Snapshot, page key, rows or None
+
+    def __init__(self, data: dict, annotations: dict, layout: dict, project: dict, page_key: str = "", rows_fn: Optional[Callable] = None, parent=None):
+        super().__init__(parent)
+        self.data = data
+        self.annotations = {k: dict(v) for k, v in annotations.items()}
+        self.layout = layout
+        self.project = project
+        self.page_key = page_key
+        self.rows_fn = rows_fn
+
+    def run(self):
+        try:
+            inv = Inventory.from_dict(self.data)
+            inv.annotations = self.annotations
+            inv.layout = self.layout
+            inv.project = self.project
+            snap = Snapshot(inv)
+            rows = self.rows_fn(snap) if self.rows_fn else None
+        except Exception:  # noqa: BLE001 - a bad tick is dropped, the next one comes in seconds
+            log.exception("live snapshot build failed")
+            return
+        self.built.emit(inv, snap, self.page_key, rows)

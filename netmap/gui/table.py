@@ -411,7 +411,8 @@ class DataPage(QWidget):
             if c.kind == "pct":
                 self.view.setItemDelegateForColumn(i, BarDelegate(self.view))
             if c.width:
-                self.view.setColumnWidth(i, c.width)
+                # role keys become labels ("Domain controller"): give that column the room
+                self.view.setColumnWidth(i, max(c.width, 130) if c.key in ROLE_COLUMNS else c.width)
             self.view.setColumnHidden(i, not c.visible)
         copy = QAction("Copy", self.view)
         copy.setShortcut(QKeySequence.Copy)
@@ -443,7 +444,8 @@ class DataPage(QWidget):
         hdr = self.view.horizontalHeader()
         if not self._sorted_once and rows:
             self._sorted_once = True
-            if not self._restored or hdr.sortIndicatorSection() >= self.model.columnCount():
+            untouched = hdr.sortIndicatorSection() == 0 and hdr.sortIndicatorOrder() == Qt.DescendingOrder  # Qt's own default
+            if not self._restored or untouched or hdr.sortIndicatorSection() >= self.model.columnCount():
                 # Qt's default indicator is descending; a fresh list reads A-Z (or by address)
                 hdr.setSortIndicator(self._default_sort_column(), Qt.AscendingOrder)
             self.model.sort(hdr.sortIndicatorSection(), hdr.sortIndicatorOrder())
@@ -536,6 +538,10 @@ class DataPage(QWidget):
         self._save_state()
 
     def _save_state(self):
+        # a layout pass before the first rows arrive (a hidden page being resized) must not
+        # persist Qt's untouched default sort as if the user had chosen it
+        if not getattr(self, "_sorted_once", False):
+            return
         s = QSettings()
         s.setValue(f"tables/{self.key}/header", self.view.horizontalHeader().saveState())
 
@@ -580,7 +586,7 @@ class DataPage(QWidget):
         if not path:
             return
         headers, rows = self.visible_table()
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:  # BOM: Excel opens it as UTF-8
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:  # BOM: spreadsheet apps open it as UTF-8
             w = csv.writer(f)
             w.writerow(headers)
             w.writerows(rows)

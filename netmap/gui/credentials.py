@@ -303,7 +303,7 @@ class CredentialEditor(QDialog):
         c = self.cred
         c.kind = "v2c" if self.v2.isChecked() else "v3"
         # never derive the label from the community: labels go into project files as Device.credential
-        c.label = self.label.text().strip() or (f"v2c credential {self.ordinal}" if c.kind == "v2c" else (f"v3 {self.user.text().strip()}".strip() or f"v3 credential {self.ordinal}"))
+        c.label = self.label.text().strip() or self._default_label(c.kind)
         c.user = self.user.text().strip()
         c.auth = self.auth.currentText()
         c.priv = self.priv.currentText()
@@ -318,6 +318,21 @@ class CredentialEditor(QDialog):
             QMessageBox.warning(self, "User needed", "Enter the SNMPv3 user name.")
             return None
         return c
+
+    def _default_label(self, kind: str) -> str:
+        from .. import snmp
+
+        fn = getattr(snmp, "default_label", None)  # the core's naming when it has one
+        if callable(fn):
+            try:
+                label = fn(kind)
+                if label:
+                    return str(label)
+            except TypeError:
+                pass
+        if kind == "v3" and self.user.text().strip():
+            return f"v3 {self.user.text().strip()}"
+        return f"{kind} credential {self.ordinal}"
 
     def _accept(self):
         if self._apply() is not None:
