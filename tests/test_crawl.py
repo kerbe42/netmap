@@ -436,3 +436,30 @@ def test_collects_fhrp_routing_peers_and_stp():
     assert any(p["extra"] == "AS65001" for p in r1.peers)
     assert sw1.stp["is_root"] is True and sw1.stp["priority"] == 24576
     assert sw2.stp["is_root"] is False and sw2.stp["root"] == sw1.stp["root"] and sw2.stp["root_port"] == "24"
+
+
+def test_interface_counters_poe_and_utilisation():
+    from netmap.collect import apply_counter_deltas
+    from netmap.model import Device, Interface
+
+    inv, _, _ = crawl()
+    sw1 = inv.devices["10.0.0.2"]
+    gi2 = sw1.iface(2)
+    assert gi2.in_errors == 1200 and gi2.duplex == "half"
+    p24 = sw1.iface(24)
+    assert p24.poe_status == "delivering" and p24.poe_watts == 25.5 and p24.poe_class == "3"
+    assert sw1.iface(5).poe_status == "searching"
+    assert sw1.poe_budget_w == 740 and sw1.poe_used_w == 130
+
+    # utilisation and error rate come from two counter snapshots 10s apart
+    old = Device(id="1")
+    old.interfaces = [Interface(index=1, speed_mbps=1000, in_octets=0, out_octets=0, in_errors=0, out_errors=0, counters_at=1000.0)]
+    new = Device(id="1")
+    new.interfaces = [Interface(index=1, speed_mbps=1000, in_octets=1_250_000_000, out_octets=0, in_errors=50, out_errors=0, counters_at=1010.0)]
+    apply_counter_deltas(old, new)
+    # 1.25 GB in 10 s = 1 Gbit/s = 100% of a 1 Gbps link
+    assert new.interfaces[0].in_util_pct == 100.0 and new.interfaces[0].err_rate == 5.0
+    # counter wrap (delta negative) is ignored, not shown as negative util
+    new.interfaces[0].in_octets = 0
+    apply_counter_deltas(old, new)
+    assert new.interfaces[0].in_util_pct >= 0

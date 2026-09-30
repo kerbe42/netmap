@@ -162,6 +162,10 @@ class Crawler:
             old = self.inv.devices.get(ip)
             dev.depth = old.depth if old is not None else depth
             dev.discovered_via = old.discovered_via if old is not None else via
+            if old is not None:
+                from .collect import apply_counter_deltas
+
+                apply_counter_deltas(old, dev)  # two counter snapshots -> utilisation and error rate
             self.inv.replace_device(dev)
             self.stats["refreshed"] += 1
             self._after_device(dev)

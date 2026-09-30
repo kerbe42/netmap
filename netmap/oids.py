@@ -149,3 +149,22 @@ STP_DESIGNATED_ROOT = "1.3.6.1.2.1.17.2.5.0"  # 8 bytes: priority(2) + root brid
 STP_ROOT_PORT = "1.3.6.1.2.1.17.2.7.0"
 STP_PRIORITY = "1.3.6.1.2.1.17.2.2.0"
 BRIDGE_ADDRESS = "1.3.6.1.2.1.17.1.1.0"  # dot1dBaseBridgeAddress
+
+# --- Interface health counters (IF-MIB / EtherLike-MIB) ---
+IF_IN_OCTETS = "1.3.6.1.2.1.2.2.1.10"
+IF_OUT_OCTETS = "1.3.6.1.2.1.2.2.1.16"
+IF_HC_IN_OCTETS = "1.3.6.1.2.1.31.1.1.1.6"
+IF_HC_OUT_OCTETS = "1.3.6.1.2.1.31.1.1.1.10"
+IF_IN_ERRORS = "1.3.6.1.2.1.2.2.1.14"
+IF_OUT_ERRORS = "1.3.6.1.2.1.2.2.1.20"
+IF_IN_DISCARDS = "1.3.6.1.2.1.2.2.1.13"
+IF_OUT_DISCARDS = "1.3.6.1.2.1.2.2.1.19"
+DOT3_DUPLEX = "1.3.6.1.2.1.10.7.2.1.19"  # 1 unknown 2 half 3 full, indexed by ifIndex
+
+# --- Power over Ethernet (POWER-ETHERNET-MIB + Cisco ext) ---
+PETH_PORT_ADMIN = "1.3.6.1.2.1.105.1.1.1.3"  # pethPsePortAdminEnable, index group.port
+PETH_PORT_STATUS = "1.3.6.1.2.1.105.1.1.1.6"  # 1 disabled 2 searching 3 deliveringPower 4 fault 5 test 6 otherFault
+PETH_PORT_CLASS = "1.3.6.1.2.1.105.1.1.1.10"  # pethPsePortPowerClassifications 1..5 = class0..4
+PETH_MAIN_POWER = "1.3.6.1.2.1.105.1.3.1.1.2"  # pethMainPsePower, watts (budget), index pse
+PETH_MAIN_CONSUMPTION = "1.3.6.1.2.1.105.1.3.1.1.4"  # pethMainPseConsumptionPower, watts (used)
+CISCO_PETH_PORT_POWER = "1.3.6.1.4.1.9.9.402.1.2.1.7"  # cpeExtPsePortPwrConsumption, milliwatts, index group.port

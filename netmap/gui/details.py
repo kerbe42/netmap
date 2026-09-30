@@ -387,6 +387,7 @@ class DetailsPanel(QWidget):
             ("Tags", ", ".join(note.get("tags", []))),
             ("Uptime", fmt_duration(d.uptime_s)),
             ("Ports", f"{up} up of {len(d.interfaces)}" if d.interfaces else ""),
+            ("PoE", f"{d.poe_used_w:.0f} W of {d.poe_budget_w:.0f} W used" if getattr(d, "poe_budget_w", 0) else ""),
             ("VLANs", len(d.vlans)),
             ("Redundancy", "; ".join(f"{g['proto'].upper()} grp {g['group']} {g['state']} for {g['vip']}" + (f" on {g['interface']}" if g.get('interface') else "") for g in getattr(d, "redundancy", []))),
             ("Routing peers", _peers_summary(getattr(d, "peers", []))),

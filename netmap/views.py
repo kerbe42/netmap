@@ -465,7 +465,12 @@ IFACE_COLUMNS = [
     Column("speed", "Speed", width=60),
     Column("vlan", "VLAN", "int", 55),
     Column("mode", "Mode", width=60),
+    Column("duplex", "Duplex", width=60, visible=False),
     Column("lag", "LAG", width=70),
+    Column("util", "Utilisation", "pct", 120, tip="busiest direction over the interval between the last two scans; rescan to measure"),
+    Column("errors", "Errors", "int", 70, tip="input + output errors (cumulative counter)"),
+    Column("err_rate", "Err/s", width=60, visible=False, tip="errors per second between the last two scans"),
+    Column("poe", "PoE", width=110, tip="Power over Ethernet status, class and watts"),
     Column("ips", "Addresses", width=140),
     Column("neighbor", "Neighbour", width=170),
     Column("macs", "MACs learned", "int", 85),
@@ -487,7 +492,10 @@ def interface_rows(s: Snapshot, device_id: Optional[str] = None) -> list[dict]:
                 {
                     "_id": d.id, "_kind": "iface", "_role": d.role,
                     "device": s.name(d.id), "name": i.name or i.descr or f"if{i.index}", "alias": i.alias or (i.descr if i.name and i.descr != i.name else ""),
-                    "status": status, "speed": fmt_speed(i.speed_mbps), "vlan": i.vlan if i.vlan is not None else "", "mode": i.mode, "lag": i.lag,
+                    "status": status, "speed": fmt_speed(i.speed_mbps), "vlan": i.vlan if i.vlan is not None else "", "mode": i.mode, "duplex": i.duplex, "lag": i.lag,
+                    "util": max(i.in_util_pct, i.out_util_pct) if (i.in_util_pct or i.out_util_pct) else "",
+                    "errors": (i.in_errors + i.out_errors) or "", "err_rate": i.err_rate or "",
+                    "poe": (f"{i.poe_status} {('cls ' + i.poe_class) if i.poe_class else ''} {(str(i.poe_watts) + 'W') if i.poe_watts else ''}".strip()) if i.poe_status else "",
                     "ips": " ".join(i.ips), "neighbor": "; ".join(s.port_neighbors.get((d.id, i.index), [])),
                     "macs": s.port_macs.get((d.id, i.index), 0) or "", "mac": i.mac or "", "last_change": since, "ifindex": i.index,
                 }
@@ -571,6 +579,23 @@ def finding_rows(s: Snapshot) -> list[dict]:
     for vid, (names, devs) in s.vlans.items():
         if len(names) > 1:
             add("check", "VLAN named differently", f"vlan:{vid}", f"VLAN {vid}", " / ".join(sorted(names)), "Switches disagree on what this VLAN is for; worth confirming it is the same segment everywhere")
+    # interface health: error rates, half-duplex on a link, near-saturation, PoE budget
+    for d in inv.devices.values():
+        for i in d.interfaces:
+            if i.err_rate and i.err_rate >= 1:
+                add("attention", "Interface errors", d.id, f"{s.name(d.id)} {i.name}", f"{i.err_rate}/s ({i.in_errors + i.out_errors} total)",
+                    "A port taking errors at this rate drops or corrupts traffic: bad cable/optic, duplex mismatch, or a failing peer")
+            elif (i.in_errors + i.out_errors) > 1000 and i.oper_up:
+                add("check", "Interface errors", d.id, f"{s.name(d.id)} {i.name}", f"{i.in_errors + i.out_errors} errors since boot",
+                    "Errors have accumulated on this port; rescan to see if they are still climbing")
+            if i.duplex == "half" and i.oper_up and (i.speed_mbps or 0) >= 100 and i.mode != "access":
+                add("check", "Half duplex", d.id, f"{s.name(d.id)} {i.name}", "operating half-duplex", "A half-duplex link between switches means a duplex mismatch and late collisions")
+            if max(i.in_util_pct, i.out_util_pct) >= 90 and i.oper_up:
+                add("check", "Interface near saturation", d.id, f"{s.name(d.id)} {i.name}", f"{max(i.in_util_pct, i.out_util_pct)}% of {fmt_speed(i.speed_mbps)}",
+                    "This link ran near its capacity between the last two scans")
+        if d.poe_budget_w and d.poe_used_w >= 0.9 * d.poe_budget_w:
+            add("check", "PoE budget nearly full", d.id, s.name(d.id), f"{d.poe_used_w:.0f} W of {d.poe_budget_w:.0f} W",
+                "Little PoE headroom left; another powered device may not come up")
     # first-hop redundancy: a gateway VIP with only one router behind it is a single point of failure
     fhrp: dict = defaultdict(list)
     for d in inv.devices.values():

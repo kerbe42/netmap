@@ -134,6 +134,20 @@ class Dev:
         for ifidx, agg in members.items():
             self.i(f"{O.LAG_ATTACHED_AGG}.{ifidx}", agg)
 
+    def counters(self, idx, in_oct=0, out_oct=0, in_err=0, out_err=0, in_dis=0, out_dis=0, duplex=3):
+        self.i(f"{O.IF_HC_IN_OCTETS}.{idx}", in_oct), self.i(f"{O.IF_HC_OUT_OCTETS}.{idx}", out_oct)
+        self.i(f"{O.IF_IN_ERRORS}.{idx}", in_err), self.i(f"{O.IF_OUT_ERRORS}.{idx}", out_err)
+        self.i(f"{O.IF_IN_DISCARDS}.{idx}", in_dis), self.i(f"{O.IF_OUT_DISCARDS}.{idx}", out_dis)
+        self.i(f"{O.DOT3_DUPLEX}.{idx}", duplex)
+
+    def poe_port(self, port, status=3, cls=4, milliwatts=0, group=1):
+        self.i(f"{O.PETH_PORT_STATUS}.{group}.{port}", status), self.i(f"{O.PETH_PORT_CLASS}.{group}.{port}", cls)
+        if milliwatts:
+            self.i(f"{O.CISCO_PETH_PORT_POWER}.{group}.{port}", milliwatts)
+
+    def poe_main(self, budget, used, pse=1):
+        self.i(f"{O.PETH_MAIN_POWER}.{pse}", budget), self.i(f"{O.PETH_MAIN_CONSUMPTION}.{pse}", used)
+
     def hsrp(self, ifidx, group, vip, state=6, priority=100):
         self.i(f"{O.HSRP_STATE}.{ifidx}.{group}", state), self.ip(f"{O.HSRP_VIP}.{ifidx}.{group}", vip), self.i(f"{O.HSRP_PRIORITY}.{ifidx}.{group}", priority)
 
@@ -243,6 +257,10 @@ def build(base: str = "10") -> dict[str, Dev]:
     sw1.fdb_q(10, MAC_AP, 24), sw1.fdb_q(20, MAC_C, 5)
     sw1.vlan(10, "USERS"), sw1.vlan(20, "SERVERS"), sw1.vlan(30, "BRANCH")
     sw1.hsrp(10, 1, A(1, 254), state=6, priority=110), sw1.ospf_nbr(R1_IP), sw1.stp(MAC_SW1, priority=24576, own_mac=MAC_SW1)
+    sw1.counters(1, in_oct=1_000_000_000, out_oct=2_000_000_000, in_err=0, out_err=0)
+    sw1.counters(2, in_oct=500_000_000, out_oct=400_000_000, in_err=1200, out_err=5, duplex=2)  # errors + half duplex
+    sw1.counters(5, in_oct=10_000_000, out_oct=8_000_000)
+    sw1.poe_main(740, 130), sw1.poe_port(24, status=3, cls=4, milliwatts=25500), sw1.poe_port(5, status=2, cls=0)
     # Gi1/0/1 is routed (no switchport row); the uplink to acc-sw2 trunks; server and AP ports are access
     sw1.cisco_port(2, trunk=True, native=1), sw1.cisco_port(5, access=20), sw1.cisco_port(24, access=10)
 

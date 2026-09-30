@@ -39,12 +39,13 @@ def _int(v, default: int = 0) -> int:
 
 
 class CollectOptions:
-    def __init__(self, fdb: bool = True, cisco_vlan_fdb: bool = False, routes: bool = True, arp: bool = True, topology: bool = True, max_vlans: int = 64):
+    def __init__(self, fdb: bool = True, cisco_vlan_fdb: bool = False, routes: bool = True, arp: bool = True, topology: bool = True, health: bool = True, max_vlans: int = 64):
         self.fdb = fdb
         self.cisco_vlan_fdb = cisco_vlan_fdb
         self.routes = routes
         self.arp = arp
         self.topology = topology  # FHRP (HSRP/VRRP), OSPF/BGP neighbours, spanning-tree root
+        self.health = health  # interface counters/errors/duplex and PoE
         self.max_vlans = max_vlans
 
 
@@ -564,6 +565,92 @@ async def collect_lag(sess: SnmpSession, dev: Device) -> None:
             i.lag = dev.iface_label(a)
 
 
+DUPLEX = {1: "", 2: "half", 3: "full"}
+PETH_STATUS = {1: "disabled", 2: "searching", 3: "delivering", 4: "fault", 5: "test", 6: "fault"}
+
+
+async def collect_counters(sess: SnmpSession, dev: Device) -> None:
+    """Per-interface traffic counters and error/discard counters, and duplex. Utilisation and
+    error rates are derived later by comparing two scans (a single read is only a snapshot)."""
+    ports = {i.index: i for i in dev.interfaces}
+    if not ports:
+        return
+    hc_in = await _safe(dev, "ifHCInOctets", sess.walk_map(O.IF_HC_IN_OCTETS)) or {}
+    hc_out = await _safe(dev, "ifHCOutOctets", sess.walk_map(O.IF_HC_OUT_OCTETS)) or {}
+    in_oct = hc_in or (await _safe(dev, "ifInOctets", sess.walk_map(O.IF_IN_OCTETS)) or {})
+    out_oct = hc_out or (await _safe(dev, "ifOutOctets", sess.walk_map(O.IF_OUT_OCTETS)) or {})
+    ie = await _safe(dev, "ifInErrors", sess.walk_map(O.IF_IN_ERRORS)) or {}
+    oe = await _safe(dev, "ifOutErrors", sess.walk_map(O.IF_OUT_ERRORS)) or {}
+    idis = await _safe(dev, "ifInDiscards", sess.walk_map(O.IF_IN_DISCARDS)) or {}
+    odis = await _safe(dev, "ifOutDiscards", sess.walk_map(O.IF_OUT_DISCARDS)) or {}
+    dup = await _safe(dev, "dot3Duplex", sess.walk_map(O.DOT3_DUPLEX)) or {}
+    now = time.time()
+    for k, i in ((str(idx), iface) for idx, iface in ports.items()):
+        i.in_octets = _int(in_oct.get(k))
+        i.out_octets = _int(out_oct.get(k))
+        i.in_errors = _int(ie.get(k))
+        i.out_errors = _int(oe.get(k))
+        i.in_discards = _int(idis.get(k))
+        i.out_discards = _int(odis.get(k))
+        i.counters_at = now
+        i.duplex = DUPLEX.get(_int(dup.get(k)), "")
+
+
+async def collect_poe(sess: SnmpSession, dev: Device) -> None:
+    """Power over Ethernet: the switch's total budget and draw, and per-port status/class/watts.
+
+    The device totals (pethMainPse*) are standard and reliable. Per-port entries are keyed by
+    a PoE group.port index, which this maps to an interface by port number - best effort, since
+    there is no standard PoE-port-to-ifIndex OID."""
+    budget = await _safe(dev, "pethMainPsePower", sess.walk(O.PETH_MAIN_POWER)) or []
+    used = await _safe(dev, "pethMainPseConsumptionPower", sess.walk(O.PETH_MAIN_CONSUMPTION)) or []
+    dev.poe_budget_w = float(sum(_int(v) for _o, v in budget))
+    dev.poe_used_w = float(sum(_int(v) for _o, v in used))
+    status = await _safe(dev, "pethPsePortStatus", sess.walk_map(O.PETH_PORT_STATUS)) or {}
+    if not status and not budget:
+        return
+    cls = await _safe(dev, "pethPsePortClass", sess.walk_map(O.PETH_PORT_CLASS)) or {}
+    power = await _safe(dev, "cpeExtPsePortPwrConsumption", sess.walk_map(O.CISCO_PETH_PORT_POWER)) or {}
+    by_index = {i.index: i for i in dev.interfaces}
+    by_portnum = {}
+    for i in dev.interfaces:  # last number in the name, e.g. Gi1/0/24 -> 24
+        m = re.search(r"(\d+)\s*$", i.name or i.descr or "")
+        if m:
+            by_portnum.setdefault(int(m.group(1)), i)
+    for key, st in status.items():
+        port = int(key.split(".")[-1])
+        iface = by_index.get(port) or by_portnum.get(port)
+        if iface is None:
+            continue
+        iface.poe_status = PETH_STATUS.get(_int(st), "")
+        c = _int(cls.get(key))
+        iface.poe_class = str(c - 1) if c else ""  # 1..5 -> class 0..4
+        iface.poe_watts = round(_int(power.get(key)) / 1000.0, 1)
+
+
+def apply_counter_deltas(old: Device, new: Device) -> None:
+    """Turn two counter snapshots into utilisation % and error rate on the new interfaces.
+
+    Called on a rescan, when we have the previous scan's counters. Handles 64-bit wrap by
+    ignoring a negative delta."""
+    prev = {i.index: i for i in old.interfaces}
+    for i in new.interfaces:
+        o = prev.get(i.index)
+        if o is None or not o.counters_at or not i.counters_at:
+            continue
+        dt = i.counters_at - o.counters_at
+        if dt < 1:
+            continue
+        speed_bps = (i.speed_mbps or 0) * 1_000_000
+        for cur, was, attr in ((i.in_octets, o.in_octets, "in_util_pct"), (i.out_octets, o.out_octets, "out_util_pct")):
+            d = cur - was
+            if d >= 0 and speed_bps:
+                setattr(i, attr, round(min(100.0, d * 8.0 / dt / speed_bps * 100.0), 1))
+        derr = (i.in_errors + i.out_errors) - (o.in_errors + o.out_errors)
+        if derr >= 0:
+            i.err_rate = round(derr / dt, 3)
+
+
 HSRP_STATES = {1: "initial", 2: "learn", 3: "listen", 4: "speak", 5: "standby", 6: "active"}
 VRRP_STATES = {1: "initialize", 2: "backup", 3: "master"}
 OSPF_STATES = {1: "down", 2: "attempt", 3: "init", 4: "two-way", 5: "exchange-start", 6: "exchange", 7: "loading", 8: "full"}
@@ -662,6 +749,10 @@ async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysin
         await _safe(dev, "routing peers", collect_routing_peers(sess, dev))
     if opts.topology and (bp or dev.fdb):
         await _safe(dev, "stp", collect_stp(sess, dev))
+    if opts.health:
+        await _safe(dev, "counters", collect_counters(sess, dev))
+        if bp or dev.fdb:
+            await _safe(dev, "poe", collect_poe(sess, dev))
     dev.role = classify_role(dev)
     dev.collected_at = time.time()
     dev.collect_seconds = round(dev.collected_at - t0, 2)
