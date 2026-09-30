@@ -31,15 +31,16 @@ def test_handle_routes(snap):
 
 
 def test_serve_live_http(snap):
-    srv = serve(snap.inv, host="127.0.0.1", port=8099)
+    srv = serve(snap.inv, host="127.0.0.1", port=0)  # port 0: let the OS pick a free one
+    port = srv.server_address[1]
     import threading
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8099/summary", timeout=5) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/summary", timeout=5) as r:
             data = json.load(r)
         assert data["devices"] == 11
-        with urllib.request.urlopen("http://127.0.0.1:8099/query?q=hosts%20where%20os%20~%20windows", timeout=5) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/query?q=hosts%20where%20os%20~%20windows", timeout=5) as r:
             data = json.load(r)
         assert data["count"] > 0
     finally:
@@ -47,17 +48,18 @@ def test_serve_live_http(snap):
 
 
 def test_token_required(snap):
-    srv = serve(snap.inv, host="127.0.0.1", port=8100, token="secret")
+    srv = serve(snap.inv, host="127.0.0.1", port=0, token="secret")
+    port = srv.server_address[1]
     import threading
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         import urllib.error
         try:
-            urllib.request.urlopen("http://127.0.0.1:8100/summary", timeout=5)
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/summary", timeout=5)
             assert False, "should have been unauthorized"
         except urllib.error.HTTPError as e:
             assert e.code == 401
-        with urllib.request.urlopen("http://127.0.0.1:8100/summary?token=secret", timeout=5) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/summary?token=secret", timeout=5) as r:
             assert json.load(r)["devices"] == 11
     finally:
         srv.shutdown()
