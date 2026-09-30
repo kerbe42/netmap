@@ -1,4 +1,4 @@
-"""A small asset-query language over the inventory, for searching the way runZero/DOQL let you.
+"""A small asset-query language over the inventory, for searching it like a database.
 
     devices where role = switch and vendor ~ cisco order by name
     hosts where os ~ windows and confidence = high select name, ip, os

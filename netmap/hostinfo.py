@@ -1,6 +1,6 @@
 """Agentless deep-inspection of hosts: log in read-only and pull the facts an asset
 register wants - OS and hardware, installed software, running services and the active
-network connections - the way Device42 or Lansweeper do, but without an agent.
+network connections - without installing an agent on the target.
 
 Linux/Unix are inspected over SSH (paramiko, as in netmap/capture.py); Windows over WinRM
 (pywinrm). Nothing here ever changes the target: every command is a read (uname, cat,

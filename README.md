@@ -293,7 +293,7 @@ Beyond the network gear, NetMap can go deeper where you have credentials:
 ## Broad discovery (unauthenticated)
 
 Beyond SNMP and the usual host probes, NetMap fingerprints assets across many protocols with no
-credentials — the way runZero does — as part of **Identify hosts**:
+credentials, as part of **Identify hosts**:
 
 * **WS-Discovery** (printers, ONVIF cameras, Windows), **IPMI** (server lights-out/BMC controllers), and
   **OT/ICS**: **Modbus**, **BACnet** and **EtherNet/IP** — so industrial controllers, building-automation

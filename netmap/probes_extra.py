@@ -2,9 +2,9 @@
 
 Where `discover.py` covers the general-IT discovery protocols (NetBIOS, mDNS, SSDP, HTTP/TLS),
 this module knocks on the protocols that identify the harder devices: OT/ICS controllers and
-lights-out server management. The style is runZero/rumble-flavoured - send one small, well-formed
-request to a protocol's port, read whatever the device volunteers, and never write or change
-anything on the target. A probe that cannot answer returns None and never raises out of the
+lights-out server management. The approach throughout: send one small, well-formed request to a
+protocol's port, read whatever the device volunteers, and never write or change anything on the
+target. A probe that cannot answer returns None and never raises out of the
 orchestrator.
 
 Like `discover.py`, each protocol is a *pure parser* over captured bytes plus a thin socket

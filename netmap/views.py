@@ -651,7 +651,7 @@ def finding_rows(s: Snapshot) -> list[dict]:
         # instead of scanning every subnet for every host (O(hosts x subnets)).
         if inv.subnet_for_ip(ip) is None and _is_ip(ip):
             add("check", "Address outside every known subnet", ip, ip, f"seen via {' '.join(h.sources)}", "In use but in no subnet a device reported: a range missing from the address plan")
-    # coverage gaps: networks the routers know about that we never scanned (runZero-style)
+    # coverage gaps: networks the routers know about that we never scanned
     known = [ipaddress.ip_network(c) for c in inv.subnets]
     seen_gap: set = set()
     for d in inv.devices.values():
