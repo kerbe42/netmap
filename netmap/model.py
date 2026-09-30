@@ -146,6 +146,8 @@ class Device:
     redundancy: list = field(default_factory=list)  # FHRP groups: {proto:hsrp|vrrp, group, vip, state, priority, if_index}
     peers: list = field(default_factory=list)  # routing adjacencies: {proto:ospf|bgp, addr, state, extra}
     stp: dict = field(default_factory=dict)  # {root, root_port, priority, is_root}
+    ports: list = field(default_factory=list)  # open ports from an nmap scan: {port, proto, service, product}
+    os_detail: str = ""  # OS guess from nmap -O (SNMP sysDescr still wins for os_version)
     poe_budget_w: float = 0.0  # total PoE the switch can supply (watts)
     poe_used_w: float = 0.0  # PoE currently drawn (watts)
     mgmt: dict = field(default_factory=dict)  # exposed management planes: {telnet,http,https,ssh,snmp: bool}

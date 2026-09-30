@@ -22,7 +22,7 @@ from .graph import enrich_inventory
 from .model import Inventory
 from .snmp import Credential
 from .sweep import discover_targets, sweep
-from .util import RFC1918
+from .util import RFC1918, in_scope
 
 log = logging.getLogger("netmap.scan")
 
@@ -66,6 +66,9 @@ class ScanRequest:
     probe_hosts: bool = False  # try SNMP on every ARP-learned address
     resolve_names: bool = False  # reverse DNS for devices and hosts
     identify: bool = False  # active host identification (NetBIOS, mDNS, SSDP, HTTP/TLS)
+    port_scan: bool = False  # nmap service detection on every device and host found
+    os_detect: bool = False  # nmap OS detection (-O; needs admin/root)
+    top_ports: int = 200  # how many ports nmap checks per address
     follow_routes: bool = True
     follow_gateways: bool = True
     arp: bool = True
@@ -194,6 +197,16 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
 
             m = await probe_management(inv)
             log.info("management-plane check: %d device(s) expose a management port", m)
+        if req.port_scan:
+            from .sweep import nmap_inspect
+
+            phase("Scanning ports", "nmap service" + (" and OS" if req.os_detect else "") + " detection")
+            ips = [ip for ip in list(inv.devices) + [h for h in inv.hosts if h not in inv.ip_to_device]
+                   if in_scope(ip, scope, exclude)]
+            results = await nmap_inspect(ips, fingerprint=True, os_detect=req.os_detect, top_ports=req.top_ports)
+            for ip, rec in results.items():
+                _apply_nmap(inv, ip, rec)
+            log.info("nmap enriched %d address(es) with ports/OS", len(results))
         if targets and not inv.devices:
             log.warning(
                 "no device in the target subnets answered SNMP: %d address(es) were probed and none replied. "
@@ -229,3 +242,35 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
         inv.save(req.save_path)
     phase("Stopped" if state["cancelled"] else "Finished", inv.summary())
     return record
+
+
+def _apply_nmap(inv, ip: str, rec: dict) -> None:
+    """Fold an nmap result onto a device or host: open ports, and an OS guess where we have
+    nothing better. SNMP-derived facts on a device are authoritative and kept."""
+    from .util import plausible_mac
+
+    ports = rec.get("ports") or []
+    os_str = rec.get("os") or ""
+    dev = inv.devices.get(ip)
+    if dev is not None:
+        if ports:
+            dev.ports = ports
+        if os_str and not dev.os_detail:
+            dev.os_detail = os_str
+        if not dev.os_family and rec.get("os_family_raw"):
+            dev.os_family = rec["os_family_raw"].lower()
+        return
+    h = inv.hosts.get(ip)
+    if h is None and (ports or os_str):
+        h = inv.touch_host(ip, "nmap", rec.get("mac") if plausible_mac(rec.get("mac")) else None)
+    if h is None:
+        return
+    if ports:
+        h.ports = ports
+    if "nmap" not in h.sources:
+        h.sources.append("nmap")
+    h.probes["nmap"] = {"os": os_str, "os_accuracy": rec.get("os_accuracy", 0),
+                        "os_family": rec.get("os_family_raw", ""), "os_vendor": rec.get("os_vendor", "")}
+    if rec.get("hostname") and not h.hostname:
+        h.hostname = rec["hostname"]
+        h.names.setdefault("nmap", rec["hostname"])

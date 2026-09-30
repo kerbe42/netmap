@@ -403,6 +403,8 @@ class DetailsPanel(QWidget):
             ("Model", d.model),
             ("Serial", d.serial),
             ("OS version", d.os_version),
+            ("OS (scanned)", getattr(d, "os_detail", "")),
+            ("Open ports", ", ".join(f"{p['port']}/{p.get('proto', 'tcp')} {p.get('service', '')}".strip() for p in getattr(d, "ports", [])[:40])),
             ("Support status", _eol_summary(d)),
             ("Management", _mgmt_summary(getattr(d, "mgmt", {}))),
             ("Description", d.sysdescr),

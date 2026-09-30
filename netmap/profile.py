@@ -247,6 +247,20 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
             if needle in blob:
                 add("HTTP/TLS", f"'{needle}' in banner/cert", role, role, weight, of=of, ven=ven or None)
 
+    # ---- nmap service/OS scan --------------------------------------------
+    nm = probes.get("nmap") or {}
+    if nm.get("os"):
+        fam = _NMAP_FAMILY.get((nm.get("os_family") or "").lower(), "")
+        add("nmap OS scan", f"OS fingerprint: {nm['os']}" + (f" ({nm.get('os_accuracy')}%)" if nm.get("os_accuracy") else ""),
+            nm["os"], of=fam or None, os_=nm["os"])
+        if nm.get("os_vendor") and not vendor:
+            vendor = nm["os_vendor"]
+    # ---- deep inspection (SSH/WinRM), the most authoritative -------------
+    sysd = getattr(host, "system", {}) or {}
+    if sysd.get("os"):
+        os_text = sysd["os"]  # exact OS caption from the host itself overrides guesses
+        ev.append({"source": "agent-less inspection", "observed": f"reported OS: {sysd['os']}", "implies": sysd["os"]})
+
     # ---- names ------------------------------------------------------------
     for src in NAME_PRIORITY:
         nm = host.names.get(src) if host.names else None
@@ -280,6 +294,10 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
 
 
 ROLE_FROM_FAMILY = {"windows": "windows", "macos": "workstation", "android": "host", "printer": "printer", "network": "switch", "linux": "server"}
+
+# nmap osclass osfamily -> our os_family
+_NMAP_FAMILY = {"windows": "windows", "linux": "linux", "mac os x": "macos", "macos": "macos", "ios": "ios",
+                "embedded": "embedded", "ios-xe": "ios", "junos": "junos", "freebsd": "linux", "vmware esxi": "esxi"}
 
 
 def _best_name(host) -> str:

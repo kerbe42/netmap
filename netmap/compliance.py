@@ -52,8 +52,13 @@ def compliance_checks(snapshot) -> list[Check]:
         if (d.credential or "") in ("public", "private"):
             add("high", "Default SNMP community", d.id, name, f"community '{d.credential}'",
                 "Replace default communities; 'public'/'private' are world-known and often writable")
-        # --- management planes ---
-        mgmt = getattr(d, "mgmt", {}) or {}
+        # --- management planes (from the TCP check and any nmap ports) ---
+        mgmt = dict(getattr(d, "mgmt", {}) or {})
+        open_ports = {p.get("port") for p in getattr(d, "ports", [])}
+        if 23 in open_ports:
+            mgmt["telnet"] = True
+        if 80 in open_ports:
+            mgmt["http"] = True
         if mgmt.get("telnet"):
             add("high", "Telnet enabled", d.id, name, "TCP/23 open",
                 "Disable Telnet and manage over SSH; Telnet carries credentials and sessions in clear")

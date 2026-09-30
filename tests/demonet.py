@@ -451,6 +451,13 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         wh.model = "J9147A"
         wh.sysdescr = "ProCurve J9147A 2910al-48G Switch, revision W.15.14.0013"
         wh.os_family = "hp-provision"
+    for _did, _ports, _os in (("10.0.0.1", [(443, "https"), (22, "ssh")], "FortiOS 7.2"),
+                              ("10.99.0.2", [(22, "ssh"), (443, "https"), (161, "snmp")], ""),
+                              ("10.0.1.1", [(22, "ssh"), (23, "telnet"), (80, "http")], "Cisco IOS 15.x")):
+        if _did in inv.devices:
+            inv.devices[_did].ports = [{"port": p, "proto": "tcp", "service": s2, "product": ""} for p, s2 in _ports]
+            if _os:
+                inv.devices[_did].os_detail = _os
     # two stored config revisions on the core, so the Config tab has a change to diff
     import time as _t
     if "10.99.0.2" in inv.devices:
@@ -490,6 +497,14 @@ def _inject_probes(inv, rng):
                                    "is_dc": False, "mac": h.mac, "names": []}
             h.names["netbios"] = name
             h.sources.append("netbios") if "netbios" not in h.sources else None
+            win_os = rng.choice(["Microsoft Windows 10 22H2", "Microsoft Windows 10 22H2", "Microsoft Windows 11 23H2"])
+            h.probes["nmap"] = {"os": win_os, "os_accuracy": rng.randint(92, 98), "os_family": "Windows", "os_vendor": "Microsoft"}
+            h.ports = [{"port": 135, "proto": "tcp", "service": "msrpc", "product": ""},
+                       {"port": 139, "proto": "tcp", "service": "netbios-ssn", "product": ""},
+                       {"port": 445, "proto": "tcp", "service": "microsoft-ds", "product": ""},
+                       {"port": 3389, "proto": "tcp", "service": "ms-wbt-server", "product": ""}]
+            if "nmap" not in h.sources:
+                h.sources.append("nmap")
             if rng.random() < 0.15:
                 h.probes["mdns"] = {"hostname": f"{name}.local", "services": ["_smb._tcp", "_device-info._tcp"], "model": "", "vendor": ""}
         elif role == "printer":
@@ -505,6 +520,11 @@ def _inject_probes(inv, rng):
                                 "manufacturer": h.vendor.split()[0], "model": "IPC-" + last, "device_type": "urn:...:Basic:1"}
         elif role == "phone":
             h.names.setdefault("sweep", h.hostname)
+        elif role in ("server", "vm") and sub.startswith("10.30."):
+            h.probes["nmap"] = {"os": rng.choice(["VMware ESXi 7.0", "Ubuntu 22.04 (Linux 5.15)", "Windows Server 2019"]),
+                                "os_accuracy": rng.randint(90, 97), "os_family": rng.choice(["VMware ESXi", "Linux", "Windows"]), "os_vendor": ""}
+            if "nmap" not in h.sources:
+                h.sources.append("nmap")
         elif role in ("nas",):
             h.probes["ssdp"] = {"server": "Linux/3.10 UPnP/1.0 Synology/1.0", "manufacturer": "Synology", "model": "DS920+",
                                 "device_type": "urn:schemas-upnp-org:device:MediaServer:1", "friendly_name": h.hostname or "nas"}

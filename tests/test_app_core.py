@@ -369,3 +369,38 @@ def test_device_os_family():
     assert device_os_family(Device(id="1", vendor="Cisco", sysdescr="Cisco IOS-XE Software, Version 17.9")) == "ios-xe"
     assert device_os_family(Device(id="2", vendor="Fortinet", sysdescr="FortiGate-100F v7.2.8")) == "fortios"
     assert device_os_family(Device(id="3", vendor="", sysdescr="Linux host 5.15.0", role="server")) == "linux"
+
+
+def test_nmap_os_and_ports_parse_and_apply():
+    from netmap.sweep import _parse_nmap_xml
+    from netmap.scan import _apply_nmap
+    from netmap.model import Inventory, Device
+    from netmap.profile import profile_host
+
+    xml = """<nmaprun><host><status state="up"/><address addr="10.0.0.9" addrtype="ipv4"/>
+      <ports>
+        <port protocol="tcp" portid="445"><state state="open"/><service name="microsoft-ds" product="Windows Server 2019"/></port>
+        <port protocol="tcp" portid="3389"><state state="open"/><service name="ms-wbt-server"/></port>
+      </ports>
+      <os><osmatch name="Microsoft Windows Server 2019" accuracy="98"><osclass osfamily="Windows" vendor="Microsoft"/></osmatch>
+          <osmatch name="Microsoft Windows 10" accuracy="90"><osclass osfamily="Windows" vendor="Microsoft"/></osmatch></os>
+    </host></nmaprun>"""
+    recs = _parse_nmap_xml(xml)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["os"] == "Microsoft Windows Server 2019" and r["os_accuracy"] == 98  # highest-accuracy osmatch wins
+    assert r["os_family_raw"] == "Windows" and {p["port"] for p in r["ports"]} == {445, 3389}
+    assert any(p["product"] == "Windows Server 2019" for p in r["ports"])
+
+    inv = Inventory()
+    _apply_nmap(inv, "10.0.0.9", r)  # unknown ip -> becomes a host
+    h = inv.hosts["10.0.0.9"]
+    assert {p["port"] for p in h.ports} == {445, 3389} and h.probes["nmap"]["os"] == "Microsoft Windows Server 2019"
+    p = profile_host(h)
+    assert p.os == "Microsoft Windows Server 2019" and p.os_family == "windows" and p.confidence == "high"
+
+    # applied to a polled device: ports land on the device, SNMP os_version is not clobbered
+    d = Device(id="10.0.0.1", vendor="Cisco", os_version="17.9.4a"); d.ips.append("10.0.0.1"); inv.add_device(d)
+    _apply_nmap(inv, "10.0.0.1", {"ports": [{"port": 443, "proto": "tcp", "service": "https", "product": ""}], "os": "Linux 5.x", "os_family_raw": "Linux"})
+    assert inv.devices["10.0.0.1"].ports[0]["port"] == 443 and inv.devices["10.0.0.1"].os_version == "17.9.4a"
+    assert "10.0.0.1" not in inv.hosts  # a device is never downgraded to a host

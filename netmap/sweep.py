@@ -150,9 +150,19 @@ def _parse_nmap_xml(xml_text: str) -> list[dict]:
                     "port": int(p.get("portid")),
                     "proto": p.get("protocol"),
                     "service": svc.get("name", "") if svc is not None else "",
-                    "product": " ".join(filter(None, [svc.get("product"), svc.get("version")])) if svc is not None else "",
+                    "product": " ".join(filter(None, [svc.get("product"), svc.get("version"), svc.get("extrainfo")])).strip() if svc is not None else "",
                 }
             )
+        # OS detection (nmap -O): the best osmatch, with family/vendor from its first osclass
+        best = None
+        for om in h.findall("os/osmatch"):
+            acc = int(om.get("accuracy") or 0)
+            if best is None or acc > best[0]:
+                oc = om.find("osclass")
+                best = (acc, om.get("name", ""), (oc.get("osfamily") if oc is not None else "") or "", (oc.get("vendor") if oc is not None else "") or "")
+        if best:
+            rec["os"], rec["os_accuracy"] = best[1], best[0]
+            rec["os_family_raw"], rec["os_vendor"] = best[2], best[3]
         if rec["ip"]:
             hosts.append(rec)
     return hosts
@@ -212,6 +222,44 @@ async def sweep_subnet(cidr: str, fingerprint: bool = False, nmap_timeout: float
     sem = asyncio.Semaphore(128)
     results = await asyncio.gather(*[_ping(str(ip), sem) for ip in net.hosts()])
     return [{"ip": ip, "mac": None, "vendor": "", "hostname": "", "ports": []} for ip in results if ip]
+
+
+async def nmap_inspect(ips: list[str], fingerprint: bool = True, os_detect: bool = False,
+                       top_ports: int = 200, batch: int = 24, nmap_timeout: float = 600.0) -> dict[str, dict]:
+    """Scan specific addresses (the devices and hosts already found) for open ports, service
+    versions and - with -O, which needs privilege - the OS. Returns {ip: parsed record}.
+
+    This is what fills in ports and a real OS guess, whether a host came from SNMP, ARP or a
+    sweep; it is not limited to a subnet sweep."""
+    if not find_nmap() or not ips:
+        if not find_nmap():
+            log.warning("nmap not found; install it for port, service and OS detection")
+        return {}
+    admin = is_admin()
+    if os_detect and not admin:
+        log.warning("OS detection (-O) needs raw sockets; run as root/Administrator. Doing service detection only")
+    out: dict[str, dict] = {}
+    sem = asyncio.Semaphore(4)
+    ips = list(dict.fromkeys(ips))
+
+    async def one(chunk: list[str]):
+        args = []
+        if fingerprint:
+            args += ["-sV", "--version-light"]
+        if os_detect and admin:
+            args += ["-O", "--osscan-limit"]
+        args += ["--top-ports", str(top_ports), "-T4", "--open", "-Pn", "-n"]
+        if not args or (not fingerprint and not (os_detect and admin)):
+            args = ["--top-ports", str(top_ports), "-T4", "--open", "-Pn", "-n"]
+        async with sem:
+            xml = await _run_nmap(args + chunk, nmap_timeout)
+        for rec in (_parse_nmap_xml(xml) if xml else []):
+            if rec.get("ip"):
+                out[rec["ip"]] = rec
+
+    await asyncio.gather(*[one(ips[i:i + batch]) for i in range(0, len(ips), batch)])
+    log.info("nmap inspected %d/%d addresses (ports%s)", len(out), len(ips), ", OS" if (os_detect and admin) else "")
+    return out
 
 
 async def discover_targets(

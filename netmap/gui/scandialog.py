@@ -160,13 +160,22 @@ class ScanDialog(QDialog):
         self.identify.setChecked(d.get("identify", True))
         self.identify.setToolTip("Sends a few small read-only probes to each host to work out what it is, its OS and its name.\nWorks without Nmap or admin rights.")
         nmap = find_nmap()
-        self.fingerprint = QCheckBox("Identify services on live hosts with Nmap" + ("" if nmap else "  (Nmap not found)"))
+        suffix = "" if nmap else "  (Nmap not found — install it from nmap.org)"
+        self.port_scan = QCheckBox("Scan ports & service versions with Nmap — every device and host" + suffix)
+        self.port_scan.setChecked(bool(nmap) and d.get("port_scan", True))
+        self.port_scan.setEnabled(bool(nmap))
+        self.port_scan.setToolTip((f"Using {nmap}" if nmap else "Install Nmap from nmap.org") + "\nRuns nmap -sV against everything found (not just swept subnets) to list open ports and identify services.")
+        self.os_detect = QCheckBox("Also detect the operating system with Nmap (needs Administrator / root)")
+        self.os_detect.setChecked(bool(nmap) and d.get("os_detect", False))
+        self.os_detect.setEnabled(bool(nmap))
+        self.os_detect.setToolTip("nmap -O needs raw sockets, so run NetMap as Administrator (with Npcap installed) for OS detection.")
+        self.fingerprint = QCheckBox("Fingerprint services during subnet sweeps")
         self.fingerprint.setChecked(bool(nmap) and d.get("fingerprint", False))
         self.fingerprint.setEnabled(bool(nmap))
-        self.fingerprint.setToolTip(nmap or "Install Nmap (nmap.org) to enable service identification and MAC-level ping sweeps")
+        self.fingerprint.setVisible(False)  # folded into "Scan ports" above; kept for saved settings
         self.cisco_vlan = QCheckBox("Read per-VLAN MAC tables on older Cisco IOS switches (community@vlan)")
         self.cisco_vlan.setChecked(d.get("cisco_vlan_fdb", False))
-        for w in (self.sweep, self.dns, self.identify, self.fingerprint, self.cisco_vlan):
+        for w in (self.sweep, self.dns, self.identify, self.port_scan, self.os_detect, self.fingerprint, self.cisco_vlan):
             g2l.addWidget(w)
         ol.addWidget(g2)
         g3 = QGroupBox("This project already has data")
@@ -328,6 +337,8 @@ class ScanDialog(QDialog):
             probe_all=self.probe_all.isChecked(),
             sweep=self.sweep.isChecked(),
             fingerprint=self.fingerprint.isChecked(),
+            port_scan=self.port_scan.isChecked(),
+            os_detect=self.os_detect.isChecked(),
             probe_hosts=self.probe_hosts.isChecked(),
             resolve_names=self.dns.isChecked(),
             identify=self.identify.isChecked(),
@@ -345,7 +356,7 @@ class ScanDialog(QDialog):
         )
         remember = {
             "targets": targets, "seeds": seeds, "scope": scope, "exclude": exclude, "credential_ids": ids,
-            "probe_all": req.probe_all, "sweep": req.sweep, "fingerprint": req.fingerprint, "probe_hosts": req.probe_hosts,
+            "probe_all": req.probe_all, "sweep": req.sweep, "fingerprint": req.fingerprint, "port_scan": req.port_scan, "os_detect": req.os_detect, "probe_hosts": req.probe_hosts,
             "resolve_names": req.resolve_names, "identify": req.identify, "cisco_vlan_fdb": req.cisco_vlan_fdb, "max_depth": req.max_depth,
             "workers": req.workers, "timeout": req.timeout, "retries": req.retries, "port": req.port, "sweep_max_prefix": req.sweep_max_prefix,
         }
