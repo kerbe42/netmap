@@ -64,6 +64,8 @@ class Crawler:
         if not cfg.retry_unreachable:
             self.tried |= set(inv.unreachable)
         self.stats = {"probed": 0, "devices": 0, "refreshed": 0, "no_snmp": 0, "skipped_scope": 0, "new_devices": []}
+        self._last_save = 0.0
+        self.save_interval = 5.0  # seconds between progress saves during a crawl
         self._started = time.time()
 
     # ---- queue management ----
@@ -217,8 +219,15 @@ class Crawler:
                 self.cfg.on_device(dev)
             except Exception:  # noqa: BLE001 - a UI callback must never stop a crawl
                 log.debug("on_device callback failed", exc_info=True)
+        # Persist progress, but don't serialise the whole inventory after *every* device -
+        # on a large crawl that's O(n^2) writes and each one blocks the event loop (and so
+        # stalls SNMP I/O). Debounce to at most one save every few seconds; the final save
+        # in run() captures whatever the last debounce skipped.
         if self.cfg.save_path:
-            self.inv.save(self.cfg.save_path)
+            now = time.monotonic()
+            if now - self._last_save >= self.save_interval:
+                self.inv.save(self.cfg.save_path)
+                self._last_save = now
 
     async def _worker(self, wid: int) -> None:
         while True:

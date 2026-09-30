@@ -530,6 +530,72 @@ def enip_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
 # --------------------------------------------------------------------------- #
 # Orchestrator
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 6. Infra services over UDP (DNS 53, NTP 123)
+#
+# TCP-only nmap never sees these, so DNS/NTP servers - core infrastructure on an
+# inherited network - would otherwise be missed. Both are tiny unprivileged UDP
+# request/reply exchanges (no auth, read-only): a valid answer proves the service.
+# --------------------------------------------------------------------------- #
+def _build_dns_query() -> bytes:
+    """A standard DNS query for the root NS record (id 0x1a2b, RD set)."""
+    return struct.pack(">HHHHHH", 0x1A2B, 0x0100, 1, 0, 0, 0) + b"\x00" + struct.pack(">HH", 2, 1)
+
+
+def parse_dns(data: bytes) -> Optional[dict]:
+    if len(data) < 12 or data[0:2] != b"\x1a\x2b":
+        return None
+    flags = (data[2] << 8) | data[3]
+    if not (flags & 0x8000):  # QR (response) bit
+        return None
+    return {"dns": True, "recursion": bool(flags & 0x0080)}
+
+
+def dns_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Send a DNS query to UDP/53; a well-formed response means a DNS server."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(_build_dns_query(), (ip, 53))
+        data, _ = sock.recvfrom(1500)
+        return parse_dns(data)
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def ntp_probe(ip: str, timeout: float = 2.0) -> Optional[dict]:
+    """Send an NTP client request to UDP/123; a 48-byte reply means an NTP server."""
+    if not is_usable_ip(ip):
+        return None
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(b"\x1b" + b"\x00" * 47, (ip, 123))  # LI=0 VN=3 Mode=3 (client)
+        data, _ = sock.recvfrom(256)
+        if len(data) < 48 or (data[0] & 0x07) not in (2, 4, 5):  # server/broadcast mode in reply
+            return None
+        stratum = data[1]
+        return {"ntp": True, "stratum": stratum}
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
 def _set_dict_attr(host, attr: str, key: str, value) -> None:
     """Store value under host.<attr>[key], creating the dict if the field is absent/blank."""
     d = getattr(host, attr, None)
@@ -559,6 +625,7 @@ async def probe_extra(
     do_wsd: bool = True,
     do_ipmi: bool = True,
     do_ot: bool = True,
+    do_infra: bool = True,
     workers: int = 48,
     timeout: float = 2.0,
     probes: Optional[dict] = None,
@@ -590,13 +657,18 @@ async def probe_extra(
         enabled.append("ipmi")
     if do_ot:
         enabled.extend(("modbus", "bacnet", "enip"))
+    if do_infra:
+        enabled.extend(("dns", "ntp"))
     if not enabled:
         return 0
 
     _fetchers = {
         "wsd": wsd_probe, "ipmi": ipmi_probe, "modbus": modbus_probe,
-        "bacnet": bacnet_probe, "enip": enip_probe,
+        "bacnet": bacnet_probe, "enip": enip_probe, "dns": dns_probe, "ntp": ntp_probe,
     }
+    # a confirmed UDP service is recorded as an open port too, so the port->function
+    # classifier reports it as a DNS/NTP server (TCP-only nmap can't see these)
+    _infra_port = {"dns": (53, "domain"), "ntp": (123, "ntp")}
 
     log.info("extra-probing %d hosts with: %s", len(targets), ", ".join(enabled))
     loop = asyncio.get_running_loop()
@@ -634,6 +706,10 @@ async def probe_extra(
                 xaddrs = res.get("xaddrs") or []
                 if xaddrs:
                     _add_name(host, "wsd", xaddrs[0])  # a management URL for the device
+            elif name in _infra_port:
+                port, svc = _infra_port[name]
+                if not any(p.get("port") == port for p in host.ports):
+                    host.ports.append({"port": port, "proto": "udp", "service": svc, "product": ""})
         if got:
             answered += 1
 

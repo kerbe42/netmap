@@ -168,6 +168,14 @@ def _parse_nmap_xml(xml_text: str) -> list[dict]:
     return hosts
 
 
+async def _reap(proc) -> None:
+    """Await a killed subprocess so it doesn't linger as a zombie / ResourceWarning."""
+    try:
+        await proc.wait()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _run_nmap(args: list[str], timeout: float) -> Optional[str]:
     cmd = [find_nmap() or "nmap", "-oX", "-", *args]
     log.debug("running: %s", " ".join(cmd))
@@ -176,11 +184,13 @@ async def _run_nmap(args: list[str], timeout: float) -> Optional[str]:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
+        await _reap(proc)
         log.warning("nmap timed out: %s", " ".join(args))
         return None
     except asyncio.CancelledError:
         # the scan was stopped: don't leave nmap running behind the app
         proc.kill()
+        await _reap(proc)
         raise
     if proc.returncode != 0:
         log.warning("nmap exited %s: %s", proc.returncode, err.decode(errors="replace").strip()[:300])
@@ -195,6 +205,7 @@ async def _ping(ip: str, sem: asyncio.Semaphore) -> Optional[str]:
             out, _ = await proc.communicate()
         except asyncio.CancelledError:
             proc.kill()
+            await _reap(proc)
             raise
         # Windows ping exits 0 even for "Destination host unreachable"; require a TTL in the reply.
         ok = proc.returncode == 0 and (sys.platform != "win32" or b"TTL=" in out)

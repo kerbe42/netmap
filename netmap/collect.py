@@ -658,6 +658,12 @@ def apply_counter_deltas(old: Device, new: Device) -> None:
         speed_bps = (i.speed_mbps or 0) * 1_000_000
         for cur, was, attr in ((i.in_octets, o.in_octets, "in_util_pct"), (i.out_octets, o.out_octets, "out_util_pct")):
             d = cur - was
+            if d < 0:
+                # a 32-bit ifInOctets counter wraps every ~34s on a gigabit link; recover
+                # the delta if adding one 32-bit turn gives a rate within the link speed.
+                # A larger negative delta is a counter reset (reboot), which we skip.
+                wrapped = d + (1 << 32)
+                d = wrapped if speed_bps and wrapped * 8.0 / dt <= speed_bps else -1
             if d >= 0 and speed_bps:
                 setattr(i, attr, round(min(100.0, d * 8.0 / dt / speed_bps * 100.0), 1))
         derr = (i.in_errors + i.out_errors) - (o.in_errors + o.out_errors)

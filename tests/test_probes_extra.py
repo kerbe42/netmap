@@ -238,7 +238,7 @@ def test_probe_extra_fills_probes_and_sources():
         return None
 
     n = _run(px.probe_extra(
-        inv,
+        inv, do_infra=False,
         probes={"modbus": modbus, "wsd": wsd,
                 "ipmi": lambda ip: None, "bacnet": lambda ip: None, "enip": lambda ip: None},
     ))
@@ -258,6 +258,24 @@ def test_probe_extra_fills_probes_and_sources():
     assert h3.probes == {}
 
 
+def test_probe_extra_infra_records_dns_ntp_as_ports():
+    from netmap.profile import profile_host
+    inv = Inventory()
+    inv.touch_host("10.0.0.1", "sweep")  # answers DNS
+    inv.touch_host("10.0.0.2", "sweep")  # answers NTP
+    n = _run(px.probe_extra(
+        inv, do_ot=False, do_wsd=False, do_ipmi=False,
+        probes={"dns": lambda ip: {"dns": True, "recursion": True} if ip == "10.0.0.1" else None,
+                "ntp": lambda ip: {"ntp": True, "stratum": 3} if ip == "10.0.0.2" else None},
+    ))
+    assert n == 2
+    h1 = inv.hosts["10.0.0.1"]
+    assert any(p["port"] == 53 and p["proto"] == "udp" for p in h1.ports)
+    assert "DNS server" in profile_host(h1).functions
+    h2 = inv.hosts["10.0.0.2"]
+    assert any(p["port"] == 123 for p in h2.ports)
+
+
 def test_probe_extra_do_ot_toggle_disables_ot_probes():
     inv = Inventory()
     inv.touch_host("10.0.0.1", "sweep")
@@ -268,7 +286,7 @@ def test_probe_extra_do_ot_toggle_disables_ot_probes():
         return {"modbus": True}
 
     n = _run(px.probe_extra(
-        inv, do_ot=False, do_wsd=False, do_ipmi=True,
+        inv, do_ot=False, do_wsd=False, do_ipmi=True, do_infra=False,
         probes={"modbus": modbus, "ipmi": lambda ip: None},
     ))
     assert n == 0
@@ -283,7 +301,7 @@ def test_probe_extra_skips_devices_and_unusable_ips():
     inv.ip_to_device["10.0.0.5"] = "10.0.0.5"  # already a polled device -> skipped by default
     seen = []
     n = _run(px.probe_extra(
-        inv,
+        inv, do_infra=False,
         probes={"wsd": lambda ip: seen.append(ip) or None,
                 "ipmi": lambda ip: None, "modbus": lambda ip: None,
                 "bacnet": lambda ip: None, "enip": lambda ip: None},
@@ -300,7 +318,7 @@ def test_probe_extra_never_raises_on_probe_exception():
         raise RuntimeError("probe blew up")
 
     n = _run(px.probe_extra(
-        inv,
+        inv, do_infra=False,
         probes={"wsd": boom, "ipmi": boom, "modbus": boom, "bacnet": boom, "enip": boom},
     ))
     assert n == 0
