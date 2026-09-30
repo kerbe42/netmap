@@ -39,6 +39,8 @@ def enrich_inventory(inv: Inventory) -> None:
     Every MAC we learned - from ARP, from a bridge table, from a sweep - carries the
     organization that owns its OUI, which is often the only clue a host gives us.
     """
+    from .profile import profile_inventory
+
     _drop_shared_macs(inv)
     for h in inv.hosts.values():
         if h.mac and not plausible_mac(h.mac):
@@ -47,6 +49,7 @@ def enrich_inventory(inv: Inventory) -> None:
             h.vendor = oui_vendor(h.mac)
         if h.role in ("host", "", None):
             h.role = classify_host(h.ports, h.vendor, h.hostname)
+    profile_inventory(inv)  # weigh every signal (OUI, ports, NetBIOS/mDNS/SSDP/HTTP, names) into role/os/evidence
     for d in inv.devices.values():
         if not d.vendor:
             for mac in [d.lldp_chassis_id, *d.macs]:

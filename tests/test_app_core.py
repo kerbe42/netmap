@@ -308,3 +308,64 @@ def test_bogus_and_shared_macs_are_dropped():
     enrich_inventory(inv)
     assert all(inv.hosts[f"10.9.0.{10 + i}"].mac is None for i in range(5))       # bogus, dropped
     assert all(inv.hosts[f"10.9.9.{10 + i}"].mac == "00:11:22:aa:bb:cc" for i in range(4))  # real device MAC, kept
+
+
+def test_topology_paths(campus):
+    from netmap import paths
+    g = build_graph(campus)
+    # switched path from the core to a floor access switch, with the port at each end
+    p = paths.path_to(campus, g, "10.99.0.13")
+    assert p.ok and p.nodes()[0] == p.origin
+    assert p.nodes()[-1] == "10.99.0.13"
+    assert any(h.out_port and h.in_port for h in p.hops)
+    # path to a host ends with the access-port hop onto its switch
+    hostip = next(ip for ip, h in campus.hosts.items()
+                  if ip not in campus.ip_to_device and any(s.get("via") == "fdb" for s in h.seen_on))
+    p2 = paths.path_to(campus, g, hostip)
+    assert p2.ok and p2.hops[-1].node == hostip and p2.hops[-1].kind == "access"
+    assert p2.hops[-2].node in campus.devices  # the switch it hangs off
+    # routed path reconstructed from routing tables to a branch subnet behind the WAN router
+    rp = paths.route_path(campus, "10.99.0.2", "10.110.0.5")
+    names = [campus.devices[h.node].name for h in rp if h.node in campus.devices]
+    assert "core-sw-01" in names and "rtr-wan-01" in names
+    assert rp[-1].node == "172.16.100.2"  # next hop past the edge of what we polled
+
+
+def test_profile_identifies_from_multiple_signals():
+    from netmap.model import Host
+    from netmap.profile import profile_host
+
+    # a printer known only from its OUI and mDNS advert
+    h = Host(ip="10.0.0.5", mac="00:1b:a9:11:22:33")  # Brother OUI
+    h.probes = {"mdns": {"hostname": "BRW001BA9112233.local", "services": ["_ipp._tcp", "_pdl-datastream._tcp"], "model": "MFC-L2750DW"}}
+    h.names = {"mdns": "BRW001BA9112233.local"}
+    p = profile_host(h)
+    assert p.role == "printer" and p.model == "MFC-L2750DW"
+    assert any("mDNS" in e["source"] for e in p.evidence) and p.confidence in ("high", "medium")
+
+    # a Windows box: NetBIOS + open ports agree
+    w = Host(ip="10.0.0.6", ports=[{"port": 3389, "proto": "tcp", "service": "ms-wbt-server", "product": ""},
+                                   {"port": 445, "proto": "tcp", "service": "microsoft-ds", "product": ""}])
+    w.probes = {"netbios": {"hostname": "FINANCE-PC1", "domain": "ACME", "is_dc": False, "mac": "00:50:56:aa:bb:cc"}}
+    w.names = {"netbios": "FINANCE-PC1"}
+    pw = profile_host(w)
+    assert pw.role == "windows" and pw.os_family == "windows" and pw.confidence == "high"
+
+    # a domain controller
+    dc = Host(ip="10.0.0.7")
+    dc.probes = {"netbios": {"hostname": "DC01", "domain": "ACME", "is_dc": True}}
+    dc.names = {"netbios": "DC01"}
+    assert profile_host(dc).os_family == "windows" and "domain controller" in " ".join(e["implies"] for e in profile_host(dc).evidence).lower()
+
+    # nothing but an OUI: low confidence, still names the vendor
+    bare = Host(ip="10.0.0.8", mac="b8:27:eb:00:11:22")  # Raspberry Pi
+    pb = profile_host(bare)
+    assert pb.vendor.startswith("Raspberry") and pb.confidence in ("low", "medium")
+
+
+def test_device_os_family():
+    from netmap.profile import device_os_family
+    from netmap.model import Device
+    assert device_os_family(Device(id="1", vendor="Cisco", sysdescr="Cisco IOS-XE Software, Version 17.9")) == "ios-xe"
+    assert device_os_family(Device(id="2", vendor="Fortinet", sysdescr="FortiGate-100F v7.2.8")) == "fortios"
+    assert device_os_family(Device(id="3", vendor="", sysdescr="Linux host 5.15.0", role="server")) == "linux"
