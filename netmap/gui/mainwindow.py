@@ -272,6 +272,8 @@ class MainWindow(QMainWindow):
         self.a_save = self._act(fm, "&Save", self.save, QKeySequence.Save, icon=st.standardIcon(QStyle.SP_DialogSaveButton))
         self._act(fm, "Save &as…", self.save_as, QKeySequence.SaveAs)
         self._act(fm, "Project &properties…", self.project_properties)
+        im = fm.addMenu("&Import")
+        self._act(im, "DHCP leases / scopes…", self.import_dhcp, tip="Import a DHCP export (dhcpd.leases, Kea or Windows CSV) to name hosts and mark scopes")
         fm.addSeparator()
         ex = fm.addMenu("&Export")
         self._act(ex, "Excel workbook (.xlsx)…", self.export_xlsx, "Ctrl+E", "The whole inventory, one sheet per list")
@@ -327,6 +329,7 @@ class MainWindow(QMainWindow):
         self._act(tm, "&Compare with another scan…", self.compare)
         self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/Excel list of devices you were given")
         self._act(tm, "Capture device &configs (SSH)…", self.capture_configs, tip="Log in read-only and save each device's running-config, to read and diff over time")
+        self._act(tm, "&Listen for syslog / SNMP traps…", self.listen_events, tip="Watch messages devices send while you are on site")
 
         hm = mb.addMenu("&Help")
         self._act(hm, "&Quick guide", self.quick_guide, QKeySequence.HelpContents)
@@ -1111,6 +1114,35 @@ class MainWindow(QMainWindow):
         dlg = CompareDialog(d, os.path.basename(path), self.project_name(), self)
         dlg.openNode.connect(self.open_node)
         dlg.show()
+
+    def listen_events(self):
+        from .listendlg import ListenDialog
+
+        dlg = ListenDialog(self.snapshot, self)
+        dlg.show()
+
+    def import_dhcp(self):
+        from .. import dhcp
+
+        start = QSettings().value("ui/last_dir", os.path.expanduser("~"))
+        path, _ = QFileDialog.getOpenFileName(self, "Import DHCP leases", start, "DHCP exports (*.csv *.txt *.leases);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                leases = dhcp.parse_leases(f.read())
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Could not read", f"{path}\n\n{e}")
+            return
+        if not leases:
+            QMessageBox.information(self, "Nothing imported", "No leases were recognised in that file. Supported: ISC/Kea dhcpd and Windows DHCP CSV exports.")
+            return
+        summary = dhcp.import_leases(self.inv, leases)
+        self.set_dirty(True)
+        self.refresh()
+        QMessageBox.information(self, "DHCP imported",
+                               f"{summary['leases']} leases: named {summary['named']} host(s), filled {summary['macs_filled']} MAC(s), "
+                               f"added {summary['new_hosts']} host(s), marked {summary['scopes']} subnet(s) as DHCP scopes.")
 
     def capture_configs(self, node_id: str = ""):
         if self.worker is not None or getattr(self, "_cap_worker", None) is not None:

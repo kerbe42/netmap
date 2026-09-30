@@ -232,6 +232,7 @@ class Inventory:
         self.project: dict = {}  # name, description, saved scan settings (never secrets)
         self.history: list[dict] = []  # one entry per scan: when, what was asked, what was found
         self.configs: dict[str, list[dict]] = {}  # device id -> [{captured_at, text, sha}] newest last
+        self.dhcp_scopes: dict[str, dict] = {}  # subnet cidr -> {leases, imported_at} from an imported DHCP export
 
     # ---- devices ----
     def add_device(self, dev: Device) -> None:
@@ -362,6 +363,7 @@ class Inventory:
             "layout": self.layout,
             "history": self.history,
             "configs": self.configs,
+            "dhcp_scopes": self.dhcp_scopes,
         }
 
     @classmethod
@@ -393,6 +395,7 @@ class Inventory:
         inv.project = dict(d.get("project") or {})
         inv.history = list(d.get("history") or [])
         inv.configs = {k: list(v) for k, v in (d.get("configs") or {}).items()}
+        inv.dhcp_scopes = {k: dict(v) for k, v in (d.get("dhcp_scopes") or {}).items()}
         return inv
 
     def copy(self) -> "Inventory":

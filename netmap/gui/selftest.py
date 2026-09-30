@@ -200,6 +200,26 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
         (ok if rd.rec and len(rd.rec.missing) == 1 else fail)(f"asset list check: {len(rd.rec.found) if rd.rec else 0} found, {len(rd.rec.missing) if rd.rec else '?'} missing")
         shot("42-asset-check", rd)
         rd.reject()
+        # DHCP import enriches hosts
+        from .. import dhcp as _dhcp
+        _lz = _dhcp.parse_leases("IPAddress,HostName,ClientId,AddressState\n10.10.0.201,DHCP-TEST-PC,00-50-56-01-02-03,Active\n")
+        _before = len(win.inv.hosts)
+        _sum = _dhcp.import_leases(win.inv, _lz)
+        (ok if _sum["leases"] == 1 and "10.10.0.201" in win.inv.hosts else fail)(f"dhcp import: {_sum}")
+        # syslog/trap listener binds high ports and receives a datagram
+        import socket as _sock, time as _time
+        from .listendlg import ListenDialog
+        ld = ListenDialog(win.snapshot, win)
+        ld.syslog_port.setValue(15514); ld.trap_port.setValue(16162); ld.toggle()
+        listening = ld.collector is not None
+        if listening:
+            _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM); _s.sendto(b"<190>selftest syslog", ("127.0.0.1", 15514)); _s.close()
+            _end = _time.time() + 3
+            while _time.time() < _end and not ld.collector.events: _pump(100)
+            _pump(800)
+        (ok if listening and ld.collector and len(ld.collector.events) >= 1 else fail)(f"syslog listener received {len(ld.collector.events) if ld.collector else 0}")
+        shot("43-listen", ld)
+        ld.stop(); ld.close()
         cd = CredentialsDialog(win.store, win)
         cd.show()
         _pump(100)

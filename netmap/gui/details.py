@@ -582,8 +582,10 @@ class DetailsPanel(QWidget):
         for g in (sub.gateways if sub else []):
             gws.append(s.name(g))
         vgw = "; ".join(f"{v['proto'].upper()} {v['vip']}" + (f" (active {s.name(v['active'])})" if v.get("active") else "") for v in s.vgw.get(cidr, []))
+        scope = inv.dhcp_scopes.get(cidr, {})
         pairs = [
             ("Virtual gateway", vgw),
+            ("DHCP scope", f"{scope.get('leases', 0)} leases imported" if scope else ""),
             ("Gateway(s)", ", ".join(gws)),
             ("VLAN", vlan),
             ("Addresses", f"{r.get('size', '')} ({r.get('usable', '')} usable)"),

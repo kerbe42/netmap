@@ -215,6 +215,39 @@ right-clicking anything offers **Trace path to here**, which lights the path up 
 * the **routed path** is reconstructed from the collected routing tables hop by hop toward the destination
   (a traceroute rebuilt from SNMP, so it works even where ICMP is filtered), naming each router and egress.
 
+## Interface health and PoE
+
+Per-port counters turn into something you can act on. The Interfaces list shows each port's
+**utilisation** (busiest direction, measured between two scans — rescan to populate it), **error**
+counters and rate, **duplex**, and **PoE** status/class/watts; the device shows its PoE budget and
+draw. Findings call out ports taking errors, half-duplex switch links, links running near saturation,
+and a PoE budget nearly full.
+
+## Configuration capture and change tracking
+
+With device login credentials you can capture running-configs **read-only** over SSH (Cisco IOS/NX-OS,
+Junos, EOS, FortiOS, ArubaOS-CX, ProCurve, RouterOS) — **Tools ▸ Capture device configs**, a device's
+right-click menu, or `netmap capture -u USER`. Configs are stored in the project with a revision history,
+and each device's **Config** tab shows the text or a coloured **diff against the previous capture**, so
+you can see exactly what changed. NetMap only ever runs `show` commands; it never writes to a device.
+
+## DHCP, syslog and traps
+
+* **DHCP import** (**File ▸ Import ▸ DHCP leases / scopes**) reads an ISC/Kea `dhcpd.leases` or a Windows
+  DHCP CSV export and folds it in — naming hosts, filling MACs, and marking which subnets are DHCP scopes.
+* **Syslog / SNMP trap listener** (**Tools ▸ Listen**) is a passive receiver: point devices' logging and
+  trap host at your machine and watch link flaps, auth failures and config-change messages arrive live,
+  keyed to the device that sent them.
+
+## Compliance and hardware support
+
+* The **Compliance** page lists where the network misses common hardening standards, read-only and
+  best-effort: SNMPv1/v2c or default communities, Telnet or cleartext HTTP management (from a light TCP
+  check of each device), spanning-tree left at defaults, unused ports left enabled, expired TLS
+  certificates, and hardware past vendor end-of-support.
+* **End-of-life / end-of-sale**: each device is matched against a bundled offline dataset of common
+  platforms and shows its support status (always "verify with the vendor").
+
 ## Staying inside your ranges
 
 * Nothing outside the scope is ever sent a packet. Target ranges are always inside it; when no wider scope
