@@ -18,7 +18,6 @@ Everything here is offline file parsing; nothing talks to a server.
 from __future__ import annotations
 
 import csv
-import ipaddress
 import json
 import re
 import time
