@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.snapshot: Optional[Snapshot] = None
         self.worker: Optional[ScanWorker] = None
+        self._sched_timer = None
         self.current_node = ""
         self.store = CredentialStore()
         self.logbridge = LogBridge(self)
@@ -276,6 +277,7 @@ class MainWindow(QMainWindow):
         self._act(fm, "Project &properties…", self.project_properties)
         im = fm.addMenu("&Import")
         self._act(im, "DHCP leases / scopes…", self.import_dhcp, tip="Import a DHCP export (dhcpd.leases, Kea or Windows CSV) to name hosts and mark scopes")
+        self._act(im, "VMware vCenter / ESXi…", self.import_vmware, tip="Read-only vSphere discovery: ESXi hosts, VMs, guest IPs/OS, port groups")
         fm.addSeparator()
         ex = fm.addMenu("&Export")
         self._act(ex, "Excel workbook (.xlsx)…", self.export_xlsx, "Ctrl+E", "The whole inventory, one sheet per list")
@@ -306,6 +308,8 @@ class MainWindow(QMainWindow):
         sm = mb.addMenu("&Scan")
         self.a_scan = self._act(sm, "&New scan…", self.new_scan, "Ctrl+R", "Discover and inventory devices", st.standardIcon(QStyle.SP_MediaPlay))
         self.a_rescan = self._act(sm, "&Rescan known devices", self.rescan_all, "F5", "Poll every device in the project again and follow any new links", st.standardIcon(QStyle.SP_BrowserReload))
+        self.a_schedule = self._act(sm, "Schedule &automatic rescans…", self.schedule_rescans, tip="Re-poll every device on a repeating interval while NetMap is open")
+        self.a_schedule.setCheckable(True)
         self.a_stop = self._act(sm, "&Stop scan", self.stop_scan, "Esc", icon=st.standardIcon(QStyle.SP_MediaStop))
         self.a_stop.setEnabled(False)
         sm.addSeparator()
@@ -330,6 +334,8 @@ class MainWindow(QMainWindow):
 
         tm = mb.addMenu("&Tools")
         self._act(tm, "Ping / traceroute / DNS / SNMP test", lambda: (self.tools_dock.show(), self.tools_dock.raise_(), self.tools.target.setFocus()))
+        self._act(tm, "&Query / search assets…", self.query_console, "Ctrl+Shift+F", "Search the inventory with a query language")
+        self._act(tm, "Start &API server…", self.start_api, tip="Serve a read-only REST API of this project on localhost")
         self._act(tm, "&Compare with another scan…", self.compare)
         self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/Excel list of devices you were given")
         self._act(tm, "&Inspect servers (SSH / WinRM)…", self.inspect_servers, tip="Collect OS, hardware, software, services and connections from hosts you have login for")
@@ -895,6 +901,32 @@ class MainWindow(QMainWindow):
             req.scope.append(f"{node_id}/32")
         self.start_scan(req, f"Rescan of {self.snapshot.name(node_id) if self.snapshot else node_id}")
 
+    def schedule_rescans(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QInputDialog
+
+        if self._sched_timer is not None:
+            self._sched_timer.stop()
+            self._sched_timer = None
+            self.a_schedule.setChecked(False)
+            self.statusBar().showMessage("Automatic rescans turned off.", 5000)
+            return
+        mins, ok = QInputDialog.getInt(self, "Automatic rescans", "Re-poll every device this often (minutes):", 30, 1, 10080)
+        if not ok:
+            self.a_schedule.setChecked(False)
+            return
+        self._sched_timer = QTimer(self)
+        self._sched_timer.setInterval(mins * 60000)
+        self._sched_timer.timeout.connect(self._scheduled_tick)
+        self._sched_timer.start()
+        self.a_schedule.setChecked(True)
+        self.statusBar().showMessage(f"Automatic rescans every {mins} min while NetMap is open.", 8000)
+
+    def _scheduled_tick(self):
+        if self.worker is None and getattr(self, "_cap_worker", None) is None and getattr(self, "_insp_worker", None) is None and self.inv.devices:
+            self.log_view.appendPlainText(f"\n=== Scheduled rescan — {time.strftime('%H:%M:%S')} ===")
+            self.rescan_all()
+
     def rescan_all(self):
         if self.worker is not None:
             return
@@ -1113,6 +1145,38 @@ class MainWindow(QMainWindow):
             self.topology.print_map(printer)
 
     # ================================================================ compare / help
+    def query_console(self):
+        from .querydlg import QueryDialog
+
+        dlg = QueryDialog(self.snapshot, self)
+        dlg.openNode.connect(self.open_node)
+        dlg.show()
+
+    def start_api(self):
+        from PySide6.QtWidgets import QInputDialog
+        from .. import api
+
+        if getattr(self, "_api_srv", None) is not None:
+            self._api_srv.shutdown()
+            self._api_srv = None
+            self.statusBar().showMessage("API server stopped.", 5000)
+            return
+        port, ok = QInputDialog.getInt(self, "API server", "Serve a read-only REST API on 127.0.0.1 port:", 8088, 1, 65535)
+        if not ok:
+            return
+        try:
+            import threading
+            self._api_srv = api.serve(lambda: self.inv, host="127.0.0.1", port=port)
+            threading.Thread(target=self._api_srv.serve_forever, daemon=True).start()
+        except OSError as e:
+            QMessageBox.warning(self, "API server", f"Could not start on port {port}: {e}")
+            self._api_srv = None
+            return
+        QMessageBox.information(self, "API server",
+                               f"Serving this project at http://127.0.0.1:{port}/\n\n"
+                               "Try /summary, /devices, or /query?q=hosts where os ~ windows\n\n"
+                               "Tools ▸ Start API server again to stop it.")
+
     def compare(self):
         from ..diff import compare
 
@@ -1135,6 +1199,44 @@ class MainWindow(QMainWindow):
 
         dlg = ListenDialog(self.snapshot, self)
         dlg.show()
+
+    def import_vmware(self):
+        if self.worker is not None or getattr(self, "_vmw_worker", None) is not None:
+            QMessageBox.information(self, "Busy", "A scan or discovery is already running.")
+            return
+        from .vmwaredlg import VmwareDialog, VmwareWorker
+
+        dlg = VmwareDialog(self)
+        if not dlg.exec():
+            return
+        v = dlg.values()
+        if not v["host"] or not v["username"]:
+            QMessageBox.warning(self, "Details needed", "Enter the vCenter/ESXi host and username.")
+            return
+        self.activity_dock.show()
+        self.activity_dock.raise_()
+        self.scan_phase.setText(f"Discovering VMware on {v['host']}…")
+        self.scan_bar.show()
+        w = VmwareWorker(self.inv, v, self)
+        self._vmw_worker = w
+
+        def finished(result):
+            self._vmw_worker = None
+            self.scan_bar.hide()
+            if result.get("error"):
+                self.scan_phase.setText(f"VMware discovery failed: {result['error']}")
+                QMessageBox.warning(self, "VMware discovery", result["error"])
+                return
+            self.set_dirty(True)
+            self.refresh()
+            msg = f"VMware: {result.get('esxi_hosts', 0)} ESXi host(s), {result.get('vms', 0)} VM(s) ({result.get('vms_with_ip', 0)} with an IP), {result.get('portgroups', 0)} port groups."
+            self.scan_phase.setText(msg)
+            self.statusBar().showMessage(msg, 12000)
+            if self.path:
+                self._write(self.path)
+
+        w.done.connect(finished)
+        w.start()
 
     def import_dhcp(self):
         from .. import dhcp

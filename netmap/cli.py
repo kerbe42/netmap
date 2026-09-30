@@ -160,6 +160,19 @@ async def cmd_crawl(args) -> int:
     await run_scan(inv, req)
     log.info("saved %s (%s)", args.out, inv.summary())
     _outputs(inv, args)
+    if args.repeat and args.repeat > 0:
+        import asyncio as _a
+
+        req.refresh = True
+        log.info("repeating every %ds; Ctrl-C to stop", args.repeat)
+        try:
+            while True:
+                await _a.sleep(args.repeat)
+                log.info("=== scheduled rescan ===")
+                await run_scan(inv, req)
+                _outputs(inv, args)
+        except (KeyboardInterrupt, _a.CancelledError):
+            log.info("stopped")
     return 0
 
 
@@ -199,6 +212,35 @@ def cmd_diff(args) -> int:
             for c in d.changes:
                 w.writerow([c.kind, c.change, c.item, c.name, c.detail])
         log.info("wrote %s", args.csv)
+    return 0
+
+
+def cmd_vmware(args) -> int:
+    import getpass
+    from .vmware import discover
+
+    inv = Inventory.load(args.map)
+    pw = args.password if args.password is not None else getpass.getpass("vCenter password: ")
+    result = discover(inv, args.host, args.user, pw, port=args.port, insecure=not args.secure)
+    if result.get("error"):
+        log.error("VMware discovery failed: %s", result["error"])
+        return 1
+    inv.save(args.map)
+    print(f"VMware: {result.get('esxi_hosts',0)} ESXi hosts, {result.get('vms',0)} VMs ({result.get('vms_with_ip',0)} with IP). saved {args.map}")
+    return 0
+
+
+def cmd_serve(args) -> int:
+    from .api import serve
+
+    inv = Inventory.load(args.map)
+    srv = serve(inv, host=args.bind, port=args.port, token=args.token)
+    log.info("serving %s at http://%s:%d/ (Ctrl-C to stop)%s", args.map, args.bind, args.port, " [token required]" if args.token else "")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        srv.shutdown()
+        log.info("stopped")
     return 0
 
 
@@ -336,6 +378,7 @@ def build_parser():
     cr.add_argument("--sweep", action="store_true", help="after crawling, ping-sweep every discovered subnet with nmap")
     cr.add_argument("--resweep", action="store_true")
     cr.add_argument("--resume", action="store_true", help="load the existing map and skip devices already collected")
+    cr.add_argument("--repeat", type=int, metavar="SECONDS", help="keep rescanning on this interval (Ctrl-C to stop); implies --resume --refresh")
     cr.add_argument("--refresh", action="store_true", help="with --resume, poll devices already in the map again and replace what was collected (notes and layout are kept)")
     cr.add_argument("--retry-unreachable", action="store_true", help="with --resume, try again addresses that did not answer SNMP last time")
     cr.add_argument("--dns", action="store_true", help="name devices and hosts from reverse DNS (PTR) lookups")
@@ -380,6 +423,15 @@ def build_parser():
     ins.add_argument("--linux-user"), ins.add_argument("--linux-pass"), ins.add_argument("--linux-key")
     ins.add_argument("--win-user"), ins.add_argument("--win-pass")
 
+    vm = sub.add_parser("vmware", help="read-only VMware vCenter/ESXi discovery folded into the map")
+    vm.add_argument("--map", "-m", default="netmap.json")
+    vm.add_argument("--host", required=True), vm.add_argument("--user", required=True), vm.add_argument("--password")
+    vm.add_argument("--port", type=int, default=443), vm.add_argument("--secure", action="store_true", help="verify the TLS certificate")
+
+    sv = sub.add_parser("serve", help="serve a read-only REST API over a saved map (JSON + the query language)")
+    sv.add_argument("--map", "-m", default="netmap.json")
+    sv.add_argument("--bind", default="127.0.0.1"), sv.add_argument("--port", type=int, default=8088), sv.add_argument("--token", default="")
+
     gu = sub.add_parser("gui", help="open the desktop app (needs the 'gui' extra: pip install netmap[gui])")
     gu.add_argument("project", nargs="?", help="project to open")
     return p
@@ -416,6 +468,10 @@ def main(argv=None) -> None:
         rc = cmd_capture(args)
     elif args.cmd == "inspect":
         rc = cmd_inspect(args)
+    elif args.cmd == "serve":
+        rc = cmd_serve(args)
+    elif args.cmd == "vmware":
+        rc = cmd_vmware(args)
     elif args.cmd == "gui":
         try:
             from .gui.app import main as gui_main

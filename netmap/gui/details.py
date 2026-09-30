@@ -488,6 +488,12 @@ class DetailsPanel(QWidget):
             from .capturedlg import ConfigView
 
             self.tabs.addTab(ConfigView(revs), "Config")
+        if d.role in ("switch", "l3switch") and len([i for i in d.interfaces if i.index]) >= 4:
+            from .portpanel import PortPanel
+
+            pp = PortPanel(s, d.id)
+            pp.openNode.connect(self.openNode)
+            self.tabs.addTab(self._scroll(pp), "Ports panel")
         self._add_deps_tab(s, d.id)
         self._add_path_tab(s, d.id)
 

@@ -227,6 +227,27 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
         (ok if listening and ld.collector and len(ld.collector.events) >= 1 else fail)(f"syslog listener received {len(ld.collector.events) if ld.collector else 0}")
         shot("43-listen", ld)
         ld.stop(); ld.close()
+        # query console
+        from .querydlg import QueryDialog
+        qd = QueryDialog(win.snapshot, win)
+        qd.edit.setText("hosts where os ~ windows and confidence = high")
+        qd.run()
+        _pump(150)
+        (ok if qd.table.rowCount() > 0 else fail)(f"query console returned {qd.table.rowCount()} rows")
+        shot("44-query", qd)
+        qd.close()
+        # switch front-panel view
+        sw = next((d for d, dev in inv.devices.items() if dev.role in ("switch", "l3switch") and len(dev.interfaces) >= 4), None)
+        if sw:
+            win.open_node(sw)
+            _pump(150)
+            tabs = [win.details.tabs.tabText(i) for i in range(win.details.tabs.count())]
+            (ok if "Ports panel" in tabs else fail)("ports panel tab present")
+            for i in range(win.details.tabs.count()):
+                if win.details.tabs.tabText(i) == "Ports panel":
+                    win.details.tabs.setCurrentIndex(i)
+            _pump(150)
+            shot("25-ports-panel")
         cd = CredentialsDialog(win.store, win)
         cd.show()
         _pump(100)
