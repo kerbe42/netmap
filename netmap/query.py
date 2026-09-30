@@ -13,7 +13,7 @@ rows the app's pages show, so any visible column (by key or title) is queryable.
 from __future__ import annotations
 
 import re
-import shlex
+import time
 
 from .views import PAGES, sort_key
 
@@ -39,27 +39,124 @@ def _col_index(cols):
 
 
 _OPS = ["<=", ">=", "!=", "!~", "=", "~", "<", ">"]
+_COND_RE = re.compile(r"^(.+?)\s*(<=|>=|!=|!~|=|~|<|>)\s*(.+)$", re.S)
+_JOIN_RE = re.compile(r"\s+(and|or)\s+", re.I)
+
+
+def _split_conditions(text: str) -> list[str]:
+    """Pieces of a where-clause split on and/or, but only outside quotes, so
+    ``notes ~ "rack 4 and 5"`` stays one condition."""
+    parts: list[str] = []
+    buf: list[str] = []
+    quote = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        m = _JOIN_RE.match(text, i)
+        if m:
+            parts.append("".join(buf))
+            parts.append(m.group(1).lower())
+            buf = []
+            i = m.end()
+            continue
+        buf.append(ch)
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _unquote(v: str) -> str:
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        return v[1:-1]
+    return v
 
 
 def _tokenize_conditions(text: str):
-    """Split 'a = b and c ~ d' into [('a','=','b','and'), ...]. Very forgiving."""
-    parts = re.split(r"\s+(and|or)\s+", text, flags=re.I)
+    """Split 'a = b and c ~ d' into [('a','=','b','and'), ...].
+
+    Each condition is <column> <op> <value>; the value may be quoted and may then contain
+    operators or the words and/or. The first operator found in the condition (left to
+    right, longest first) is the one: ``name ~ a=b`` compares against "a=b".
+    """
     conds = []
     joiner = "and"
-    for i, part in enumerate(parts):
-        if part.lower() in ("and", "or"):
-            joiner = part.lower()
+    for part in _split_conditions(text):
+        if part in ("and", "or"):
+            joiner = part
             continue
-        op = next((o for o in _OPS if o in part), None)
-        if not op:
+        m = _COND_RE.match(part.strip())
+        if not m:
             raise QueryError(f"condition '{part.strip()}' needs an operator ({', '.join(_OPS)})")
-        left, right = part.split(op, 1)
-        val = right.strip().strip('"').strip("'")
-        conds.append((left.strip().lower(), op, val, joiner if conds else "and"))
+        left, op, right = m.group(1), m.group(2), m.group(3)
+        conds.append((_unquote(left).lower(), op, _unquote(right), joiner if conds else "and"))
     return conds
 
 
-def _match(row: dict, key: str, op: str, val: str, extra) -> bool:
+_ORDERED_KINDS = {"ip", "cidr", "int", "pct", "duration", "time"}
+_DUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([dhms])", re.I)
+
+
+def _parse_duration(v: str):
+    """'30d', '2h 30m', '90' -> seconds; None when it is not a duration."""
+    s = str(v).strip().lower()
+    if not s:
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        return float(s)
+    total = 0.0
+    matched = False
+    for num, unit in _DUR_RE.findall(s):
+        total += float(num) * {"d": 86400, "h": 3600, "m": 60, "s": 1}[unit]
+        matched = True
+    return total if matched else None
+
+
+def _parse_time(v: str):
+    """'2026-09-01' or '2026-09-01 14:30' -> epoch seconds; None when it is not a date."""
+    s = str(v).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return time.mktime(time.strptime(s, fmt))
+        except ValueError:
+            continue
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _ordered(kind: str, cell, val: str):
+    """(a, b) keys for an ordering comparison, typed by the column's kind so addresses,
+    prefixes, durations and dates compare as what they are rather than as text."""
+    if kind == "duration":
+        want = _parse_duration(val)
+        if want is not None:
+            return sort_key("int", cell), (0, want)
+    if kind == "time":
+        want = _parse_time(val)
+        if want is not None:
+            return sort_key("int", cell), (0, want)
+    if kind in _ORDERED_KINDS:
+        return sort_key(kind, cell), sort_key(kind, val)
+    try:
+        return (0, float(cell)), (0, float(val))
+    except (TypeError, ValueError):
+        return (1, str(cell).lower()), (1, str(val).lower())
+
+
+def _match(row: dict, key: str, op: str, val: str, kind: str = "text") -> bool:
     cell = row.get(key, "")
     if cell is None:
         cell = ""
@@ -70,14 +167,12 @@ def _match(row: dict, key: str, op: str, val: str, extra) -> bool:
     if op == "!~":
         return v not in s
     if op == "=":
-        return s == v or (extra is not None and extra)
+        return s == v
     if op == "!=":
         return s != v
-    # numeric comparisons where possible, else string
-    try:
-        a, b = float(cell), float(val)
-    except (TypeError, ValueError):
-        a, b = s, v
+    a, b = _ordered(kind, cell, val)
+    if a[0] != b[0]:  # one side unparseable for this kind: no ordering between them
+        return False
     if op == ">":
         return a > b
     if op == "<":
@@ -96,6 +191,8 @@ def run_query(snapshot, text: str):
         raise QueryError("empty query")
     # page
     m = re.match(r"^(\w+)\s*(.*)$", text, re.S)
+    if not m:
+        raise QueryError(f"a query starts with a table name. Try one of: {', '.join(pages())}")
     page = PAGE_ALIASES.get(m.group(1).lower(), m.group(1).lower())
     rest = m.group(2).strip()
     if page not in PAGES:
@@ -103,6 +200,10 @@ def run_query(snapshot, text: str):
     cols, fn = PAGES[page]
     rows = fn(snapshot)
     idx = _col_index(cols)
+    kinds = {c.key: c.kind for c in cols}
+    # `port = 3389` on the hosts/devices pages means "has this open port", not the switch
+    # port column; on a page with a real numeric port column (dependencies) it is that column
+    port_convenience = any(c.key in ("services", "open ports") for c in cols)
 
     # pull clauses off the end/middle
     limit = None
@@ -135,22 +236,22 @@ def run_query(snapshot, text: str):
         if not rest.lower().startswith("where"):
             raise QueryError("expected 'where', 'select', 'order by' or 'limit'")
         conds = _tokenize_conditions(rest[5:].strip())
-        for key, *_ in conds:
-            if key not in idx and key != "port":
+        for key, op, *_ in conds:
+            if key not in idx and not (key == "port" and port_convenience):
                 raise QueryError(f"unknown column '{key}'. Columns: {', '.join(sorted({c.key for c in cols}))}")
+            if key == "port" and port_convenience and op not in ("=", "~", "!=", "!~"):
+                raise QueryError("'port' on this table means an open port: use =, !=, ~ or !~")
 
     def keep(row):
         if not conds:
             return True
         result = None
         for key, op, val, joiner in conds:
-            extra = None
-            if key == "port":  # convenience: match an open port on hosts/devices
-                extra = _has_port(row, val)
-                real_key = "port"
-                ok = extra if op in ("=", "~") else _match(row, idx.get(key, key), op, val, None)
+            if key == "port" and port_convenience:  # convenience: match an open port on hosts/devices
+                has = _has_port(row, val)
+                ok = has if op in ("=", "~") else not has
             else:
-                ok = _match(row, idx[key], op, val, None)
+                ok = _match(row, idx[key], op, val, kinds.get(idx[key], "text"))
             result = ok if result is None else (result and ok if joiner == "and" else result or ok)
         return bool(result)
 
@@ -167,9 +268,11 @@ def run_query(snapshot, text: str):
 
 
 def _has_port(row, val) -> bool:
+    """Does the row list this open port (in its services / open-ports column)? The switch
+    port column ("Gi1/0/22") is deliberately not searched."""
     try:
         want = int(re.sub(r"\D", "", val))
     except ValueError:
         return False
-    text = str(row.get("services", "")) + " " + str(row.get("open ports", "")) + " " + str(row.get("port", ""))
-    return bool(re.search(rf"\b{want}\b", text))
+    text = str(row.get("services", "")) + " " + str(row.get("open ports", ""))
+    return bool(re.search(rf"(^|[\s,])(tcp/|udp/)?{want}(/|\b)", text))

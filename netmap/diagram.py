@@ -9,6 +9,7 @@ opens directly and can convert to Visio.
 from __future__ import annotations
 
 import html
+import math
 import time
 from typing import Iterable, Optional
 
@@ -95,7 +96,17 @@ def positions(nodes: dict, edges: list, saved: Optional[dict] = None, kind: str 
             auto = L.organic(nodes, pairs, init=auto)
     if not saved:
         return auto
-    pos = {n: (float(saved[n][0]), float(saved[n][1])) for n in nodes if n in saved}
+    pos: dict = {}
+    for n in nodes:
+        if n not in saved:
+            continue
+        try:  # a hand-edited or truncated project file: one bad entry must not lose the layout
+            x, y = saved[n][0], saved[n][1]
+            x, y = float(x), float(y)
+            if math.isfinite(x) and math.isfinite(y):
+                pos[n] = (x, y)
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
     if not pos:
         return auto
     dxs = [pos[n][0] - auto[n][0] for n in pos if n in auto]
@@ -164,6 +175,12 @@ def _esc(s) -> str:
     return html.escape(str(s or ""), quote=True)
 
 
+def _esc_html_value(s) -> str:
+    """A cell value or tooltip that draw.io renders as HTML (style has html=1) must be
+    escaped twice: once so the text survives as HTML, once more for the XML attribute."""
+    return _esc(_esc(s))
+
+
 def _size(a: dict) -> tuple[float, float]:
     kind = a.get("kind")
     if kind == "subnet":
@@ -191,7 +208,7 @@ def drawio_page(name: str, nodes: dict, edges: list, pos: dict, page_id: str) ->
         elif a.get("kind") == "subnet" and a.get("vlan"):
             label += f"<br>VLAN {_esc(a.get('vlan'))}"
         tip = " | ".join(str(a.get(k)) for k in ("vendor", "model", "serial", "site") if a.get(k))
-        tooltip = f' tooltip="{_esc(tip)}"' if tip else ""
+        tooltip = f' tooltip="{_esc_html_value(tip)}"' if tip else ""
         cells.append(
             f'<UserObject label="{_esc(label)}" id="{cid}"{tooltip} netmap_id="{_esc(n)}">'
             f'<mxCell style="{_esc(style)}fontSize=10;" vertex="1" parent="1">'
@@ -209,7 +226,7 @@ def drawio_page(name: str, nodes: dict, edges: list, pos: dict, page_id: str) ->
             for k, (text, x) in enumerate(((pu, -0.7), (pv, 0.7))):
                 if text:
                     cells.append(
-                        f'<mxCell id="{eid}l{k}" value="{_esc(text)}" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;fontSize=8;labelBackgroundColor=#ffffff;" '
+                        f'<mxCell id="{eid}l{k}" value="{_esc_html_value(text)}" style="edgeLabel;resizable=0;html=1;align=center;verticalAlign=middle;fontSize=8;labelBackgroundColor=#ffffff;" '
                         f'vertex="1" connectable="0" parent="{eid}"><mxGeometry x="{x}" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry></mxCell>'
                     )
     body = "".join(cells)

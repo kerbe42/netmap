@@ -18,6 +18,8 @@ from .model import Inventory
 
 log = logging.getLogger("netmap.report")
 
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
 HEADER_FILL = "FF1F3864"
 BANDS = {"device": "FFDDEBF7", "host": "FFF2F2F2", "subnet": "FFE2EFDA"}
 
@@ -34,6 +36,11 @@ def _sheet(wb, title, headers, rows, widths=None, freeze="A2"):
         c.alignment = Alignment(vertical="center", wrap_text=True)
     for r in rows:
         ws.append(r)
+        # text that came off the network (a sysName, an ifAlias, a location) starting with
+        # = + - @ would otherwise be stored as a formula and evaluated when opened
+        for c in ws[ws.max_row]:
+            if isinstance(c.value, str) and c.value.startswith(_FORMULA_LEAD):
+                c.data_type = "s"
     ws.freeze_panes = freeze
     if rows:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(rows) + 1}"

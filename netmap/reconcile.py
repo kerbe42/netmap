@@ -119,10 +119,10 @@ def reconcile(inv: Inventory, rows: list[list[str]], columns: dict[str, int]) ->
     by_mac: dict[str, str] = {}
     for d in inv.devices.values():
         if d.serial:
-            by_serial.setdefault(d.serial.strip().upper(), d.id)
+            by_serial.setdefault(_norm_serial(d.serial), d.id)
         for c in d.components:
             if c.serial:
-                by_serial.setdefault(c.serial.strip().upper(), d.id)
+                by_serial.setdefault(_norm_serial(c.serial), d.id)
         for n in (d.name, d.dns_name, inv.note(d.id).get("name", "")):
             if n:
                 by_name.setdefault(short_name(n), d.id)
@@ -152,8 +152,8 @@ def reconcile(inv: Inventory, rows: list[list[str]], columns: dict[str, int]) ->
         ip = _ip(listed.get("ip", ""))
         if ip and (ip in inv.ip_to_device or ip in inv.hosts):
             m.node, m.how = inv.ip_to_device.get(ip, ip), "address"
-        elif listed.get("serial", "").upper() in by_serial:
-            m.node, m.how = by_serial[listed["serial"].upper()], "serial"
+        elif _norm_serial(listed.get("serial", "")) in by_serial:
+            m.node, m.how = by_serial[_norm_serial(listed["serial"])], "serial"
         elif listed.get("name") and short_name(listed["name"]) in by_name:
             m.node, m.how = by_name[short_name(listed["name"])], "name"
         elif norm_mac(listed.get("mac")) and norm_mac(listed["mac"]) in by_mac:
@@ -162,22 +162,42 @@ def reconcile(inv: Inventory, rows: list[list[str]], columns: dict[str, int]) ->
             d = inv.devices.get(m.node)
             if d is not None:
                 hit_devices.add(d.id)
-                serials = {d.serial.upper()} | {c.serial.upper() for c in d.components if c.serial}
-                if listed.get("serial") and listed["serial"].upper() not in serials and d.serial:
+                # matched the same way it was indexed: stripped and upper-cased on both sides
+                serials = {_norm_serial(d.serial)} | {_norm_serial(c.serial) for c in d.components if c.serial}
+                if listed.get("serial") and _norm_serial(listed["serial"]) not in serials and d.serial:
                     m.differences.append(f"serial: list {listed['serial']}, device {d.serial}")
                 if listed.get("model") and d.model and not _same_model(listed["model"], d.model, d.components):
                     m.differences.append(f"model: list {listed['model']}, device {d.model}")
-                if listed.get("name") and d.name and short_name(listed["name"]) not in {short_name(d.name), short_name(d.dns_name or "")}:
-                    m.differences.append(f"name: list {listed['name']}, device {d.name}")
+                known_names = {short_name(d.name), short_name(d.dns_name or ""), short_name(inv.note(d.id).get("name", ""))} - {""}
+                if listed.get("name") and known_names and short_name(listed["name"]) not in known_names:
+                    m.differences.append(f"name: list {listed['name']}, device {inv.display_name(d.id)}")
                 if ip and m.how != "address":
                     m.differences.append(f"address: list {ip}, found at {d.id}")
             else:
                 h = inv.hosts.get(m.node)
                 if h is not None and listed.get("mac") and h.mac and norm_mac(listed["mac"]) != h.mac:
                     m.differences.append(f"MAC: list {listed['mac']}, seen {h.mac}")
+                if h is not None and _listed_as_kit(listed, h):
+                    # the list says this is a managed device (it has a serial/model, or it
+                    # announced itself as network kit) but only its address answered
+                    m.differences.append(f"no SNMP answer: {m.node} was seen on the network but could not be polled")
         matches.append(m)
     unlisted = sorted(set(inv.devices) - hit_devices, key=lambda x: ipaddress.ip_address(x))
     return Reconciliation(matches, unlisted)
+
+
+def _norm_serial(s: str) -> str:
+    return (s or "").strip().upper()
+
+
+_KIT_ROLES = {"switch", "l3switch", "router", "firewall", "wireless", "unpolled"}
+
+
+def _listed_as_kit(listed: dict, host) -> bool:
+    """Does the list describe network kit we should have polled? A row carrying a serial
+    or model, or a host that announced itself as a switch/router/AP, or one an SNMP probe
+    was tried on - as opposed to a printer or PC listed for completeness."""
+    return bool(listed.get("serial") or listed.get("model")) or getattr(host, "snmp_failed", False) or getattr(host, "role", "") in _KIT_ROLES
 
 
 def _same_model(listed: str, model: str, components) -> bool:
@@ -187,8 +207,10 @@ def _same_model(listed: str, model: str, components) -> bool:
 
 
 def write_csv(inv: Inventory, rec: Reconciliation, path: str) -> str:
+    from .graph import SafeCsvWriter
+
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.writer(f)
+        w = SafeCsvWriter(f)  # names/serials off the list or the network are text, never formulas
         w.writerow(["result", "list name", "list address", "list serial", "matched", "matched by", "found name", "differences"])
         for m in rec.matches:
             state = "not found" if not m.node else ("differs" if m.differences else "found")
