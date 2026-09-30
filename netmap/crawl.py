@@ -17,6 +17,42 @@ from .util import RFC1918, in_scope, is_usable_ip
 
 log = logging.getLogger("netmap.crawl")
 
+# Address ranges that container engines, hypervisor host switches and VM tooling hand out
+# on every host they run on: two devices both owning 172.17.0.1 is two Docker hosts, not
+# one switch reached twice.
+VIRTUAL_RANGES = [
+    ipaddress.ip_network(n)
+    for n in ("172.17.0.0/16", "172.18.0.0/15", "172.20.0.0/14", "172.24.0.0/13",  # Docker, WSL, host-side default switches
+              "192.168.56.0/24", "192.168.122.0/24", "10.0.75.0/24", "100.64.0.0/10")  # desktop VM tooling, libvirt, CGNAT overlays
+]
+
+
+def in_virtual_range(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a in n for n in VIRTUAL_RANGES)
+
+
+def same_device(a: Device, b: Device) -> Optional[bool]:
+    """Are two device records the same box? True/False on evidence, None when neither has
+    any identity to compare (no serial, chassis id or name)."""
+    if a.serial and b.serial:
+        return a.serial == b.serial
+    if a.lldp_chassis_id and b.lldp_chassis_id:
+        return a.lldp_chassis_id == b.lldp_chassis_id
+    if a.name and b.name:
+        return a.name == b.name and a.sysobjectid == b.sysobjectid
+    return None
+
+
+def shared_real_addresses(dev: Device, other: Device) -> list[str]:
+    """Addresses both devices claim that could mean they are one box: not a first-hop
+    redundancy VIP (an active/standby pair both list it) and not in a virtual range."""
+    vips = {r.get("vip") for r in dev.redundancy + other.redundancy if r.get("vip")}
+    return [a for a in dev.ips if a in other.ips and a not in vips and not in_virtual_range(a)]
+
 
 @dataclass
 class CrawlConfig:
@@ -174,14 +210,26 @@ class Crawler:
             return
         dev.depth = depth
         dev.discovered_via = via
-        # Dedupe: the same box reached via another of its addresses
-        for a in dev.ips:
-            if a in self.inv.ip_to_device and self.inv.ip_to_device[a] != ip:
-                other = self.inv.ip_to_device[a]
-                log.info("%s is the same device as %s (%s); merging", ip, other, dev.name)
-                for b in dev.ips:
-                    self.inv.ip_to_device.setdefault(b, other)
-                return
+        # Dedupe: the same box reached via another of its addresses. A shared address alone
+        # is not proof - Docker bridges, host-side virtual switches and FHRP VIPs put the same
+        # address on many boxes - so the identity has to agree too.
+        for other_id in dict.fromkeys(self.inv.ip_to_device[a] for a in dev.ips if a in self.inv.ip_to_device and self.inv.ip_to_device[a] != ip):
+            other = self.inv.devices.get(other_id)
+            if other is None:
+                continue
+            shared = shared_real_addresses(dev, other)
+            if not shared:
+                continue  # only VIPs / virtual-range addresses in common: two devices
+            verdict = same_device(dev, other)
+            if verdict is False:
+                log.info("%s shares %s with %s but is a different device (%s vs %s); keeping both", ip, shared[0], other_id, dev.name or dev.serial, other.name or other.serial)
+                continue
+            if verdict is None:
+                log.debug("%s and %s share %s and neither has an identity to compare; treating as one device", ip, other_id, shared[0])
+            log.info("%s is the same device as %s (%s); merging", ip, other_id, dev.name)
+            for b in dev.ips:
+                self.inv.ip_to_device.setdefault(b, other_id)
+            return
         self.inv.add_device(dev)
         self.stats["devices"] += 1
         self.stats["new_devices"].append(dev.id)

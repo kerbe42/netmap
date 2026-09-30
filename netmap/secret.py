@@ -60,9 +60,11 @@ else:
     def protect(plain: str, key: str = "") -> str:
         if not available():
             raise SecretUnavailable("no secret store on this platform")
-        import hashlib
+        import secrets
 
-        ident = key or hashlib.sha256(plain.encode("utf-8")).hexdigest()[:16]
+        # The identifier is written to the settings file, so it must not be derived from
+        # the secret (a hash of a short community would be guessable from a word list).
+        ident = key or secrets.token_hex(8)
         try:
             keyring.set_password("netmap", ident, plain)
         except Exception as e:  # noqa: BLE001 - a locked or missing backend
@@ -87,4 +89,7 @@ else:
             backend = keyring.get_keyring()
         except Exception:  # noqa: BLE001
             return ""
-        return "" if "fail" in type(backend).__module__ else "the system keyring"
+        mod = type(backend).__module__.lower()
+        if "fail" in mod or "null" in mod:
+            return ""  # keyring is installed but has nowhere to keep anything
+        return "the system keyring"

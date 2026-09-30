@@ -37,6 +37,10 @@ def build_credentials(args, cfg) -> list[Credential]:
     creds = [Credential.from_dict(c) for c in cfg.get("credentials", [])]
     for c in args.community or []:
         creds.append(Credential.from_dict({"kind": "v2c", "community": c}))
+    for c in getattr(args, "v1_community", None) or []:
+        creds.append(Credential.from_dict({"kind": "v1", "community": c}))
+    if args.v3_priv_key and not args.v3_auth_key:
+        log.warning("--v3-priv-key given without --v3-auth-key: SNMPv3 privacy needs authentication, the priv key will not be used")
     if args.v3_user:
         creds.append(
             Credential.from_dict({"kind": "v3", "user": args.v3_user, "auth": args.v3_auth, "auth_key": args.v3_auth_key, "priv": args.v3_priv, "priv_key": args.v3_priv_key})
@@ -49,11 +53,32 @@ def build_credentials(args, cfg) -> list[Credential]:
     return creds
 
 
+_RANGE_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\s*-\s*((?:\d{1,3}\.){3}\d{1,3}|\d{1,3})$")
+
+
+def parse_target_item(item: str) -> list[str]:
+    """One entry of a range list -> CIDRs. Accepts a subnet, a single address, and the
+    range forms 'a.b.c.d-a.b.c.e' and 'a.b.c.d-e' (summarised to the fewest CIDRs).
+    Raises ValueError for anything else."""
+    m = _RANGE_RE.match(item)
+    if not m:
+        return [str(ipaddress.ip_network(item, strict=False))]
+    first = ipaddress.ip_address(m.group(1))
+    end = m.group(2)
+    if "." not in end:
+        end = m.group(1).rsplit(".", 1)[0] + "." + end
+    last = ipaddress.ip_address(end)
+    if last < first:
+        raise ValueError(f"range end {last} is before its start {first}")
+    return [str(n) for n in ipaddress.summarize_address_range(first, last)]
+
+
 def read_target_file(path):
-    """One subnet or address per line; '#' comments and blank lines ignored.
+    """One subnet, address or range per line; '#' comments and blank lines ignored.
 
     Written for the range list a target hands over: paste it into a text file as-is.
-    Commas and whitespace separate entries on a line, so a copied spreadsheet row works.
+    Commas and whitespace separate entries on a line, so a copied spreadsheet row works;
+    '10.1.0.10-10.1.0.20' and '10.1.0.10-20' are ranges.
     """
     out = []
     with open(path, encoding="utf-8") as f:
@@ -65,10 +90,22 @@ def read_target_file(path):
                 if not item:
                     continue
                 try:
-                    out.append(str(ipaddress.ip_network(item, strict=False)))
+                    out.extend(parse_target_item(item))
                 except ValueError:
-                    log.warning("%s line %d: %r is not a subnet or address, ignoring", path, n, item)
+                    log.warning("%s line %d: %r is not a subnet, address or range, ignoring", path, n, item)
     return out
+
+
+def _load_map(path: str) -> Inventory:
+    """Open a saved map, or say plainly that it is not there (exit 2) instead of a traceback."""
+    if not os.path.exists(path):
+        log.error("map file %s does not exist (give --map PATH, or run a crawl first)", path)
+        sys.exit(2)
+    try:
+        return Inventory.load(path)
+    except (OSError, ValueError) as e:
+        log.error("could not read map file %s: %s", path, e)
+        sys.exit(2)
 
 
 def targets_from(args, cfg):
@@ -149,8 +186,8 @@ async def cmd_crawl(args) -> int:
         retry_unreachable=args.retry_unreachable,
         resweep=args.resweep,
         max_depth=args.max_depth if args.max_depth is not None else c.get("max_depth", 6),
-        workers=args.workers or c.get("workers", 12),
-        timeout=args.timeout or c.get("timeout", 2.0),
+        workers=args.workers if args.workers is not None else c.get("workers", 12),
+        timeout=args.timeout if args.timeout is not None else c.get("timeout", 2.0),
         retries=args.retries if args.retries is not None else c.get("retries", 1),
         port=args.port,
         max_devices=args.max_devices,
@@ -160,6 +197,11 @@ async def cmd_crawl(args) -> int:
     await run_scan(inv, req)
     log.info("saved %s (%s)", args.out, inv.summary())
     _outputs(inv, args)
+    if targets and not inv.devices:
+        # the operator named ranges and nothing in them answered SNMP: the outputs are empty,
+        # which a script or CI run needs to see in the exit status
+        if not (args.repeat and args.repeat > 0):
+            return 1
     if args.repeat and args.repeat > 0:
         import asyncio as _a
 
@@ -193,7 +235,7 @@ async def cmd_sweep(args) -> int:
 
 
 def cmd_render(args) -> int:
-    inv = Inventory.load(args.map)
+    inv = _load_map(args.map)
     _outputs(inv, args)
     return 0
 
@@ -203,7 +245,7 @@ def cmd_diff(args) -> int:
 
     from .diff import compare
 
-    d = compare(Inventory.load(args.old), Inventory.load(args.new))
+    d = compare(_load_map(args.old), _load_map(args.new))
     print(d.text())
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as f:
@@ -219,7 +261,7 @@ def cmd_vmware(args) -> int:
     import getpass
     from .vmware import discover
 
-    inv = Inventory.load(args.map)
+    inv = _load_map(args.map)
     pw = args.password if args.password is not None else getpass.getpass("vCenter password: ")
     result = discover(inv, args.host, args.user, pw, port=args.port, insecure=not args.secure)
     if result.get("error"):
@@ -233,7 +275,7 @@ def cmd_vmware(args) -> int:
 def cmd_serve(args) -> int:
     from .api import serve
 
-    inv = Inventory.load(args.map)
+    inv = _load_map(args.map)
     srv = serve(inv, host=args.bind, port=args.port, token=args.token)
     log.info("serving %s at http://%s:%d/ (Ctrl-C to stop)%s", args.map, args.bind, args.port, " [token required]" if args.token else "")
     try:
@@ -247,7 +289,7 @@ def cmd_serve(args) -> int:
 def cmd_inspect(args) -> int:
     from .hostinfo import inspect_hosts
 
-    inv = Inventory.load(args.map)
+    inv = _load_map(args.map)
     creds = {}
     if args.linux_user or args.linux_key:
         creds["linux"] = {"username": args.linux_user or "", "password": args.linux_pass or "", "key_filename": args.linux_key}
@@ -267,7 +309,7 @@ def cmd_capture(args) -> int:
 
     from .capture import capture_config, store_config
 
-    inv = Inventory.load(args.map)
+    inv = _load_map(args.map)
     ids = args.device or sorted(inv.devices)
     pw = args.password if args.password is not None else (getpass.getpass("SSH password: ") if not args.key else "")
     ok = changed = 0
@@ -291,7 +333,7 @@ def cmd_capture(args) -> int:
 def cmd_check(args) -> int:
     from .reconcile import guess_columns, read_table, reconcile, write_csv
 
-    inv = Inventory.load(args.map)
+    inv = _load_map(args.map)
     headers, rows = read_table(args.assets)
     cols = guess_columns(headers)
     if not cols:
@@ -362,8 +404,13 @@ def build_parser():
 
     cr = sub.add_parser("crawl", help="spider the network starting from seed devices")
     cr.add_argument("--seed", "-s", action="append", metavar="IP", help="starting device (core switch/router) to spider from. Repeatable. Optional if --target is given")
-    cr.add_argument("--community", "-C", action="append", metavar="STR", help="SNMPv2c community to try (repeatable, tried in order)")
-    cr.add_argument("--v3-user"), cr.add_argument("--v3-auth", default="SHA"), cr.add_argument("--v3-auth-key"), cr.add_argument("--v3-priv", default="AES"), cr.add_argument("--v3-priv-key")
+    cr.add_argument("--community", "-C", action="append", metavar="STR", help="SNMPv2c community to try (repeatable, tried in order). 'env:VAR' reads it from that environment variable so it stays out of shell history")
+    cr.add_argument("--v1-community", action="append", metavar="STR", help="SNMPv1 community to try, for agents that only speak v1 (repeatable; 'env:VAR' form accepted)")
+    cr.add_argument("--v3-user", help="SNMPv3 user name")
+    cr.add_argument("--v3-auth", default="SHA", help="v3 authentication protocol: MD5, SHA, SHA224, SHA256, SHA384, SHA512 or NONE (default SHA)")
+    cr.add_argument("--v3-auth-key", help="v3 authentication passphrase; 'env:VAR' reads it from that environment variable")
+    cr.add_argument("--v3-priv", default="AES", help="v3 privacy protocol: DES, 3DES, AES, AES192, AES256 or NONE (default AES)")
+    cr.add_argument("--v3-priv-key", help="v3 privacy passphrase (needs --v3-auth-key too); 'env:VAR' reads it from that environment variable")
     cr.add_argument("--port", type=int, default=161)
     cr.add_argument("--max-depth", type=int, help="hops from a seed to follow (default 6)")
     cr.add_argument("--workers", type=int, help="devices polled in parallel (default 12)")
@@ -457,7 +504,7 @@ def main(argv=None) -> None:
     elif args.cmd == "render":
         rc = cmd_render(args)
     elif args.cmd == "show":
-        inv = Inventory.load(args.map)
+        inv = _load_map(args.map)
         print(text_summary(inv, build_graph(inv)))
         rc = 0
     elif args.cmd == "diff":

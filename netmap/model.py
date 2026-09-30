@@ -267,10 +267,17 @@ class Inventory:
             self.add_subnet(cidr, "device")
 
     def replace_device(self, dev: Device) -> None:
-        """Swap in a freshly collected copy of a device we already had (a rescan)."""
+        """Swap in a freshly collected copy of a device we already had (a rescan).
+
+        Facts a rescan does not re-collect over SNMP (nmap ports/OS, active probes, reverse
+        DNS) are kept from the previous record when the new one has nothing for them."""
         old = self.devices.get(dev.id)
-        if old is not None and old.first_seen:
-            dev.first_seen = old.first_seen
+        if old is not None:
+            if old.first_seen:
+                dev.first_seen = old.first_seen
+            for f in ("ports", "os_detail", "os_family", "functions", "mgmt", "dns_name"):
+                if not getattr(dev, f) and getattr(old, f):
+                    setattr(dev, f, getattr(old, f))
         self.devices[dev.id] = dev
         self.reindex()
         for cidr in dev.subnets():
