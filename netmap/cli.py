@@ -361,11 +361,11 @@ def cmd_check(args) -> int:
 
 def _add_output_args(p, html_default=None):
     p.add_argument("--html", default=html_default, help="write interactive HTML map")
-    p.add_argument("--graphml", help="write GraphML (yEd, Gephi, Cytoscape)")
+    p.add_argument("--graphml", help="write GraphML for graph editors and analysis tools")
     p.add_argument("--dot", help="write Graphviz DOT")
     p.add_argument("--csv", help="write CSV inventory files with this prefix, e.g. out/site-")
-    p.add_argument("--xlsx", help="write a multi-sheet Excel inventory workbook (devices, IPAM, VLANs, links, hosts, gaps)")
-    p.add_argument("--drawio", help="write a draw.io diagram (physical and logical pages; opens in diagrams.net, converts to Visio)")
+    p.add_argument("--xlsx", help="write a multi-sheet .xlsx inventory workbook (devices, IPAM, VLANs, links, hosts, gaps)")
+    p.add_argument("--drawio", help="write a draw.io diagram (physical and logical pages; opens in diagrams.net and converts to .vsdx)")
     p.add_argument("--no-summary", dest="summary", action="store_false", help="don't print the text summary")
 
 
@@ -454,7 +454,7 @@ def build_parser():
 
     rc_ = sub.add_parser("check", help="compare a project with an asset list (CSV/XLSX) you were given")
     rc_.add_argument("--map", "-m", default="netmap.json")
-    rc_.add_argument("assets", help="CSV or Excel file listing the devices that should be there")
+    rc_.add_argument("assets", help="CSV or .xlsx file listing the devices that should be there")
     rc_.add_argument("--csv", help="write the comparison to this CSV file")
 
     cap = sub.add_parser("capture", help="capture device running-configs over SSH (read-only) and store them in the map")
