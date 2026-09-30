@@ -1,8 +1,8 @@
 {
  "meta": {
-  "created": 1790733703.7088554,
+  "created": 1790773208.4241116,
   "version": 2,
-  "saved": 1790733703.7403278
+  "saved": 1790773208.4570582
  },
  "project": {},
  "devices": {
@@ -19,6 +19,7 @@
    "model": "ISR4331/K9",
    "serial": "FDO2222R1XX",
    "os_version": "17.6.4",
+   "os_family": "ios",
    "dns_name": "",
    "role": "router",
    "credential": "lab",
@@ -137,6 +138,22 @@
      "parent": 0
     }
    ],
+   "redundancy": [],
+   "peers": [
+    {
+     "proto": "ospf",
+     "addr": "10.0.0.2",
+     "state": "full",
+     "extra": ""
+    },
+    {
+     "proto": "bgp",
+     "addr": "203.0.113.1",
+     "state": "established",
+     "extra": "AS65001"
+    }
+   ],
+   "stp": {},
    "ips": [
     "10.0.0.1",
     "203.0.113.2"
@@ -145,9 +162,9 @@
     "00:11:22:33:44:01",
     "00:11:22:33:44:02"
    ],
-   "collected_at": 1790733703.7110596,
+   "collected_at": 1790773208.4262493,
    "collect_seconds": 0.0,
-   "first_seen": 1790733703.7110596,
+   "first_seen": 1790773208.4262493,
    "errors": []
   },
   "10.0.0.2": {
@@ -163,6 +180,7 @@
    "model": "WS-C3850-24T",
    "serial": "FOC1234SW1X",
    "os_version": "16.12.4",
+   "os_family": "ios-xe",
    "dns_name": "",
    "role": "l3switch",
    "credential": "lab",
@@ -561,6 +579,32 @@
      "parent": 2000
     }
    ],
+   "redundancy": [
+    {
+     "proto": "hsrp",
+     "group": "1",
+     "vip": "10.1.0.254",
+     "state": "active",
+     "priority": 110,
+     "if_index": 10,
+     "interface": "Vlan10"
+    }
+   ],
+   "peers": [
+    {
+     "proto": "ospf",
+     "addr": "10.0.0.1",
+     "state": "full",
+     "extra": ""
+    }
+   ],
+   "stp": {
+    "root": "00:11:22:33:44:10",
+    "root_priority": 24576,
+    "priority": 24576,
+    "is_root": true,
+    "root_port": ""
+   },
    "ips": [
     "10.0.0.2",
     "10.1.0.1",
@@ -574,9 +618,9 @@
     "00:11:22:33:44:10",
     "00:11:22:33:44:1f"
    ],
-   "collected_at": 1790733703.7147753,
+   "collected_at": 1790773208.4294012,
    "collect_seconds": 0.0,
-   "first_seen": 1790733703.7147753,
+   "first_seen": 1790773208.4294012,
    "errors": []
   },
   "10.1.0.2": {
@@ -592,6 +636,7 @@
    "model": "J9772A",
    "serial": "CN51ABC123",
    "os_version": "YA.16.10.0016",
+   "os_family": "network",
    "dns_name": "",
    "role": "switch",
    "credential": "lab",
@@ -890,6 +935,15 @@
      "parent": 0
     }
    ],
+   "redundancy": [],
+   "peers": [],
+   "stp": {
+    "root": "00:11:22:33:44:10",
+    "root_priority": 24576,
+    "priority": 24576,
+    "is_root": false,
+    "root_port": "24"
+   },
    "ips": [
     "10.1.0.2"
    ],
@@ -904,9 +958,9 @@
     "00:11:22:33:44:20",
     "00:11:22:33:55:f1"
    ],
-   "collected_at": 1790733703.7168303,
+   "collected_at": 1790773208.4314687,
    "collect_seconds": 0.0,
-   "first_seen": 1790733703.7168303,
+   "first_seen": 1790773208.4314687,
    "errors": []
   }
  },
@@ -914,12 +968,18 @@
   "10.0.0.2": {
    "ip": "10.0.0.2",
    "mac": "00:11:22:33:44:10",
+   "mac_source": "",
    "hostname": "",
    "vendor": "Cimsys",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.1",
@@ -929,19 +989,27 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.7111592,
-   "last_seen": 1790733703.7111592
+   "first_seen": 1790773208.4263287,
+   "last_seen": 1790773208.4263287
   },
   "10.0.0.1": {
    "ip": "10.0.0.1",
    "mac": "00:11:22:33:44:01",
+   "mac_source": "",
    "hostname": "",
    "vendor": "Cimsys",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -951,19 +1019,27 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.7148407,
-   "last_seen": 1790733703.7148407
+   "first_seen": 1790773208.4294648,
+   "last_seen": 1790773208.4294648
   },
   "10.1.0.2": {
    "ip": "10.1.0.2",
    "mac": "00:11:22:33:44:20",
+   "mac_source": "",
    "hostname": "",
    "vendor": "Cimsys",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -973,19 +1049,27 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.714853,
-   "last_seen": 1790733703.714853
+   "first_seen": 1790773208.429479,
+   "last_seen": 1790773208.429479
   },
   "10.1.0.50": {
    "ip": "10.1.0.50",
    "mac": "de:ad:be:ef:00:0a",
+   "mac_source": "",
    "hostname": "",
    "vendor": "",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "low",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -1001,19 +1085,27 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.7148633,
-   "last_seen": 1790733703.7148633
+   "first_seen": 1790773208.4294899,
+   "last_seen": 1790773208.4294899
   },
   "10.1.0.51": {
    "ip": "10.1.0.51",
    "mac": "de:ad:be:ef:00:0b",
+   "mac_source": "",
    "hostname": "",
    "vendor": "",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "low",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -1029,20 +1121,28 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.7148721,
-   "last_seen": 1790733703.7148721
+   "first_seen": 1790773208.4294999,
+   "last_seen": 1790773208.4294999
   },
   "10.1.0.60": {
    "ip": "10.1.0.60",
    "mac": "aa:bb:cc:00:00:01",
+   "mac_source": "",
    "hostname": "ap-lobby",
    "vendor": "",
    "role": "wireless",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "low",
    "sources": [
     "arp",
     "lldp-mac"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -1052,20 +1152,28 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": true,
-   "first_seen": 1790733703.714888,
-   "last_seen": 1790733703.7170577
+   "first_seen": 1790773208.4295094,
+   "last_seen": 1790773208.4316764
   },
   "10.1.0.90": {
    "ip": "10.1.0.90",
    "mac": "aa:bb:cc:00:00:02",
+   "mac_source": "",
    "hostname": "SEPAABBCC000002",
    "vendor": "",
    "role": "phone",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "low",
    "sources": [
     "arp",
     "lldp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -1081,19 +1189,27 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": true,
-   "first_seen": 1790733703.714898,
-   "last_seen": 1790733703.7169633
+   "first_seen": 1790773208.4295192,
+   "last_seen": 1790773208.4315858
   },
   "10.2.0.10": {
    "ip": "10.2.0.10",
    "mac": "de:ad:be:ef:00:0c",
+   "mac_source": "",
    "hostname": "",
    "vendor": "",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "low",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.0.0.2",
@@ -1109,19 +1225,27 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.71492,
-   "last_seen": 1790733703.71492
+   "first_seen": 1790773208.4295275,
+   "last_seen": 1790773208.4295275
   },
   "10.1.0.1": {
    "ip": "10.1.0.1",
    "mac": "00:11:22:33:44:10",
+   "mac_source": "",
    "hostname": "",
    "vendor": "Cimsys",
    "role": "host",
+   "os": "",
+   "os_family": "",
+   "model": "",
+   "confidence": "",
    "sources": [
     "arp"
    ],
+   "names": {},
    "seen_on": [
     {
      "device": "10.1.0.2",
@@ -1131,9 +1255,11 @@
     }
    ],
    "ports": [],
+   "probes": {},
+   "evidence": [],
    "snmp_failed": false,
-   "first_seen": 1790733703.716866,
-   "last_seen": 1790733703.716866
+   "first_seen": 1790773208.431504,
+   "last_seen": 1790773208.431504
   }
  },
  "subnets": {
@@ -1205,8 +1331,8 @@
  "layout": {},
  "history": [
   {
-   "started": 1790733703.7091217,
-   "finished": 1790733703.7385168,
+   "started": 1790773208.4243627,
+   "finished": 1790773208.4549394,
    "seconds": 0.0,
    "cancelled": false,
    "request": {
@@ -1223,6 +1349,7 @@
     "fingerprint": false,
     "probe_hosts": false,
     "resolve_names": false,
+    "identify": false,
     "follow_routes": true,
     "follow_gateways": true,
     "arp": true,

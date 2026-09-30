@@ -48,6 +48,22 @@ from .table import ID_ROLE, FilterProxy, RowsModel
 ROUTE_PROTO = {1: "other", 2: "connected", 3: "static", 4: "icmp", 8: "rip", 9: "is-is", 13: "ospf", 14: "bgp", 16: "eigrp", 11: "igrp"}
 
 
+def _peers_summary(peers) -> str:
+    from collections import Counter
+    if not peers:
+        return ""
+    c = Counter((p["proto"], p["state"]) for p in peers)
+    return ", ".join(f"{n} {proto.upper()} {state}" for (proto, state), n in sorted(c.items()))
+
+
+def _stp_summary(stp) -> str:
+    if not stp or not stp.get("root"):
+        return ""
+    if stp.get("is_root"):
+        return f"root bridge (priority {stp.get('priority', '')})"
+    return f"root is {stp['root']}" + (f", via {stp['root_port']}" if stp.get("root_port") else "")
+
+
 def _table(columns: list[Column], rows: list[dict], on_open=None) -> QTableView:
     model = RowsModel(columns)
     model.set_rows(rows)
@@ -372,6 +388,9 @@ class DetailsPanel(QWidget):
             ("Uptime", fmt_duration(d.uptime_s)),
             ("Ports", f"{up} up of {len(d.interfaces)}" if d.interfaces else ""),
             ("VLANs", len(d.vlans)),
+            ("Redundancy", "; ".join(f"{g['proto'].upper()} grp {g['group']} {g['state']} for {g['vip']}" + (f" on {g['interface']}" if g.get('interface') else "") for g in getattr(d, "redundancy", []))),
+            ("Routing peers", _peers_summary(getattr(d, "peers", []))),
+            ("Spanning tree", _stp_summary(getattr(d, "stp", {}))),
             ("Found", f"{d.discovered_via} (depth {d.depth})"),
             ("Credential", d.credential),
             ("First seen", fmt_time(d.first_seen)),
@@ -529,7 +548,9 @@ class DetailsPanel(QWidget):
         sub = inv.subnets.get(cidr)
         for g in (sub.gateways if sub else []):
             gws.append(s.name(g))
+        vgw = "; ".join(f"{v['proto'].upper()} {v['vip']}" + (f" (active {s.name(v['active'])})" if v.get("active") else "") for v in s.vgw.get(cidr, []))
         pairs = [
+            ("Virtual gateway", vgw),
             ("Gateway(s)", ", ".join(gws)),
             ("VLAN", vlan),
             ("Addresses", f"{r.get('size', '')} ({r.get('usable', '')} usable)"),

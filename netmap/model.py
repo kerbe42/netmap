@@ -129,6 +129,9 @@ class Device:
     fdb: list[FdbEntry] = field(default_factory=list)
     vlans: dict[int, str] = field(default_factory=dict)
     components: list[Component] = field(default_factory=list)
+    redundancy: list = field(default_factory=list)  # FHRP groups: {proto:hsrp|vrrp, group, vip, state, priority, if_index}
+    peers: list = field(default_factory=list)  # routing adjacencies: {proto:ospf|bgp, addr, state, extra}
+    stp: dict = field(default_factory=dict)  # {root, root_port, priority, is_root}
     ips: list[str] = field(default_factory=list)
     macs: list[str] = field(default_factory=list)
     collected_at: float = 0.0

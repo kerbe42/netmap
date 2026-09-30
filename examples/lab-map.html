@@ -83,7 +83,7 @@ const net = new vis.Network(document.getElementById('net'), {nodes, edges}, {
   edges:{smooth:{type:'continuous'}, font:{color:'#94a3b8', size:9, strokeWidth:0}},
 });
 const kindCount = {}; DATA.nodes.forEach(n=>{kindCount[n.kind]=(kindCount[n.kind]||0)+1});
-document.getElementById('stats').textContent = Object.entries(kindCount).map(([k,v])=>`${v} ${k}s`).join(' · ') + ` · ${DATA.edges.length} edges · generated 2026-09-30 02:01`;
+document.getElementById('stats').textContent = Object.entries(kindCount).map(([k,v])=>`${v} ${k}s`).join(' · ') + ` · ${DATA.edges.length} edges · generated 2026-09-30 13:00`;
 const legend = document.getElementById('legend');
 const used = new Set(DATA.nodes.map(n=>n.kind==='subnet'?'subnet':(n.role||'unknown')));
 Object.entries(COLORS).filter(([k])=>used.has(k)).forEach(([k,c])=>{const d=document.createElement('div');d.className='f';d.innerHTML=`<span class="sw" style="background:${c}"></span> ${k}`;legend.appendChild(d)});

@@ -39,11 +39,12 @@ def _int(v, default: int = 0) -> int:
 
 
 class CollectOptions:
-    def __init__(self, fdb: bool = True, cisco_vlan_fdb: bool = False, routes: bool = True, arp: bool = True, max_vlans: int = 64):
+    def __init__(self, fdb: bool = True, cisco_vlan_fdb: bool = False, routes: bool = True, arp: bool = True, topology: bool = True, max_vlans: int = 64):
         self.fdb = fdb
         self.cisco_vlan_fdb = cisco_vlan_fdb
         self.routes = routes
         self.arp = arp
+        self.topology = topology  # FHRP (HSRP/VRRP), OSPF/BGP neighbours, spanning-tree root
         self.max_vlans = max_vlans
 
 
@@ -563,6 +564,76 @@ async def collect_lag(sess: SnmpSession, dev: Device) -> None:
             i.lag = dev.iface_label(a)
 
 
+HSRP_STATES = {1: "initial", 2: "learn", 3: "listen", 4: "speak", 5: "standby", 6: "active"}
+VRRP_STATES = {1: "initialize", 2: "backup", 3: "master"}
+OSPF_STATES = {1: "down", 2: "attempt", 3: "init", 4: "two-way", 5: "exchange-start", 6: "exchange", 7: "loading", 8: "full"}
+BGP_STATES = {1: "idle", 2: "connect", 3: "active", 4: "opensent", 5: "openconfirm", 6: "established"}
+
+
+async def collect_redundancy(sess: SnmpSession, dev: Device) -> None:
+    """First-hop redundancy groups (HSRP, VRRP): the virtual IP that hosts really use as
+    their gateway, and whether this router is active/master or standby/backup for it. This
+    is what makes a subnet's true default gateway visible."""
+    # HSRP (Cisco), indexed by ifIndex.group
+    state = await _safe(dev, "cHsrpGrpStandbyState", sess.walk_map(O.HSRP_STATE)) or {}
+    if state:
+        vip = await _safe(dev, "cHsrpGrpVirtualIpAddr", sess.walk_map(O.HSRP_VIP)) or {}
+        prio = await _safe(dev, "cHsrpGrpPriority", sess.walk_map(O.HSRP_PRIORITY)) or {}
+        for idx, st in state.items():
+            ifidx = _int(idx.split(".")[0])
+            grp = idx.split(".")[-1]
+            dev.redundancy.append({"proto": "hsrp", "group": grp, "vip": to_text(vip.get(idx)),
+                                   "state": HSRP_STATES.get(_int(st), str(st)), "priority": _int(prio.get(idx)),
+                                   "if_index": ifidx, "interface": dev.iface_label(ifidx)})
+    # VRRP (standard), indexed by ifIndex.vrId; the VIP is the tail of the vrrpAssoIpAddr index
+    vstate = await _safe(dev, "vrrpOperState", sess.walk_map(O.VRRP_STATE)) or {}
+    if vstate:
+        vprio = await _safe(dev, "vrrpOperPriority", sess.walk_map(O.VRRP_PRIORITY)) or {}
+        vips: dict[str, str] = {}
+        for oid, _v in await _safe(dev, "vrrpAssoIpAddr", sess.walk(O.VRRP_ASSOIP)) or []:
+            p = oid_suffix(oid, O.VRRP_ASSOIP)
+            if len(p) >= 3:
+                vips.setdefault(f"{p[0]}.{p[1]}", ip_from_ints(p[-4:]) or "")
+        for idx, st in vstate.items():
+            ifidx = _int(idx.split(".")[0])
+            dev.redundancy.append({"proto": "vrrp", "group": idx.split(".")[-1], "vip": vips.get(idx, ""),
+                                   "state": VRRP_STATES.get(_int(st), str(st)), "priority": _int(vprio.get(idx)),
+                                   "if_index": ifidx, "interface": dev.iface_label(ifidx)})
+
+
+async def collect_routing_peers(sess: SnmpSession, dev: Device) -> None:
+    """OSPF and BGP adjacencies - the shape of the routed core, and which peers are up."""
+    ospf = await _safe(dev, "ospfNbrState", sess.walk(O.OSPF_NBR_STATE)) or []
+    for oid, st in ospf:
+        p = oid_suffix(oid, O.OSPF_NBR_STATE)
+        addr = ip_from_ints(p[:4]) if len(p) >= 4 else None
+        if addr:
+            dev.peers.append({"proto": "ospf", "addr": addr, "state": OSPF_STATES.get(_int(st), str(st)), "extra": ""})
+    state = await _safe(dev, "bgpPeerState", sess.walk_map(O.BGP_PEER_STATE)) or {}
+    if state:
+        raddr = await _safe(dev, "bgpPeerRemoteAddr", sess.walk_map(O.BGP_PEER_REMADDR)) or {}
+        ras = await _safe(dev, "bgpPeerRemoteAs", sess.walk_map(O.BGP_PEER_REMAS)) or {}
+        for idx, st in state.items():
+            addr = to_text(raddr.get(idx)) or idx
+            dev.peers.append({"proto": "bgp", "addr": addr, "state": BGP_STATES.get(_int(st), str(st)),
+                              "extra": f"AS{_int(ras.get(idx))}" if ras.get(idx) else ""})
+
+
+async def collect_stp(sess: SnmpSession, dev: Device) -> None:
+    """Spanning-tree root: who the root bridge is, and whether this switch is it. Shows the
+    active L2 forwarding shape, which can differ from the physical cabling."""
+    r = await sess.get(O.STP_DESIGNATED_ROOT, O.STP_ROOT_PORT, O.STP_PRIORITY, O.BRIDGE_ADDRESS)
+    root = r.get(O.STP_DESIGNATED_ROOT)
+    if not isinstance(root, bytes) or len(root) != 8:
+        return
+    root_prio = int.from_bytes(root[:2], "big")
+    root_mac = mac_from_bytes(root[2:])
+    own = mac_from_bytes(r.get(O.BRIDGE_ADDRESS)) if isinstance(r.get(O.BRIDGE_ADDRESS), bytes) else None
+    rp = _int(r.get(O.STP_ROOT_PORT))
+    dev.stp = {"root": root_mac or "", "root_priority": root_prio, "priority": _int(r.get(O.STP_PRIORITY)),
+               "is_root": bool(own and root_mac and own == root_mac), "root_port": dev.iface_label(rp) if rp else ""}
+
+
 async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysinfo: Optional[dict] = None) -> Device:
     t0 = time.time()
     dev = Device(id=ip, credential=sess.cred.label)
@@ -585,6 +656,12 @@ async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysin
         await _safe(dev, "fdb", collect_fdb(sess, dev, opts, bp))
     await _safe(dev, "port vlans", collect_port_vlans(sess, dev, bp))
     await _safe(dev, "lag", collect_lag(sess, dev))
+    is_l3 = bool(dev.services & 4) or bool(dev.routes) or sum(1 for i in dev.interfaces if i.ips) > 1
+    if opts.topology and is_l3:
+        await _safe(dev, "fhrp", collect_redundancy(sess, dev))
+        await _safe(dev, "routing peers", collect_routing_peers(sess, dev))
+    if opts.topology and (bp or dev.fdb):
+        await _safe(dev, "stp", collect_stp(sess, dev))
     dev.role = classify_role(dev)
     dev.collected_at = time.time()
     dev.collect_seconds = round(dev.collected_at - t0, 2)

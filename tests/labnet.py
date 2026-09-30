@@ -134,6 +134,24 @@ class Dev:
         for ifidx, agg in members.items():
             self.i(f"{O.LAG_ATTACHED_AGG}.{ifidx}", agg)
 
+    def hsrp(self, ifidx, group, vip, state=6, priority=100):
+        self.i(f"{O.HSRP_STATE}.{ifidx}.{group}", state), self.ip(f"{O.HSRP_VIP}.{ifidx}.{group}", vip), self.i(f"{O.HSRP_PRIORITY}.{ifidx}.{group}", priority)
+
+    def vrrp(self, ifidx, vrid, vip, state=3, priority=100):
+        self.i(f"{O.VRRP_STATE}.{ifidx}.{vrid}", state), self.i(f"{O.VRRP_PRIORITY}.{ifidx}.{vrid}", priority)
+        self.i(f"{O.VRRP_ASSOIP}.{ifidx}.{vrid}.{vip}", 1)
+
+    def ospf_nbr(self, addr, state=8):
+        self.i(f"{O.OSPF_NBR_STATE}.{addr}.0", state)
+
+    def bgp_peer(self, addr, remote_as, state=6):
+        self.i(f"{O.BGP_PEER_STATE}.{addr}", state), self.ip(f"{O.BGP_PEER_REMADDR}.{addr}", addr), self.i(f"{O.BGP_PEER_REMAS}.{addr}", remote_as)
+
+    def stp(self, root_mac, priority=32768, root_port=0, own_mac=None):
+        root = priority.to_bytes(2, "big") + mac_bytes(root_mac)
+        self.s(O.STP_DESIGNATED_ROOT, root), self.i(O.STP_ROOT_PORT, root_port), self.i(O.STP_PRIORITY, priority)
+        self.s(O.BRIDGE_ADDRESS, mac_bytes(own_mac or root_mac))
+
     def ent(self, idx, cls, descr, name="", parent=0, model="", serial="", hw="", fw="", sw="", fru=False):
         self.s(f"{O.ENT_DESCR}.{idx}", descr), self.i(f"{O.ENT_CONTAINED_IN}.{idx}", parent), self.i(f"{O.ENT_CLASS}.{idx}", cls)
         self.s(f"{O.ENT_NAME}.{idx}", name), self.s(f"{O.ENT_HW_REV}.{idx}", hw), self.s(f"{O.ENT_FW_REV}.{idx}", fw), self.s(f"{O.ENT_SW_REV}.{idx}", sw)
@@ -180,6 +198,7 @@ def build(base: str = "10") -> dict[str, Dev]:
     r1.cidr_route(A(1, 0), "255.255.255.0", SW1_IP, 1, proto=3)
     r1.cidr_route(A(2, 0), "255.255.255.0", SW1_IP, 1, proto=3)
     r1.cdp(1, 1, "dist-sw1.example.test", "GigabitEthernet1/0/1", "cisco WS-C3850-24T", SW1_IP)
+    r1.bgp_peer(WAN_GW, 65001), r1.ospf_nbr(SW1_IP)
 
     # ---- SW1: Cisco 3850 L3 switch, LLDP + CDP, dot1q FDB, SVIs ----
     sw1 = Dev()
@@ -223,6 +242,7 @@ def build(base: str = "10") -> dict[str, Dev]:
         sw1.fdb_q(10, mac, 2)  # everything behind acc-sw2 shows on the uplink port
     sw1.fdb_q(10, MAC_AP, 24), sw1.fdb_q(20, MAC_C, 5)
     sw1.vlan(10, "USERS"), sw1.vlan(20, "SERVERS"), sw1.vlan(30, "BRANCH")
+    sw1.hsrp(10, 1, A(1, 254), state=6, priority=110), sw1.ospf_nbr(R1_IP), sw1.stp(MAC_SW1, priority=24576, own_mac=MAC_SW1)
     # Gi1/0/1 is routed (no switchport row); the uplink to acc-sw2 trunks; server and AP ports are access
     sw1.cisco_port(2, trunk=True, native=1), sw1.cisco_port(5, access=20), sw1.cisco_port(24, access=10)
 
@@ -244,6 +264,7 @@ def build(base: str = "10") -> dict[str, Dev]:
     for i in range(12):  # uplink learns many MACs
         sw2.fdb_d(f"00:11:22:33:66:{i:02x}", 24)
     sw2.fdb_d(MAC_SW1, 24), sw2.fdb_d(MAC_C, 24)
+    sw2.stp(MAC_SW1, priority=24576, root_port=24, own_mac=MAC_SW2)
     # Q-BRIDGE: 3/4 are VLAN 10 access; 24 carries 10 and 20 tagged (trunk, native 1); port 2 has
     # one tagged voice VLAN on top of VLAN 1, which is still an access port; Trk1 is VLAN 20 access
     sw2.pvids({1: 1, 2: 1, 3: 10, 4: 10, 24: 1, 289: 20})

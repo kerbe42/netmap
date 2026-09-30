@@ -158,6 +158,23 @@ class Snapshot:
         # links between network kit; a phone's or server's LLDP link is on its host record instead
         self.links = [(u, v, a) for u, v, a in self.g.edges(data=True) if a.get("kind") in ("lldp", "cdp", "l3") and is_infra(u) and is_infra(v)]
         self.endpoint_links = sum(1 for u, v, a in self.g.edges(data=True) if a.get("kind") in ("lldp", "cdp") and not (is_infra(u) and is_infra(v)))
+        # first-hop redundancy virtual gateways, per subnet: {cidr: [{vip, proto, active, devices}]}
+        self.vgw: dict[str, list[dict]] = defaultdict(list)
+        seen_vip: dict[str, dict] = {}
+        for d in inv.devices.values():
+            for gexp in getattr(d, "redundancy", []):
+                vip = gexp.get("vip")
+                if not vip:
+                    continue
+                cidr = inv.subnet_for_ip(vip)
+                rec = seen_vip.get(vip)
+                if rec is None:
+                    rec = {"vip": vip, "proto": gexp["proto"], "active": "", "devices": []}
+                    seen_vip[vip] = rec
+                    self.vgw[cidr or ""].append(rec)
+                rec["devices"].append(d.id)
+                if gexp.get("state") in ("active", "master"):
+                    rec["active"] = d.id
 
     # ---- helpers ----
     def name(self, node_id: str) -> str:
@@ -554,6 +571,17 @@ def finding_rows(s: Snapshot) -> list[dict]:
     for vid, (names, devs) in s.vlans.items():
         if len(names) > 1:
             add("check", "VLAN named differently", f"vlan:{vid}", f"VLAN {vid}", " / ".join(sorted(names)), "Switches disagree on what this VLAN is for; worth confirming it is the same segment everywhere")
+    # first-hop redundancy: a gateway VIP with only one router behind it is a single point of failure
+    fhrp: dict = defaultdict(list)
+    for d in inv.devices.values():
+        for g in getattr(d, "redundancy", []):
+            if g.get("vip"):
+                fhrp[g["vip"]].append((d.id, g))
+    for vip, members in fhrp.items():
+        if len(members) == 1:
+            did, g = members[0]
+            add("check", "Gateway with no standby", did, f"{g['proto'].upper()} {vip}", f"only {s.name(did)} advertises it ({g['state']})",
+                "This first-hop gateway has no redundant partner in what was polled: a single point of failure, or its peer was not reached")
     ip_macs: dict[str, set] = defaultdict(set)
     for d in inv.devices.values():
         for a in d.arp:

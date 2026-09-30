@@ -173,6 +173,48 @@ camera, nas, ups, host, and *unpolled* for something a neighbour announced that 
 access switch is only called an L3 switch with evidence that it routes (addresses on more than one
 interface, or learned routes), not because sysServices says so.
 
+## Identifying hosts (profiling)
+
+For endpoints that don't answer SNMP, NetMap profiles them the way Cisco ISE or Axonius do — many weak
+signals, weighed together, with the evidence kept. Turn on **Identify hosts** in the scan (on by default);
+it sends a few small **read-only** probes to each host and needs no admin rights or nmap:
+
+| Probe | Gives you |
+|---|---|
+| NetBIOS (UDP 137) | Windows/SMB name, logged-on domain/workgroup, domain-controller role, and the host's real MAC (works across a router, so it fixes MACs nmap can't get) |
+| mDNS / Bonjour (UDP 5353) | `.local` name and advertised services — printers (IPP), Apple AV (AirPlay), Chromecast, HomeKit, file shares |
+| SSDP / UPnP (UDP 1900) | device description: manufacturer, model, friendly name, device type (media, gateway, NAS, camera) |
+| HTTP / TLS banner | web-UI Server header and the TLS certificate CN/SAN — identifies appliances, cameras, NAS, iLO/iDRAC |
+| nmap (optional) | open ports and service/version detection |
+
+Every host ends up with a **role, OS, vendor, model and a confidence** (high/medium/low), and its details
+carry a **Why** tab listing each signal, what was seen, and what it implies — so you can trust or correct
+the verdict. The best name is chosen from DNS, NetBIOS, mDNS, SSDP and LLDP, and every other name it goes by
+is kept as "also known as".
+
+## Routed topology
+
+Beyond cabling, NetMap reads the things that decide how the network actually forwards, so you can
+understand a routed estate you were handed:
+
+* **First-hop redundancy (HSRP / VRRP)** — the *virtual* IP hosts really use as their gateway, and which
+  router is active vs standby for it. A subnet's details show its virtual gateway, and a gateway with no
+  standby is flagged.
+* **Routing adjacencies (OSPF / BGP)** — each device's neighbours and whether they are up (OSPF *full*, BGP
+  *established*), with the remote AS for BGP peers — the shape of the routed core.
+* **Spanning tree** — the root bridge and this switch's root port, i.e. the active L2 forwarding shape, which
+  can differ from the physical cabling.
+
+## Path tracing
+
+To understand how traffic actually reaches something, every device and host has a **Path** tab, and
+right-clicking anything offers **Trace path to here**, which lights the path up on the map:
+
+* the **switched path** follows LLDP/CDP cabling and the MAC-address tables — from the core, through the
+  distribution and access switches, down to the exact port a host is on;
+* the **routed path** is reconstructed from the collected routing tables hop by hop toward the destination
+  (a traceroute rebuilt from SNMP, so it works even where ICMP is filtered), naming each router and egress.
+
 ## Staying inside your ranges
 
 * Nothing outside the scope is ever sent a packet. Target ranges are always inside it; when no wider scope

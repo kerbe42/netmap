@@ -125,3 +125,27 @@ ENTERPRISES = {
     21317: "Aerohive", 10418: "Avocent", 3097: "Adtran", 35265: "Eltex", 40418: "Silver Peak",
     47196: "Meraki",
 }
+
+# --- First-hop redundancy, routing adjacencies and spanning tree (topology understanding) ---
+# CISCO-HSRP-MIB cHsrpGrpEntry, indexed by ifIndex.group
+HSRP_STATE = "1.3.6.1.4.1.9.9.106.1.2.1.1.15"  # 1 initial 2 learn 3 listen 4 speak 5 standby 6 active
+HSRP_VIP = "1.3.6.1.4.1.9.9.106.1.2.1.1.11"  # cHsrpGrpVirtualIpAddr
+HSRP_PRIORITY = "1.3.6.1.4.1.9.9.106.1.2.1.1.3"
+
+# VRRP-MIB vrrpOperEntry, indexed by ifIndex.vrId
+VRRP_STATE = "1.3.6.1.2.1.68.1.3.1.3"  # 1 initialize 2 backup 3 master
+VRRP_PRIORITY = "1.3.6.1.2.1.68.1.3.1.5"
+VRRP_ASSOIP = "1.3.6.1.2.1.68.1.4.1.1"  # vrrpAssoIpAddr, VIP carried in the index
+
+# OSPF-MIB ospfNbrTable
+OSPF_NBR_STATE = "1.3.6.1.2.1.14.10.1.6"  # index nbrIp.addrlessIf; 8 = full
+# BGP4-MIB bgpPeerTable
+BGP_PEER_STATE = "1.3.6.1.2.1.15.3.1.2"  # 6 = established
+BGP_PEER_REMADDR = "1.3.6.1.2.1.15.3.1.7"
+BGP_PEER_REMAS = "1.3.6.1.2.1.15.3.1.9"
+
+# BRIDGE-MIB spanning tree
+STP_DESIGNATED_ROOT = "1.3.6.1.2.1.17.2.5.0"  # 8 bytes: priority(2) + root bridge MAC(6)
+STP_ROOT_PORT = "1.3.6.1.2.1.17.2.7.0"
+STP_PRIORITY = "1.3.6.1.2.1.17.2.2.0"
+BRIDGE_ADDRESS = "1.3.6.1.2.1.17.1.1.0"  # dot1dBaseBridgeAddress

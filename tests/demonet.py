@@ -109,6 +109,10 @@ def build(seed: int = 7) -> tuple[dict[str, Dev], dict[str, str]]:
             d.addr(_host(net, 2 + n), idx, str(ipaddress.ip_network(net).netmask))
             d.vlan(vid, VLANS[vid])
             d.cidr_route(str(ipaddress.ip_network(net).network_address), str(ipaddress.ip_network(net).netmask), "0.0.0.0", idx, rtype=3)
+            if vid != 99:  # HSRP: .1 is the shared gateway; core-sw-01 active, core-sw-02 standby
+                d.hsrp(idx, vid, _host(net, 1), state=6 if n == 0 else 5, priority=110 if n == 0 else 100)
+        d.ospf_nbr(C2 if n == 0 else C1), d.ospf_nbr(WAN)  # OSPF full mesh across the core and to the WAN router
+        d.stp(c1_mac, priority=4096, own_mac=cmac)  # core-sw-01 is the STP root for the campus
         d.cidr_route("0.0.0.0", "0.0.0.0", FW, 40, proto=3)
         d.cidr_route("10.0.0.0", "255.255.255.248", "0.0.0.0", 40, rtype=3)
         d.lldp_local(cmac, name, {p: (f"Twe1/0/{p}", f"TwentyFiveGigE1/0/{p}") for p in range(1, 25)} | {40: ("Te1/1/1", "TenGigabitEthernet1/1/1")})
@@ -384,6 +388,7 @@ def build(seed: int = 7) -> tuple[dict[str, Dev], dict[str, str]]:
     r.cidr_route("0.0.0.0", "0.0.0.0", "10.0.1.2", 1, proto=3)
     r.cidr_route("10.110.0.0", "255.255.255.0", "172.16.100.2", 2, proto=13)
     r.cidr_route("10.111.0.0", "255.255.255.0", "172.16.100.2", 2, proto=13)
+    r.ospf_nbr("10.0.1.2"), r.bgp_peer("203.0.113.9", 64512)  # OSPF to the core, eBGP to the ISP
     r.arp(1, "10.0.1.2", c1_mac), r.arp(2, "172.16.100.2", mac("Cisco Systems"))
     r.cdp(1, 1, "core-sw-01.northwind.example", "TwentyFiveGigE1/0/10", "cisco C9500-24Y4C", C1)
     r.cdp(2, 2, "rtr-branch-leeds", "GigabitEthernet0/0/0", "cisco ISR1111-8P", "172.16.100.2")

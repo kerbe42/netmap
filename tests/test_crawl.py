@@ -425,3 +425,14 @@ def test_max_depth_and_resume(tmp_path):
     assert "10.0.0.1" not in prober2.probed
     # SW2 is reachable on resume because the unmatched-neighbour pass re-enqueues LLDP mgmt IPs
     assert "10.1.0.2" in inv2.devices
+
+
+def test_collects_fhrp_routing_peers_and_stp():
+    inv, _, _ = crawl()
+    sw1, sw2, r1 = inv.devices["10.0.0.2"], inv.devices["10.1.0.2"], inv.devices["10.0.0.1"]
+    hsrp = [g for g in sw1.redundancy if g["proto"] == "hsrp"]
+    assert hsrp and hsrp[0]["vip"] == "10.1.0.254" and hsrp[0]["state"] == "active" and hsrp[0]["interface"] == "Vlan10"
+    assert {(p["proto"], p["addr"], p["state"]) for p in r1.peers} == {("ospf", "10.0.0.2", "full"), ("bgp", "203.0.113.1", "established")}
+    assert any(p["extra"] == "AS65001" for p in r1.peers)
+    assert sw1.stp["is_root"] is True and sw1.stp["priority"] == 24576
+    assert sw2.stp["is_root"] is False and sw2.stp["root"] == sw1.stp["root"] and sw2.stp["root_port"] == "24"
