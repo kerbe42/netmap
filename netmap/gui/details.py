@@ -434,6 +434,30 @@ class DetailsPanel(QWidget):
         if d.vlans:
             vrows = [{"_id": f"vlan:{v}", "_role": "", "vlan": v, "name": n} for v, n in sorted(d.vlans.items())]
             self.tabs.addTab(_table(_cols(("vlan", "VLAN", "int", 60), ("name", "Name", "text", 200)), vrows, self.openNode), "VLANs")
+        self._add_path_tab(s, d.id)
+
+    def _add_path_tab(self, s: Snapshot, node_id: str):
+        """Show how the network reaches this node: the path from the core across the backbone."""
+        from .. import paths
+
+        try:
+            p = paths.path_to(s.inv, s.g, node_id)
+        except Exception:  # noqa: BLE001 - a path view must never break the panel
+            return
+        if not p.ok or len(p.hops) < 2:
+            return
+        rows = []
+        for i, hop in enumerate(p.hops):
+            link = ""
+            if hop.out_port or hop.in_port:
+                link = f"{hop.out_port} → {hop.in_port}".strip(" →")
+            rows.append({"_id": hop.node if hop.node in s.inv.devices or hop.node in s.inv.hosts else "", "_role": hop.role or s.role(hop.node),
+                         "_kind": s.kind(hop.node) or "device", "step": i, "hop": s.name(hop.node) if (hop.node in s.inv.devices or hop.node in s.inv.hosts) else hop.node,
+                         "via": {"start": "from here", "lldp": "cabling", "cdp": "cabling", "l3": "routing", "route": "routing", "access": "switch port"}.get(hop.kind, hop.kind),
+                         "link": link, "detail": hop.detail})
+        cols = _cols(("step", "#", "int", 30), ("hop", "Hop", "text", 170), ("via", "Via", "text", 80), ("link", "Ports", "port", 130), ("detail", "Detail", "text", 200))
+        origin = s.name(p.origin)
+        self.tabs.addTab(_table(cols, rows, self.openNode), "Path")
 
     def _stub(self, s: Snapshot, sid: str):
         a = s.g.nodes[sid] if sid in s.g else {}
@@ -464,12 +488,17 @@ class DetailsPanel(QWidget):
         if dev:
             where = self._link(f"{s.name(dev)}  port {port}" + (f"  (VLAN {vlan})" if vlan is not None else ""), dev)
         subnet = inv.subnet_for_ip(ip)
+        conf = {"high": "high confidence", "medium": "medium confidence", "low": "low confidence"}.get(h.confidence, h.confidence)
+        alt = "; ".join(f"{k}: {v}" for k, v in (h.names or {}).items() if v and v != h.hostname)
         pairs = [
             ("IP address", ip),
             ("Name", h.hostname),
-            ("MAC", h.mac),
-            ("Vendor (OUI)", h.vendor),
-            ("Type", ROLE_LABELS.get(role, role) + (" (set by you)" if note.get("role") else "")),
+            ("Also known as", alt),
+            ("MAC", (h.mac + (f"  (from {h.mac_source})" if h.mac_source else "")) if h.mac else ""),
+            ("Vendor", h.vendor),
+            ("Type", ROLE_LABELS.get(role, role) + (" (set by you)" if note.get("role") else (f" - {conf}" if conf else ""))),
+            ("Operating system", h.os or h.os_family),
+            ("Model", h.model),
             ("Switch port", where if where is not None else ""),
             ("Subnet", self._link(subnet, subnet) if subnet else ""),
             ("Open ports", ", ".join(f"{p['port']}/{p.get('proto', '')} {p.get('service', '')} {p.get('product', '')}".strip() for p in h.ports)),
@@ -480,6 +509,10 @@ class DetailsPanel(QWidget):
             ("Last seen", fmt_time(h.last_seen)),
         ]
         self.tabs.addTab(self._facts(pairs), "Overview")
+        if h.evidence:
+            ecols = _cols(("source", "Signal", "text", 90), ("observed", "What was seen", "text", 220), ("implies", "Suggests", "text", 150))
+            self.tabs.addTab(_table(ecols, [{"_id": "", "_role": "", **e} for e in h.evidence]), "Why")
+        self._add_path_tab(s, ip)
 
     def _subnet(self, s: Snapshot, cidr: str):
         inv = s.inv

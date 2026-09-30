@@ -115,6 +115,15 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             ok(f"focus on {core}: {len(win.topology.nodes)} nodes")
             shot("34-map-focus")
             win.topology.clear_focus()
+        # trace a path to a leaf host and highlight it on the map
+        leaf = next((ip for ip, h in inv.hosts.items() if ip not in inv.ip_to_device and any(x.get("via") == "fdb" for x in h.seen_on)), None)
+        if leaf:
+            win.trace_path(leaf)
+            _pump(250)
+            lit = sum(1 for it in win.topology.nodes.values() if getattr(it, "found", False))
+            (ok if lit >= 2 else fail)(f"trace path lit {lit} hops")
+            shot("35-map-path")
+            win.topology.clear_focus()
         # exports
         out = tempfile.mkdtemp(prefix="netmap-selftest-")
         checks = [

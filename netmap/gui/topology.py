@@ -747,10 +747,45 @@ class TopologyPage(QWidget):
         self.rebuild(keep_view=False)
         self.select(node_id, center=False)
 
+    def show_path(self, node_ids: list, label: str = "") -> bool:
+        """Dim everything except the given ordered path and highlight it. Makes any hidden
+        hops visible first."""
+        ids = [n for n in node_ids if n]
+        for n in ids:
+            if n not in self.nodes and self.g is not None and n in self.g:
+                self.ensure_visible(n)
+        present = [n for n in ids if n in self.nodes]
+        if len(present) < 2:
+            return False
+        pathset = set(present)
+        self.scene.blockSignals(True)
+        self.scene.clearSelection()
+        for nid, it in self.nodes.items():
+            it.dimmed = nid not in pathset
+            it.found = nid in pathset
+            if nid in pathset:
+                it.setSelected(True)
+            it.update()
+        self.scene.blockSignals(False)
+        for e in self.edges:
+            e.update()
+        self.banner_text.setText(label or f"Path across {len(present)} devices highlighted.")
+        self.banner.show()
+        rect = None
+        for n in present:
+            r = self.nodes[n].sceneBoundingRect()
+            rect = r if rect is None else rect.united(r)
+        if rect is not None:
+            self.view.fit(rect)
+        return True
+
     def clear_focus(self):
         self.focus = None
         self.hidden_nodes.clear()
         self.banner.hide()
+        for it in self.nodes.values():
+            it.dimmed = False
+            it.found = False
         self.rebuild(keep_view=False)
 
     def hide_node(self, node_id: str):

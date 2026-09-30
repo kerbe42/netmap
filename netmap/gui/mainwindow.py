@@ -632,6 +632,21 @@ class MainWindow(QMainWindow):
                 p.filter.clear()
                 p.select_ids([node_id])
 
+    def trace_path(self, node_id: str):
+        """Highlight the network path from the core to this node on the map."""
+        from .. import paths
+
+        if self.snapshot is None:
+            return
+        p = paths.path_to(self.inv, self.snapshot.g, node_id)
+        if not p.ok or len(p.hops) < 2:
+            self.statusBar().showMessage("No path to trace (it may be the core itself, or not reachable in the collected topology).", 6000)
+            return
+        self.show_page("map")
+        name = self.snapshot.name(node_id)
+        if not self.topology.show_path(p.nodes(), f"Path from <b>{self.snapshot.name(p.origin)}</b> to <b>{name}</b> ({len(p.hops)} hops). Right-click ▸ Details on any hop."):
+            self.statusBar().showMessage("Could not draw the path on the current view.", 5000)
+
     def show_on_map(self, node_id: str):
         self.show_page("map")
         if not self.topology.ensure_visible(node_id):
@@ -718,6 +733,7 @@ class MainWindow(QMainWindow):
             fm = m.addMenu("Focus the map here")
             for hops in (1, 2, 3):
                 fm.addAction(f"{hops} hop{'s' if hops > 1 else ''}", lambda h=hops: (self.show_page("map"), self.topology.focus_on(node_id, h)))
+            m.addAction("Trace path to here", lambda: self.trace_path(node_id))
             if from_map:
                 m.addAction("Hide from map", lambda: self.topology.hide_node(node_id))
         other = (extra_row or {}).get("_other")
