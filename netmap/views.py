@@ -8,6 +8,7 @@ row functions read from it. Every row is a dict; keys starting with "_" are meta
 """
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import re
 from functools import lru_cache
@@ -38,6 +39,18 @@ def _is_ip(s) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _v4_int(s) -> Optional[int]:
+    try:
+        a = ipaddress.ip_address(str(s))
+    except ValueError:
+        return None
+    return int(a) if a.version == 4 else None
+
+
+def _is_ipv4(s) -> bool:
+    return _v4_int(s) is not None
 
 
 def ip_key(s) -> tuple:
@@ -229,6 +242,7 @@ DEVICE_COLUMNS = [
     Column("ports_up", "Ports up", "int", 70, tip="interfaces operationally up / total"),
     Column("neighbors", "Neighbours", "int", 80),
     Column("hosts", "Hosts on ports", "int", 90),
+    Column("free_ports", "Free ports", "int", 75, tip="enabled access ports with nothing connected (link down, no address, not a trunk or bundle member)"),
     Column("vlans", "VLANs", "int", 60),
     Column("uptime", "Uptime", "duration", 80),
     Column("status", "Status", width=100),
@@ -244,6 +258,20 @@ DEVICE_COLUMNS = [
 ]
 
 
+_PHYSICAL_IFTYPES = {0, 6, 117}  # unknown, ethernetCsmacd, gigabitEthernet
+
+
+def free_ports(d) -> int:
+    """Enabled access ports with nothing on them: link down, no address, not a trunk, not
+    part of a bundle, not a bundle/SVI/loopback itself. What a hand-over asks: "where can I
+    plug something in?"."""
+    return sum(
+        1 for i in d.interfaces
+        if i.admin_up and not i.oper_up and not i.ips and i.mode != "trunk" and not i.lag and i.type in _PHYSICAL_IFTYPES
+        and not re.match(r"^(vlan|vl\d|lo|loopback|po\d|port-?channel|null|tunnel|mgmt|management)", (i.name or i.descr or ""), re.I)
+    )
+
+
 def device_rows(s: Snapshot) -> list[dict]:
     inv = s.inv
     rows = []
@@ -256,7 +284,7 @@ def device_rows(s: Snapshot) -> list[dict]:
                 "name": s.name(d.id), "ip": d.id, "role": note.get("role") or d.role, "vendor": d.vendor, "model": d.model,
                 "os_version": d.os_version, "serial": d.serial, "site": note.get("site") or d.location,
                 "ports_up": up, "_ports_total": len(d.interfaces), "neighbors": len(d.neighbors),
-                "hosts": len(s.fdb_hosts.get(d.id, [])), "vlans": len(d.vlans), "uptime": d.uptime_s,
+                "hosts": len(s.fdb_hosts.get(d.id, [])), "free_ports": free_ports(d), "vlans": len(d.vlans), "uptime": d.uptime_s,
                 "status": note.get("status", ""), "tags": ", ".join(note.get("tags", [])), "notes": note.get("notes", ""),
                 "dns": d.dns_name, "first_seen": d.first_seen, "polled": d.collected_at, "via": d.discovered_via,
                 "credential": d.credential, "contact": d.contact, "errors": "; ".join(d.errors),
@@ -270,7 +298,7 @@ def device_rows(s: Snapshot) -> list[dict]:
                 "_id": sid, "_kind": "device", "_role": "unpolled",
                 "name": note.get("name") or a.get("label", sid), "ip": a.get("ip", ""), "role": note.get("role") or "unpolled",
                 "vendor": "", "model": a.get("model", ""), "os_version": "", "serial": "", "site": note.get("site", ""),
-                "ports_up": "", "neighbors": s.g.degree(sid), "hosts": "", "vlans": "", "uptime": "",
+                "ports_up": "", "neighbors": s.g.degree(sid), "hosts": "", "free_ports": "", "vlans": "", "uptime": "",
                 "status": note.get("status", ""), "tags": ", ".join(note.get("tags", [])), "notes": note.get("notes", ""),
                 "dns": "", "first_seen": "", "polled": "", "via": "announced by a neighbour", "credential": "", "contact": "",
                 "errors": "not polled: no credentials answered, or outside the scope",
@@ -420,11 +448,14 @@ def vlan_rows_view(s: Snapshot) -> list[dict]:
         for v in str(r["vlan"]).split():
             if v.isdigit():
                 subnets_by_vlan[int(v)].add(cidr)
-    hosts_by_vlan: Counter = Counter()
+    # distinct MACs per VLAN: every switch on the path learns the same address, so rows
+    # would count one laptop once per switch
+    macs_by_vlan: dict[int, set] = defaultdict(set)
     for d in inv.devices.values():
         for f in d.fdb:
             if f.vlan is not None:
-                hosts_by_vlan[f.vlan] += 1
+                macs_by_vlan[f.vlan].add(f.mac)
+    hosts_by_vlan = {vid: len(m) for vid, m in macs_by_vlan.items()}
     rows = []
     for vid, (names, devs) in s.vlans.items():
         note = inv.note(f"vlan:{vid}")
@@ -584,6 +615,13 @@ def finding_rows(s: Snapshot) -> list[dict]:
 
     for sid, a in s.stubs.items():
         via = ", ".join(sorted({s.name(n) for n in s.g.neighbors(sid)}))
+        if a.get("endpoint"):
+            # a phone, access point or station that announced itself but never showed in
+            # ARP: an endpoint that was quiet, not network kit that refused us
+            add("info", "Endpoint announced over LLDP, address not seen", sid, a.get("label", sid),
+                f"{a.get('endpoint')}  {a.get('model', '')[:60]}  on {via}",
+                "It told the switch what it is over LLDP/CDP but no address was seen for it: powered off, or on a VLAN that was not swept")
+            continue
         add("attention", "Neighbour not polled", sid, a.get("label", sid), f"ip={a.get('ip') or '-'}  {a.get('model', '')[:60]}  seen from {via}",
             "Announced over LLDP/CDP but no credential worked, or it is outside the scope: an unmanaged device or one missing from the handover")
     for hid, a in s.silent_infra.items():
@@ -648,11 +686,17 @@ def finding_rows(s: Snapshot) -> list[dict]:
             add("info", "Subnet not swept", cidr, cidr, f"{r['used']} addresses known from ARP/routes", "Utilisation is a floor, not a count; sweep it to see every live address")
     for ip, h in inv.hosts.items():
         # subnet_for_ip is a cached longest-prefix lookup - O(log subnets) per host
-        # instead of scanning every subnet for every host (O(hosts x subnets)).
-        if inv.subnet_for_ip(ip) is None and _is_ip(ip):
+        # instead of scanning every subnet for every host (O(hosts x subnets)). It only
+        # knows IPv4 subnets, so an IPv6 host is not "outside" anything.
+        if inv.subnet_for_ip(ip) is None and _is_ipv4(ip):
             add("check", "Address outside every known subnet", ip, ip, f"seen via {' '.join(h.sources)}", "In use but in no subnet a device reported: a range missing from the address plan")
+    for rec in getattr(inv, "shared_macs", []) or []:
+        add("info", "MAC seen on several addresses", rec["ips"][0] if rec["ips"] else rec["mac"], rec["mac"],
+            f"{rec['count']} addresses in {', '.join(rec['subnets']) or 'no known subnet'}; MAC left blank on those hosts",
+            "One hardware address behind many IPs is a router answering for a remote range, or a scan placeholder, not those hosts' own NIC")
     # coverage gaps: networks the routers know about that we never scanned
-    known = [ipaddress.ip_network(c) for c in inv.subnets]
+    known_addrs = sorted(int(n.network_address) for n in (ipaddress.ip_network(c) for c in inv.subnets) if n.version == 4)
+    dev_addrs = sorted(_v4_int(ip) for ip in inv.ip_to_device if _v4_int(ip) is not None)
     seen_gap: set = set()
     for d in inv.devices.values():
         for r in d.routes:
@@ -660,15 +704,22 @@ def finding_rows(s: Snapshot) -> list[dict]:
                 net = ipaddress.ip_network(r.dest)
             except ValueError:
                 continue
-            if net.prefixlen in (0, 32) or net.is_loopback or not net.is_private:
+            # /31s are router-to-router links, /32s are host routes: neither is a range to scan
+            if net.version != 4 or net.prefixlen == 0 or net.prefixlen >= 31 or net.is_loopback or not net.is_private:
                 continue
             if str(net) in inv.subnets or str(net) in seen_gap:
                 continue
-            if any(net.subnet_of(k) or net.supernet_of(k) for k in known if k.version == net.version):
-                continue
+            lo, hi = int(net.network_address), int(net.broadcast_address)
+            if inv.subnet_for_ip(str(net.network_address)) is not None:
+                continue  # inside a subnet we know
+            if bisect.bisect_right(known_addrs, hi) > bisect.bisect_left(known_addrs, lo):
+                continue  # a known subnet sits inside it (a summary route)
+            if bisect.bisect_right(dev_addrs, hi) > bisect.bisect_left(dev_addrs, lo):
+                continue  # a polled device has an address in it: reached, just not as a subnet
             seen_gap.add(str(net))
             add("check", "Subnet not yet scanned", str(net), str(net), f"routed by {s.name(d.id)} but no device or host was found in it",
                 "A network the routing tables know about that this scan never reached: add it to the ranges to get full coverage")
+    _topology_findings(s, add)
     # Silence is normal for most addresses (PCs, phones, guessed gateways); it matters for a
     # device you named as a starting point, and for a router other devices route through.
     for ip, via in inv.unreachable.items():
@@ -680,6 +731,74 @@ def finding_rows(s: Snapshot) -> list[dict]:
                 "Traffic is routed through it but no credential worked: part of the routed path is undocumented")
     rows.sort(key=lambda r: (_SEV_ORDER.get(r["severity"].lower(), 9), r["category"], sort_key("ip", r["item"])))
     return rows
+
+
+def _topology_findings(s: Snapshot, add) -> None:
+    """Cheap structural checks that matter to whoever inherits the network: switches with
+    one way out, overlapping address ranges, a spanning-tree root in the wrong place, and
+    VLAN settings that disagree across a cable."""
+    inv = s.inv
+    infra_roles = {"switch", "l3switch", "router", "firewall"}
+    # (a) a switch with exactly one link to the rest of the network kit
+    link_count: Counter = Counter()
+    for u, v, a in s.links:
+        if u in inv.devices and (v in inv.devices or s.kind(v) == "device"):
+            link_count[u] += 1
+        if v in inv.devices and (u in inv.devices or s.kind(u) == "device"):
+            link_count[v] += 1
+    for d in inv.devices.values():
+        if d.role in ("switch", "l3switch") and link_count.get(d.id, 0) == 1 and len(inv.devices) > 1:
+            other = next((v if u == d.id else u for u, v, _ in s.links if d.id in (u, v)), "")
+            add("info", "Single uplink", d.id, s.name(d.id), f"one link to the network, via {s.name(other)}" if other else "one link to the network",
+                "Everything on this switch depends on one cable and one upstream port; fine for an access switch if that is the design, worth knowing either way")
+    # (b) overlapping subnets served by different devices
+    devs_of: dict[str, set] = defaultdict(set)
+    for d in inv.devices.values():
+        for i in d.interfaces:
+            for ipc in i.ips:
+                try:
+                    devs_of[str(ipaddress.ip_network(ipc, strict=False))].add(d.id)
+                except ValueError:
+                    pass
+    nets = sorted((ipaddress.ip_network(c) for c in inv.subnets if ipaddress.ip_network(c).version == 4), key=lambda n: (int(n.network_address), n.prefixlen))
+    stack: list = []
+    for net in nets:
+        while stack and not net.subnet_of(stack[-1]):
+            stack.pop()
+        if stack:
+            outer = stack[-1]
+            a, b = devs_of.get(str(outer), set()), devs_of.get(str(net), set())
+            if a and b and a != b:
+                add("attention", "Overlapping subnets", str(net), str(net), f"inside {outer}; {', '.join(sorted(s.name(x) for x in b))} vs {', '.join(sorted(s.name(x) for x in a))}",
+                    "Two devices address ranges that contain each other: hosts in the overlap reach one of them by accident, and a migration or an addressing mistake is usually behind it")
+        stack.append(net)
+    # (c) spanning tree: the root should be the core, and every switch should agree on it
+    roots: dict[str, list[str]] = defaultdict(list)
+    has_core = any(d.role in ("l3switch", "router") for d in inv.devices.values())
+    for d in inv.devices.values():
+        stp = getattr(d, "stp", {}) or {}
+        if stp.get("root"):
+            roots[str(stp["root"]).lower()].append(d.id)
+        if stp.get("is_root") and d.role == "switch" and has_core:
+            add("check", "Spanning-tree root is an access switch", d.id, s.name(d.id), f"priority {stp.get('priority', '?')}",
+                "The root bridge decides which links block; an access switch as root sends core traffic the long way round and fails the tree when it is unplugged")
+    if len(roots) > 1:
+        detail = "; ".join(f"{r}: {', '.join(sorted(s.name(x) for x in ids))}" for r, ids in sorted(roots.items(), key=lambda kv: -len(kv[1])))
+        first = roots[max(roots, key=lambda r: len(roots[r]))][0]
+        add("check", "Switches disagree on the spanning-tree root", first, "spanning tree", detail[:300],
+            "Polled switches report different root bridges for the default instance: separate layer-2 domains, or a link that does not carry BPDUs")
+    # (d) the two ends of a cable disagree on the VLAN
+    for u, v, a in s.links:
+        if a.get("kind") not in ("lldp", "cdp") or u not in inv.devices or v not in inv.devices:
+            continue
+        pu, pv = edge_ports(u, v, a)
+        ia = _iface_by_label(inv.devices[u], pu)
+        ib = _iface_by_label(inv.devices[v], pv)
+        if ia is None or ib is None or ia.vlan is None or ib.vlan is None or ia.vlan == ib.vlan:
+            continue
+        what = "native VLAN" if ia.mode == "trunk" or ib.mode == "trunk" else "VLAN"
+        add("check", "VLAN mismatch on link", u, f"{s.name(u)} {pu} - {s.name(v)} {pv}", f"{what} {ia.vlan} vs {ib.vlan}",
+            "The two ends of one cable put untagged frames in different VLANs: traffic leaks between segments, or the link was meant to be a trunk on both sides")
 
 
 # ---------------------------------------------------------------- history

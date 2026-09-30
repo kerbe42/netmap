@@ -10,8 +10,9 @@ Every check is read-only and derived from collected data. Findings carry a sever
 """
 from __future__ import annotations
 
+import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -27,8 +28,23 @@ class Check:
 SEV = {"high": 0, "medium": 1, "low": 2}
 
 
-def _cred_is_v2c(label: str) -> bool:
-    return label.startswith("v2c") or label in ("public", "private", "env")
+_V12_LABEL = re.compile(r"(^|[^a-z0-9])v(1|2c?)([^a-z0-9]|$)", re.I)
+_V3_LABEL = re.compile(r"(^|[^a-z0-9])v3([^a-z0-9]|$)", re.I)
+
+
+def _is_community_snmp(dev) -> bool:
+    """Did this device answer SNMPv1/v2c? ``Device.snmp_version`` is authoritative when the
+    collector recorded it. Older maps only carry the credential *label*, which is free text
+    ("v2c:pub***" by default, but anything the user typed), so the fallback looks for a
+    v1/v2c token in it, or a bare community string used as its own label; a label that
+    names neither version is taken as unknown, not as v2c."""
+    ver = (getattr(dev, "snmp_version", "") or "").lower()
+    if ver:
+        return ver in ("v1", "v2c", "1", "2c", "2")
+    label = (dev.credential or "").strip()
+    if not label or _V3_LABEL.search(label):
+        return False
+    return bool(_V12_LABEL.search(label)) or label.lower() in ("public", "private", "env")
 
 
 def compliance_checks(snapshot) -> list[Check]:
@@ -46,8 +62,8 @@ def compliance_checks(snapshot) -> list[Check]:
     for d in inv.devices.values():
         name = d.name or d.id
         # --- SNMP version ---
-        if _cred_is_v2c(d.credential or ""):
-            add("medium", "SNMPv2c in use", d.id, name, f"answered SNMP {d.credential}",
+        if _is_community_snmp(d):
+            add("medium", "SNMPv2c in use", d.id, name, f"answered SNMP {getattr(d, 'snmp_version', '') or d.credential}",
                 "Use SNMPv3 with authentication and privacy; v1/v2c sends the community in clear and has no integrity")
         if (d.credential or "") in ("public", "private"):
             add("high", "Default SNMP community", d.id, name, f"community '{d.credential}'",
@@ -62,7 +78,7 @@ def compliance_checks(snapshot) -> list[Check]:
         if mgmt.get("telnet"):
             add("high", "Telnet enabled", d.id, name, "TCP/23 open",
                 "Disable Telnet and manage over SSH; Telnet carries credentials and sessions in clear")
-        if mgmt.get("http") and not mgmt.get("telnet"):
+        if mgmt.get("http"):
             add("medium", "Cleartext web management", d.id, name, "TCP/80 open",
                 "Serve the management UI over HTTPS only and redirect or disable HTTP")
         # --- hardware support ---
@@ -76,7 +92,7 @@ def compliance_checks(snapshot) -> list[Check]:
                     "Plan replacement before end-of-support")
         # --- spanning tree left at defaults on an L2 core ---
         stp = getattr(d, "stp", {}) or {}
-        if stp.get("is_root") and stp.get("priority") in (32768, 0) and d.role in ("switch", "l3switch"):
+        if stp.get("is_root") and _default_stp_priority(stp.get("priority")) and d.role in ("switch", "l3switch"):
             add("low", "Spanning-tree root by default", d.id, name, f"root at default priority {stp.get('priority')}",
                 "Set the root bridge deliberately (lower priority on the intended core) so a rogue switch cannot win the election")
         # --- interface hygiene ---
@@ -98,6 +114,17 @@ def compliance_checks(snapshot) -> list[Check]:
                 add("medium", "Expired TLS certificate", ip, snapshot.name(ip), f"certificate expired {exp}",
                     "Replace expired certificates on management interfaces")
     return sorted(out, key=lambda c: (SEV.get(c.severity, 9), c.category, c.item))
+
+
+def _default_stp_priority(prio) -> bool:
+    """32768 is the default; with the 802.1t extended system ID a switch reports
+    32768 + VLAN (32769 for VLAN 1), so test the upper nibble. 0 is the lowest value there is:
+    someone set it on purpose to make this the root, the opposite of a default."""
+    try:
+        p = int(prio)
+    except (TypeError, ValueError):
+        return False
+    return p != 0 and (p & 0xF000) == 0x8000
 
 
 def _expired(when: str) -> bool:
