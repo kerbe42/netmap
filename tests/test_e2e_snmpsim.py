@@ -89,7 +89,24 @@ def test_cli_crawl_v2c(agents, tmp_path):
     sw2 = inv["devices"]["127.1.0.2"]
     assert sw2["vendor"] == "HP" and sw2["role"] == "switch" and len([f for f in sw2["fdb"] if f["if_index"] == 24]) == 14
     assert inv["hosts"]["127.1.0.50"]["mac"] == labnet.MAC_A
-    for f in ("map.html", "map.graphml", "map.dot", "inv-devices.csv", "inv-links.csv", "inv-hosts.csv", "inv-subnets.csv", "inv-interfaces.csv"):
+    # OS version, ENTITY-MIB components, per-port VLAN/mode, LAG and ifLastChange through real pysnmp:
+    # Gauge32 PVIDs, PortList octet strings, TimeTicks and the 1.2.840 LAG subtree all decode
+    assert (sw1["os_version"], sw2["os_version"], inv["devices"]["127.0.0.1"]["os_version"]) == ("16.12.4", "YA.16.10.0016", "17.6.4")
+    comps = {c["index"]: c for c in sw1["components"]}
+    assert sorted(comps) == [1, 1000, 1002, 1003, 1005, 1008, 2000, 2002]
+    assert [c["serial"] for c in sw1["components"] if c["cls"] == "chassis"] == ["FOC1234SW1X", "FOC1234SW2Y"]
+    assert {k: comps[1008][k] for k in ("cls", "model", "serial", "hw_rev", "fru", "parent")} == {
+        "cls": "port", "model": "SFP-10G-SR", "serial": "AVD2045K1LM", "hw_rev": "V03", "fru": True, "parent": 1005}
+    assert (comps[1002]["cls"], comps[1002]["parent"], comps[1]["cls"]) == ("powerSupply", 1000, "stack")
+    s1 = {i["index"]: i for i in sw1["interfaces"]}
+    assert [(s1[i]["mode"], s1[i]["vlan"]) for i in (2, 5, 24, 1)] == [("trunk", 1), ("access", 20), ("access", 10), ("", None)]
+    assert s1[5]["last_change_s"] == 987 and s1[2]["last_change_s"] == 12
+    s2 = {i["index"]: i for i in sw2["interfaces"]}
+    assert [(s2[p]["vlan"], s2[p]["mode"]) for p in (3, 4, 2, 24, 289)] == [(10, "access"), (10, "access"), (1, "access"), (1, "trunk"), (20, "access")]
+    assert (s2[21]["lag"], s2[22]["lag"], s2[24]["lag"]) == ("Trk1", "Trk1", "")
+    assert sw2["errors"] == [] and inv["devices"]["127.0.0.1"]["errors"] == []
+    assert "AVD2045K1LM" in (tmp_path / "inv-hardware.csv").read_text()
+    for f in ("map.html", "map.graphml", "map.dot", "inv-devices.csv", "inv-links.csv", "inv-hosts.csv", "inv-subnets.csv", "inv-interfaces.csv", "inv-hardware.csv"):
         assert (tmp_path / f).stat().st_size > 100, f
     assert "core-rtr" in r.stdout and "dist-sw1" in r.stdout
     links = (tmp_path / "inv-links.csv").read_text()

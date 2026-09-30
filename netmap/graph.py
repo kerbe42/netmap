@@ -12,7 +12,7 @@ import networkx as nx
 
 from .model import Inventory
 from .sweep import classify_host
-from .util import oui_vendor, short_name
+from .util import oui_vendor, parse_os_version, short_name
 
 TRUNK_MAC_THRESHOLD = 8
 
@@ -50,6 +50,7 @@ def enrich_inventory(inv: Inventory) -> None:
                 if v:
                     d.vendor = v
                     break
+        d.os_version = d.os_version or parse_os_version(d.sysdescr, d.vendor)  # maps saved before it was collected
 
 
 def ipam_rows(inv: Inventory) -> list[dict]:
@@ -354,9 +355,9 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     p = f"{prefix}devices.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["ip", "name", "role", "vendor", "model", "serial", "location", "contact", "all_ips", "interfaces", "vlans", "lldp_neighbors", "cdp_neighbors", "arp_entries", "routes", "fdb_entries", "uptime_days", "sysdescr", "discovered_via", "depth", "credential", "errors"])
+        w.writerow(["ip", "name", "role", "vendor", "model", "os_version", "serial", "location", "contact", "all_ips", "interfaces", "vlans", "lldp_neighbors", "cdp_neighbors", "arp_entries", "routes", "fdb_entries", "uptime_days", "sysdescr", "discovered_via", "depth", "credential", "errors"])
         for d in inv.devices.values():
-            w.writerow([d.id, d.name, d.role, d.vendor, d.model, d.serial, d.location, d.contact, " ".join(d.ips), len(d.interfaces), len(d.vlans), sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors), len(d.arp), len(d.routes), len(d.fdb), d.uptime_s // 86400, d.sysdescr[:200], d.discovered_via, d.depth, d.credential, "; ".join(d.errors)[:300]])
+            w.writerow([d.id, d.name, d.role, d.vendor, d.model, d.os_version, d.serial, d.location, d.contact, " ".join(d.ips), len(d.interfaces), len(d.vlans), sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors), len(d.arp), len(d.routes), len(d.fdb), d.uptime_s // 86400, d.sysdescr[:200], d.discovered_via, d.depth, d.credential, "; ".join(d.errors)[:300]])
     files.append(p)
     p = f"{prefix}links.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
@@ -402,10 +403,19 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
     p = f"{prefix}interfaces.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["device", "device_name", "ifindex", "name", "descr", "alias", "mac", "speed_mbps", "admin", "oper", "ips"])
+        w.writerow(["device", "device_name", "ifindex", "name", "descr", "alias", "mac", "speed_mbps", "admin", "oper", "vlan", "mode", "lag", "ips"])
         for d in inv.devices.values():
             for i in d.interfaces:
-                w.writerow([d.id, d.name, i.index, i.name, i.descr, i.alias, i.mac or "", i.speed_mbps, "up" if i.admin_up else "down", "up" if i.oper_up else "down", " ".join(i.ips)])
+                w.writerow([d.id, d.name, i.index, i.name, i.descr, i.alias, i.mac or "", i.speed_mbps, "up" if i.admin_up else "down", "up" if i.oper_up else "down",
+                            i.vlan if i.vlan is not None else "", i.mode, i.lag, " ".join(i.ips)])
+    files.append(p)
+    p = f"{prefix}hardware.csv"
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["device", "device_name", "class", "name", "descr", "model", "serial", "hw_rev", "fw_rev", "sw_rev", "fru"])
+        for d in inv.devices.values():
+            for c in d.components:
+                w.writerow([d.id, d.name, c.cls, c.name, c.descr, c.model, c.serial, c.hw_rev, c.fw_rev, c.sw_rev, c.fru])
     files.append(p)
     return files
 

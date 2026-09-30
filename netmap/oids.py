@@ -16,6 +16,7 @@ IF_SPEED = "1.3.6.1.2.1.2.2.1.5"
 IF_PHYS = "1.3.6.1.2.1.2.2.1.6"
 IF_ADMIN = "1.3.6.1.2.1.2.2.1.7"
 IF_OPER = "1.3.6.1.2.1.2.2.1.8"
+IF_LAST_CHANGE = "1.3.6.1.2.1.2.2.1.9"  # TimeTicks: sysUpTime at the last oper-status change
 IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"
 IF_HIGHSPEED = "1.3.6.1.2.1.31.1.1.1.15"
 IF_ALIAS = "1.3.6.1.2.1.31.1.1.1.18"
@@ -71,15 +72,44 @@ DOT1D_FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.3"
 DOT1Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2"
 DOT1Q_FDB_STATUS = "1.3.6.1.2.1.17.7.1.2.2.1.3"
 DOT1Q_VLAN_NAME = "1.3.6.1.2.1.17.7.1.4.3.1.1"
+DOT1Q_VLAN_CUR_EGRESS = "1.3.6.1.2.1.17.7.1.4.2.1.4"  # PortList, index TimeMark.VlanIndex
+DOT1Q_VLAN_CUR_UNTAGGED = "1.3.6.1.2.1.17.7.1.4.2.1.5"  # PortList, index TimeMark.VlanIndex
+DOT1Q_PVID = "1.3.6.1.2.1.17.7.1.4.5.1.1"  # access/native VLAN, index dot1dBasePort
 
 # CISCO-VTP-MIB
 VTP_VLAN_STATE = "1.3.6.1.4.1.9.9.46.1.3.1.1.2"
 VTP_VLAN_NAME = "1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+CISCO_TRUNK_NATIVE = "1.3.6.1.4.1.9.9.46.1.6.1.1.5"  # vlanTrunkPortNativeVlan, index ifIndex
+CISCO_TRUNK_STATUS = "1.3.6.1.4.1.9.9.46.1.6.1.1.14"  # vlanTrunkPortDynamicStatus: 1 trunking, 2 not
 
-# ENTITY-MIB
+# CISCO-VLAN-MEMBERSHIP-MIB
+CISCO_VM_VLAN = "1.3.6.1.4.1.9.9.68.1.2.2.1.2"  # vmVlan: access VLAN, index ifIndex
+
+# IEEE8023-LAG-MIB
+LAG_ATTACHED_AGG = "1.2.840.10006.300.43.1.2.1.1.13"  # dot3adAggPortAttachedAggID, index member ifIndex
+
+# ENTITY-MIB entPhysicalTable
+ENT_DESCR = "1.3.6.1.2.1.47.1.1.1.1.2"
+ENT_CONTAINED_IN = "1.3.6.1.2.1.47.1.1.1.1.4"
 ENT_CLASS = "1.3.6.1.2.1.47.1.1.1.1.5"
+ENT_NAME = "1.3.6.1.2.1.47.1.1.1.1.7"
+ENT_HW_REV = "1.3.6.1.2.1.47.1.1.1.1.8"
+ENT_FW_REV = "1.3.6.1.2.1.47.1.1.1.1.9"
+ENT_SW_REV = "1.3.6.1.2.1.47.1.1.1.1.10"
 ENT_SERIAL = "1.3.6.1.2.1.47.1.1.1.1.11"
 ENT_MODEL = "1.3.6.1.2.1.47.1.1.1.1.13"
+ENT_IS_FRU = "1.3.6.1.2.1.47.1.1.1.1.16"  # TruthValue: 1 true, 2 false
+ENT_CLASSES = {
+    1: "other", 2: "unknown", 3: "chassis", 4: "backplane", 5: "container", 6: "powerSupply", 7: "fan", 8: "sensor",
+    9: "module", 10: "port", 11: "stack", 12: "cpu", 13: "energyObject", 14: "battery", 15: "storageDrive",
+}
+
+# OS version from the vendor's own MIB, for platforms whose sysDescr carries only the model
+OS_VERSION_OIDS = {
+    "Fortinet": "1.3.6.1.4.1.12356.101.4.1.1.0",  # fgSysVersion: "v7.2.5,build1517,230606 (GA.F)"
+    "Palo Alto": "1.3.6.1.4.1.25461.2.1.2.1.1.0",  # panSysSwVersion: "10.2.4-h4"
+    "MikroTik": "1.3.6.1.4.1.14988.1.1.4.4.0",  # mtxrLicVersion: "7.12"
+}
 
 # Enterprise numbers -> vendor (sysObjectID prefix 1.3.6.1.4.1.<n>)
 ENTERPRISES = {

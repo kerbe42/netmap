@@ -25,13 +25,16 @@ Python, no installer.
 
 | Source (SNMP) | Gives you |
 |---|---|
-| system group, ENTITY-MIB | name, description, vendor, model, serial, location, uptime |
-| IF-MIB, ipAddrTable | interfaces, speeds, MACs, descriptions, IPs and subnets |
+| system group | name, description, vendor, OS version, location, uptime |
+| ENTITY-MIB | model and serial, plus the hardware an asset register tracks: stack members, modules, power supplies, fans and transceivers, with serials, revisions and FRU flag |
+| IF-MIB, ipAddrTable | interfaces, speeds, MACs, descriptions, last status change, IPs and subnets |
 | LLDP-MIB, CISCO-CDP-MIB | Layer-2 links, with local and remote port names and neighbour mgmt addresses |
 | ipCidrRouteTable / ipRouteTable | routes and next-hops (Layer-3 adjacency, new subnets to explore) |
 | ipNetToMediaTable | ARP: every IP/MAC the device has talked to |
 | BRIDGE-MIB / Q-BRIDGE-MIB | MAC forwarding table: which switch port each host sits on, per VLAN |
 | Q-BRIDGE / CISCO-VTP-MIB | VLAN ids and names |
+| Q-BRIDGE / CISCO-VTP-MIB / CISCO-VLAN-MEMBERSHIP-MIB | each switch port's access or native VLAN, and whether it is a trunk |
+| IEEE8023-LAG-MIB | which ports are bundled into which LAG / port-channel |
 
 Hosts that do not speak SNMP still appear: from ARP, from LLDP/CDP announcements (phones, APs), and from an
 optional `nmap` ping sweep of every discovered subnet with light service fingerprinting.
@@ -189,14 +192,15 @@ netmap sweep -m acme.json --subnet 10.10.50.0/24 --fingerprint  # sweep one more
 | `*.html` | self-contained interactive map (vis-network embedded; works offline) |
 | `*.graphml` | for yEd / Gephi / Cytoscape; every attribute carried as a property |
 | `*.dot` | Graphviz: `dot -Tsvg map.dot > map.svg` or `sfdp` for big maps |
-| `*.xlsx` | Excel workbook, the hand-over artefact: Summary, Devices, IPAM, VLANs, Links, Hosts, Interfaces, Gaps |
-| `<prefix>devices.csv` | one row per device: role, vendor, model, serial, IPs, counts, credential used |
+| `*.xlsx` | Excel workbook, the hand-over artefact: Summary, Devices, IPAM, VLANs, Links, Hosts, Interfaces, Hardware, Gaps |
+| `<prefix>devices.csv` | one row per device: role, vendor, model, OS version, serial, IPs, counts, credential used |
 | `<prefix>links.csv` | L2/L3 links with both port names |
 | `<prefix>hosts.csv` | every host: IP, name, MAC, vendor, role, subnet, switch, port, VLAN, open ports |
 | `<prefix>ipam.csv` | per-subnet address accounting: size, usable, in use, free, utilisation %, VLAN, gateways |
 | `<prefix>vlans.csv` | VLAN id, every name seen for it, and which devices carry it |
 | `<prefix>subnets.csv` | subnets with gateways and host counts |
-| `<prefix>interfaces.csv` | every interface on every device |
+| `<prefix>interfaces.csv` | every interface on every device, with its VLAN, access/trunk mode and LAG |
+| `<prefix>hardware.csv` | every chassis, stack member, module, supply, fan and transceiver, with model, serial and revisions |
 
 The **IPAM** numbers count addresses actually observed in use — device interfaces, ARP and bridge-table
 entries, sweep replies — so utilisation is evidence, not an estimate. A subnet that was never swept is

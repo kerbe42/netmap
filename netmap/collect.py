@@ -4,10 +4,11 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import defaultdict
 from typing import Optional
 
 from . import oids as O
-from .model import ArpEntry, Device, FdbEntry, Interface, Neighbor, Route
+from .model import ArpEntry, Component, Device, FdbEntry, Interface, Neighbor, Route
 from .snmp import SnmpError, SnmpSession
 from .util import (
     enterprise_from_sysobjectid,
@@ -17,10 +18,23 @@ from .util import (
     mac_from_ints,
     mask_to_prefix,
     oid_suffix,
+    parse_os_version,
+    portlist_ports,
     to_text,
 )
 
 log = logging.getLogger("netmap.collect")
+
+MAX_COMPONENTS = 500  # a fully loaded modular chassis reports thousands of entities
+_ENT_ALWAYS = {"chassis", "module", "powerSupply", "fan", "stack", "cpu"}
+_ENT_NEVER = {"backplane", "container", "sensor"}
+
+
+def _int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 class CollectOptions:
@@ -91,26 +105,70 @@ async def collect_system(sess: SnmpSession, dev: Device, sysinfo: Optional[dict]
     dev.location = to_text(r.get(O.SYS_LOCATION))
     dev.services = int(r.get(O.SYS_SERVICES) or 0)
     dev.vendor = _vendor(dev.sysobjectid, dev.sysdescr)
+    dev.os_version = parse_os_version(dev.sysdescr, dev.vendor)
+    oid = O.OS_VERSION_OIDS.get(dev.vendor)
+    if oid and not dev.os_version:
+        # FortiGate, PAN-OS and RouterOS put only the model in sysDescr; one GET to their own MIB
+        raw = to_text((await _safe(dev, "os version", sess.get(oid)) or {}).get(oid))
+        dev.os_version = parse_os_version(raw, dev.vendor) or raw[:40]
 
 
 async def collect_entity(sess: SnmpSession, dev: Device) -> None:
+    """ENTITY-MIB: the primary chassis' model/serial for the device, plus the parts an asset
+    register tracks - stack members, modules, supplies, fans, CPUs and transceivers.
+
+    Containers, sensors, backplanes and bare ports are dropped: a 48-port stack reports
+    hundreds of slots and probes nobody inventories. A port entity is kept only when it has
+    a model or serial, which is what a pluggable optic looks like. `parent` skips dropped
+    entities, so a supply points at its chassis rather than at the empty slot it sits in.
+    """
     classes = await sess.walk_map(O.ENT_CLASS)
     if not classes:
         return
-    chassis = [k for k, v in classes.items() if v == 3] or list(classes)[:1]
+    col = {}
+    for key, label, oid in (
+        ("descr", "entPhysicalDescr", O.ENT_DESCR), ("parent", "entPhysicalContainedIn", O.ENT_CONTAINED_IN),
+        ("name", "entPhysicalName", O.ENT_NAME), ("hw", "entPhysicalHardwareRev", O.ENT_HW_REV),
+        ("fw", "entPhysicalFirmwareRev", O.ENT_FW_REV), ("sw", "entPhysicalSoftwareRev", O.ENT_SW_REV),
+        ("serial", "entPhysicalSerialNum", O.ENT_SERIAL), ("model", "entPhysicalModelName", O.ENT_MODEL),
+        ("fru", "entPhysicalIsFRU", O.ENT_IS_FRU),
+    ):
+        col[key] = await _safe(dev, label, sess.walk_map(oid)) or {}
+    model, serial = col["model"], col["serial"]
+    chassis = [k for k, v in classes.items() if _int(v) == 3] or list(classes)[:1]
     idx = chassis[0]
-    r = await sess.get(f"{O.ENT_MODEL}.{idx}", f"{O.ENT_SERIAL}.{idx}")
-    dev.model = to_text(r.get(f"{O.ENT_MODEL}.{idx}"))
-    dev.serial = to_text(r.get(f"{O.ENT_SERIAL}.{idx}"))
+    dev.model, dev.serial = to_text(model.get(idx)), to_text(serial.get(idx))
     if not dev.serial:
-        serials = await sess.walk_map(O.ENT_SERIAL)
-        for k, v in serials.items():
-            if to_text(v):
-                dev.serial = to_text(v)
-                if not dev.model:
-                    m = await sess.get(f"{O.ENT_MODEL}.{k}")
-                    dev.model = to_text(m.get(f"{O.ENT_MODEL}.{k}"))
-                break
+        k = next((k for k, v in serial.items() if to_text(v)), None)
+        if k is not None:
+            dev.serial = to_text(serial[k])
+            dev.model = dev.model or to_text(model.get(k))
+
+    comps = []
+    for k, v in classes.items():
+        cls = O.ENT_CLASSES.get(_int(v), "other")
+        if cls in _ENT_NEVER or not k.isdigit():
+            continue
+        c = Component(
+            index=int(k), cls=cls, name=to_text(col["name"].get(k)), descr=to_text(col["descr"].get(k)),
+            model=to_text(model.get(k)), serial=to_text(serial.get(k)), hw_rev=to_text(col["hw"].get(k)),
+            fw_rev=to_text(col["fw"].get(k)), sw_rev=to_text(col["sw"].get(k)), fru=_int(col["fru"].get(k)) == 1,
+        )
+        identified = c.model or c.serial or (cls in _ENT_ALWAYS and (c.name or c.descr))
+        if identified:
+            comps.append(c)
+    if len(comps) > MAX_COMPONENTS:
+        log.debug("%s: %d components, keeping %d", dev.id, len(comps), MAX_COMPONENTS)
+        keep = {id(c) for c in sorted(comps, key=lambda c: c.cls == "port")[:MAX_COMPONENTS]}  # optics go first
+        comps = [c for c in comps if id(c) in keep]
+    kept = {c.index for c in comps}
+    for c in comps:
+        p, seen = _int(col["parent"].get(str(c.index))), {c.index}
+        while p and p not in kept and p not in seen:
+            seen.add(p)
+            p = _int(col["parent"].get(str(p)))
+        c.parent = p if p in kept and p != c.index else 0
+    dev.components = comps
 
 
 async def collect_interfaces(sess: SnmpSession, dev: Device) -> None:
@@ -125,6 +183,7 @@ async def collect_interfaces(sess: SnmpSession, dev: Device) -> None:
     names = await _safe(dev, "ifName", sess.walk_map(O.IF_NAME)) or {}
     hispeed = await _safe(dev, "ifHighSpeed", sess.walk_map(O.IF_HIGHSPEED)) or {}
     alias = await _safe(dev, "ifAlias", sess.walk_map(O.IF_ALIAS)) or {}
+    last = await _safe(dev, "ifLastChange", sess.walk_map(O.IF_LAST_CHANGE)) or {}
     for k, d in descr.items():
         idx = int(k)
         mbps = int(hispeed.get(k) or 0) or int(speed.get(k) or 0) // 1_000_000
@@ -139,6 +198,7 @@ async def collect_interfaces(sess: SnmpSession, dev: Device) -> None:
             speed_mbps=mbps,
             admin_up=int(admin.get(k) or 0) == 1,
             oper_up=int(oper.get(k) or 0) == 1,
+            last_change_s=_int(last.get(k)) // 100,
         )
         dev.interfaces.append(i)
         if mac and mac != "00:00:00:00:00:00" and mac not in dev.macs:
@@ -362,11 +422,12 @@ async def collect_cdp(sess: SnmpSession, dev: Device) -> None:
         )
 
 
-async def _fdb_dot1d(sess: SnmpSession, dev: Device, vlan: Optional[int]) -> int:
+async def _fdb_dot1d(sess: SnmpSession, dev: Device, vlan: Optional[int], bp: Optional[dict] = None) -> int:
     ports = await sess.walk(O.DOT1D_FDB_PORT)
     if not ports:
         return 0
-    bp = await sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)
+    if bp is None:  # a per-VLAN context has its own bridge-port table
+        bp = await sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)
     status = dict(await _safe(dev, "dot1dTpFdbStatus", sess.walk(O.DOT1D_FDB_STATUS)) or [])
     n = 0
     for oid, port in ports:
@@ -383,11 +444,13 @@ async def _fdb_dot1d(sess: SnmpSession, dev: Device, vlan: Optional[int]) -> int
     return n
 
 
-async def collect_fdb(sess: SnmpSession, dev: Device, opts: CollectOptions) -> None:
+async def collect_fdb(sess: SnmpSession, dev: Device, opts: CollectOptions, bp: Optional[dict] = None) -> None:
+    """Bridge forwarding table. `bp` is dot1dBasePortIfIndex if the caller already walked it."""
     # Q-BRIDGE first: includes VLAN in the index
     q = await _safe(dev, "dot1qTpFdbPort", sess.walk(O.DOT1Q_FDB_PORT)) or []
     if q:
-        bp = await sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)
+        if bp is None:
+            bp = await sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)
         status = dict(await _safe(dev, "dot1qTpFdbStatus", sess.walk(O.DOT1Q_FDB_STATUS)) or [])
         for oid, port in q:
             p = oid_suffix(oid, O.DOT1Q_FDB_PORT)
@@ -401,7 +464,7 @@ async def collect_fdb(sess: SnmpSession, dev: Device, opts: CollectOptions) -> N
             dev.fdb.append(FdbEntry(mac=mac, if_index=int(ifidx) if ifidx else None, vlan=p[0]))
         if dev.fdb:
             return
-    n = await _safe(dev, "dot1dTpFdb", _fdb_dot1d(sess, dev, None))
+    n = await _safe(dev, "dot1dTpFdb", _fdb_dot1d(sess, dev, None, bp))
     if opts.cisco_vlan_fdb and dev.vendor == "Cisco" and dev.vlans:
         # Cisco IOS keeps a separate bridge per VLAN; walk each with community@vlan / vlan-N context
         vlans = [v for v in sorted(dev.vlans) if v not in range(1002, 1006)][: opts.max_vlans]
@@ -428,6 +491,72 @@ async def collect_vlans(sess: SnmpSession, dev: Device) -> None:
             dev.vlans[p[1]] = to_text(v)
 
 
+async def _cisco_port_vlans(sess: SnmpSession, dev: Device, ports: dict[int, Interface]) -> bool:
+    """Cisco IOS keeps per-port VLANs in its own MIBs keyed by ifIndex. True if it answered."""
+    status = await _safe(dev, "vlanTrunkPortDynamicStatus", sess.walk_map(O.CISCO_TRUNK_STATUS)) or {}
+    access = await _safe(dev, "vmVlan", sess.walk_map(O.CISCO_VM_VLAN)) or {}
+    trunks = {k for k, v in status.items() if _int(v) == 1}
+    native = (await _safe(dev, "vlanTrunkPortNativeVlan", sess.walk_map(O.CISCO_TRUNK_NATIVE)) or {}) if trunks else {}
+    for k in trunks:
+        if i := ports.get(_int(k)):
+            i.mode, i.vlan = "trunk", _int(native.get(k)) or None
+    for k, v in access.items():
+        if (i := ports.get(_int(k))) and k not in trunks and _int(v):
+            i.mode, i.vlan = "access", _int(v)
+    return bool(trunks or access)
+
+
+async def _qbridge_port_vlans(sess: SnmpSession, dev: Device, ports: dict[int, Interface], bp: dict) -> None:
+    """Q-BRIDGE: PVID per bridge port. A port sending tagged frames for more than one VLAN is
+    a trunk; exactly one tagged VLAN on top of an untagged one is an access port with a voice
+    VLAN, which is how most phone ports look."""
+    pvid = await _safe(dev, "dot1qPvid", sess.walk_map(O.DOT1Q_PVID)) or {}
+    if not pvid:
+        return
+    egress = await _safe(dev, "dot1qVlanCurrentEgressPorts", sess.walk_map(O.DOT1Q_VLAN_CUR_EGRESS)) or {}
+    untagged = await _safe(dev, "dot1qVlanCurrentUntaggedPorts", sess.walk_map(O.DOT1Q_VLAN_CUR_UNTAGGED)) or {}
+    tagged: dict[int, set[int]] = defaultdict(set)
+    for k, ports_out in egress.items():  # index TimeMark.VlanIndex
+        vid = _int(k.rsplit(".", 1)[-1])
+        for p in portlist_ports(ports_out) - portlist_ports(untagged.get(k)):
+            tagged[p].add(vid)
+    for k, v in pvid.items():
+        if i := ports.get(_int(bp.get(k))):
+            i.vlan = _int(v) or None
+            i.mode = "trunk" if len(tagged[_int(k)]) > 1 else "access"
+
+
+async def collect_port_vlans(sess: SnmpSession, dev: Device, bp: dict) -> None:
+    """Access/native VLAN and access-vs-trunk mode per switch port.
+
+    Asked only of devices that look like a switch - a bridge-port table, VLANs or learned
+    MACs - so routers and servers do not pay for the walks. Cisco IOS answers its own MIBs
+    and not Q-BRIDGE's port table; everyone else (Cisco's small-business line included)
+    answers dot1qPvid, keyed by bridge port rather than ifIndex.
+    """
+    if not (bp or dev.vlans or dev.fdb):
+        return
+    ports = {i.index: i for i in dev.interfaces}
+    if dev.vendor == "Cisco" and await _cisco_port_vlans(sess, dev, ports):
+        return
+    if bp:
+        await _qbridge_port_vlans(sess, dev, ports, bp)
+
+
+async def collect_lag(sess: SnmpSession, dev: Device) -> None:
+    """LAG membership from IEEE8023-LAG-MIB: each member names its aggregator's ifIndex.
+
+    Walked on every device, not just switches: firewalls, routers and hypervisor uplinks
+    bundle links too. A port that is not aggregated reports 0 or its own ifIndex.
+    """
+    agg = await sess.walk_map(O.LAG_ATTACHED_AGG)
+    ports = {i.index: i for i in dev.interfaces}
+    for k, v in agg.items():
+        member, a = _int(k), _int(v)
+        if (i := ports.get(member)) and a and a != member:
+            i.lag = dev.iface_label(a)
+
+
 async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysinfo: Optional[dict] = None) -> Device:
     t0 = time.time()
     dev = Device(id=ip, credential=sess.cred.label)
@@ -444,8 +573,12 @@ async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysin
     if opts.routes:
         await _safe(dev, "routes", collect_routes(sess, dev))
     await _safe(dev, "vlans", collect_vlans(sess, dev))
+    # walked once here: the FDB and the per-port VLANs are both keyed by bridge port
+    bp = await _safe(dev, "dot1dBasePortIfIndex", sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)) or {}
     if opts.fdb:
-        await _safe(dev, "fdb", collect_fdb(sess, dev, opts))
+        await _safe(dev, "fdb", collect_fdb(sess, dev, opts, bp))
+    await _safe(dev, "port vlans", collect_port_vlans(sess, dev, bp))
+    await _safe(dev, "lag", collect_lag(sess, dev))
     dev.role = classify_role(dev)
     dev.collected_at = time.time()
     dev.collect_seconds = round(dev.collected_at - t0, 2)

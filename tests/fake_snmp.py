@@ -12,16 +12,20 @@ class FakeSession:
         self.cred = cred or Credential(kind="v2c", community="lab", label="lab")
         self.vlan = vlan
         self.calls = 0
+        self.walked: list[str] = []  # every subtree asked for, in order
+        self.got: list[str] = []
 
     def with_vlan(self, vlan):
         return FakeSession(self.ip, self.table, self.cred, vlan)
 
     async def get(self, *oids):
         self.calls += 1
+        self.got.extend(oids)
         return {o: self.table.get(o) for o in oids}
 
     async def walk(self, base):
         self.calls += 1
+        self.walked.append(base)
         pfx = base + "."
         keys = sorted((k for k in self.table if k.startswith(pfx)), key=lambda k: tuple(int(x) for x in k.split(".")))
         return [(k, self.table[k]) for k in keys]

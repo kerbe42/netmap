@@ -127,6 +127,59 @@ def oui_vendor(mac: Optional[str]) -> str:
     return _load_oui().get(hexs[:6], "")
 
 
+def portlist_ports(b) -> set[int]:
+    """Bridge port numbers set in a Q-BRIDGE PortList (the MSB of the first octet is port 1)."""
+    if not isinstance(b, (bytes, bytearray)):
+        return set()
+    return {i * 8 + bit + 1 for i, byte in enumerate(b) if byte for bit in range(8) if byte & (0x80 >> bit)}
+
+
+# First match wins, so specific shapes go before the generic "Version x.y": several of
+# these texts also say "version" about something else, or not at all. Groups that matched
+# are joined with a space ("6.3 Build 17763").
+_OS_VERSION_RES = [
+    re.compile(p, flags)
+    for p, flags in (
+        (r"\bWindows\b.*?\bVersion\s+(\d+\.\d+)\s*\((Build\s+\d+)", re.I),  # Windows Version 6.3 (Build 17763 ...)
+        (r"\bJUNOS(?:\s+OS)?(?:\s+Evolved)?\s+\[?(\d+\.\d+[\w.\-]*)", re.I),  # kernel JUNOS 21.2R3-S2.9
+        (r"\bv(\d+\.\d+\.\d+),\s*build\s*\d+", re.I),  # FortiGate-60F v7.2.5,build1517,230606 (GA.F)
+        (r"\bFortiOS\s+v?(\d+\.\d+\.\d+)", re.I),
+        (r"\bPAN-OS\s+(?:version\s+)?(\d+\.\d+[\w.\-]*)", re.I),
+        (r"\bSonicOS\s+(?:Enhanced\s+)?v?(\d+\.\d+[\w.\-]*)", re.I),
+        (r"\bRouterOS\s+v?(\d+\.\d+[\w.\-]*)", re.I),  # "RouterOS RB4011iGS+" is a model, not a version
+        (r"\bEdgeOS\s+v?(\d+\.\d+\.\d+(?:-hotfix\.\d+)?)", re.I),  # drop the build id and date
+        (r"^[^,]+,\s*v?(\d+\.\d+\.\d+(?:\.\d+)?),\s*Linux\b", 0),  # UniFi/EdgeSwitch: "USW-24-PoE, 6.5.59.14777, Linux 3.6.5"
+        (r"\brevision\s+([A-Z]{1,2}\.\d{1,2}\.\d{1,2}(?:\.\d{1,4})?)", 0),  # ProCurve: revision YA.16.10.0016, ROM ...
+        (r"\b([A-Z]{2}\.\d{2}\.\d{2}\.\d{4})\b", 0),  # AOS-CX: Aruba JL658A 6300M ... FL.10.08.1010
+        (r"\bCumulus Linux\s+(?:version\s+)?(\d+\.\d+[\w.\-]*)", re.I),
+        (r"\bVMware ESXi?\s+(\d+\.\d+(?:\.\d+)?)(?:\s+(build-\d+))?", re.I),
+        (r"\b(?:pfSense|OPNsense)\s+\S+\s+(\d+\.\d+[\w.\-]*)", re.I),
+        (r"\bversion\b\s*[:=]?\s*v?(\d+\.\d+[\w.()\-+]*)", re.I),  # IOS, IOS-XE, IOS-XR, NX-OS, ASA, EOS, ArubaOS, EXOS, OS10
+    )
+]
+_KERNEL_RES = [re.compile(r"^Linux\s+\S+\s+(\d+\.\d+[\w.\-+~]*)"), re.compile(r"^FreeBSD\s+\S+\s+(\d+\.\d+[\w.\-]*)")]
+# A kernel release is the OS version of a server, but not of an appliance that happens to
+# run Linux (Check Point Gaia, Synology DSM): there it would be confidently wrong.
+_KERNEL_IS_OS = {"", "linux", "net-snmp", "ucd-snmp", "freebsd/pfsense"}
+
+
+def parse_os_version(sysdescr: str, vendor: str = "") -> str:
+    """The software version a sysDescr announces, concise ("16.12.4", "9.3(8)", "20.4R3-S2"). '' if none."""
+    text = (sysdescr or "").strip()
+    if not text:
+        return ""
+    for rx in _OS_VERSION_RES:
+        m = rx.search(text)
+        if m:
+            return " ".join(g for g in m.groups() if g).rstrip(".,;:-(")[:40]
+    if (vendor or "").strip().lower() in _KERNEL_IS_OS:
+        for rx in _KERNEL_RES:
+            m = rx.search(text)
+            if m:
+                return m.group(1).rstrip(".,;:-")[:40]
+    return ""
+
+
 def enterprise_from_sysobjectid(soid: str) -> Optional[int]:
     parts = soid.split(".")
     if len(parts) >= 7 and parts[:6] == ["1", "3", "6", "1", "4", "1"]:
