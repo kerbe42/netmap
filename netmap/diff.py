@@ -77,6 +77,25 @@ class Diff:
         return "\n".join(lines).rstrip()
 
 
+UPTIME_WRAP_S = 2**32 / 100  # sysUpTime is a 32-bit count of centiseconds: 497.1 days
+
+
+def _rebooted(od, nd) -> bool:
+    """Did the device restart between the two collections? The uptime went down, and it is
+    shorter than the time between the collections (a device that stayed up has an uptime
+    at least that long). A counter that wrapped also went down, but then the new value is
+    what the old one plus the elapsed time would read modulo the wrap - not a reboot."""
+    if not (od.uptime_s and nd.uptime_s and nd.uptime_s < od.uptime_s):
+        return False
+    elapsed = nd.collected_at - od.collected_at
+    if elapsed <= 0 or nd.uptime_s >= elapsed + REBOOT_MARGIN_S:
+        return False
+    expected_after_wrap = od.uptime_s + elapsed - UPTIME_WRAP_S
+    if abs(nd.uptime_s - expected_after_wrap) <= REBOOT_MARGIN_S:
+        return False
+    return True
+
+
 def _ip_key(ip: str):
     import ipaddress
 
@@ -131,10 +150,7 @@ def compare(old: Inventory, new: Inventory) -> Diff:
             if went_down:
                 bits.append(f"{len(went_down)} port(s) down" + (f" ({', '.join(went_down[:4])}{'…' if len(went_down) > 4 else ''})" if went_down else ""))
             diffs.append("; ".join(bits))
-        # a reboot means the new uptime is shorter than the gap between the two collections;
-        # sysUpTime also wraps every 497 days, which drops the counter without any reboot
-        elapsed = nd.collected_at - od.collected_at
-        if od.uptime_s and nd.uptime_s and nd.uptime_s < od.uptime_s and elapsed > 0 and nd.uptime_s < elapsed + REBOOT_MARGIN_S:
+        if _rebooted(od, nd):
             diffs.append("rebooted since the earlier scan")
         if diffs:
             add(Change("device", "changed", did, nd.name or did, "; ".join(diffs)))

@@ -696,7 +696,8 @@ def finding_rows(s: Snapshot) -> list[dict]:
             "One hardware address behind many IPs is a router answering for a remote range, or a scan placeholder, not those hosts' own NIC")
     # coverage gaps: networks the routers know about that we never scanned
     known_addrs = sorted(int(n.network_address) for n in (ipaddress.ip_network(c) for c in inv.subnets) if n.version == 4)
-    dev_addrs = sorted(_v4_int(ip) for ip in inv.ip_to_device if _v4_int(ip) is not None)
+    dev_ips = set(inv.ip_to_device) | {ipc.split("/")[0] for d in inv.devices.values() for i in d.interfaces for ipc in i.ips}
+    dev_addrs = sorted(v for v in (_v4_int(ip) for ip in dev_ips) if v is not None)
     seen_gap: set = set()
     for d in inv.devices.values():
         for r in d.routes:

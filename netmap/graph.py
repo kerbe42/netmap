@@ -522,13 +522,17 @@ def stub_endpoint_role(nb) -> str:
     or "" when it claims to route or bridge - network kit that should have answered."""
     caps = (nb.remote_caps or "").lower()
     plat = (nb.remote_platform or "").lower()
-    if "router" in caps or "bridge" in caps or "switch" in caps:
-        return ""
+    routes = "router" in caps
+    bridges = "bridge" in caps or "switch" in caps
+    if routes and bridges:
+        return ""  # claims to route and to bridge: a layer-3 switch, not an endpoint
+    # an explicit phone / access-point claim is taken at face value: phones carry a small
+    # bridge for the PC behind them and access points often claim "router"
     if "wlan-ap" in caps or re.search(r"\bap\b|access point", plat):
         return "wireless"
     if "telephone" in caps or "phone" in caps or re.search(r"\bphone\b|\bsip-t|\bvvx\b", plat):
         return "phone"
-    if "station" in caps or "host" in caps:
+    if ("station" in caps or "host" in caps) and not routes and not bridges:
         return "host"
     return ""
 
