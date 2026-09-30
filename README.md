@@ -207,7 +207,7 @@ the details panel, and a **Server functions** breakdown on the overview):
 | 1433 / 3306 / 5432 / 1521 / 27017 / 6379 … | Database — named specifically (SQL Server, MySQL, PostgreSQL, Oracle, MongoDB, Redis …) |
 | 2049 / 548 (or SMB on a server OS) | File server |
 | 25 / 465 / 587 / 143 / 993 / 995 | Mail server |
-| 53 · 67 · 123 | DNS · DHCP · NTP |
+| 53 · 67 · 123 | DNS · DHCP · NTP (DNS and NTP are confirmed with small read-only UDP probes, since a TCP scan can't see them) |
 | 389 / 636 / 3268 (+88) | Directory / domain controller |
 | 515 / 631 / 9100 | Print server |
 | 902 / 8006 / 6443 · 2375 | Virtualization host · containers |
