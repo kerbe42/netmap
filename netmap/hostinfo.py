@@ -26,6 +26,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
+from .profile import _APPLIANCE_ROLES as _PROFILE_APPLIANCES
+
 # ---------------------------------------------------------------------------
 # Commands (all read-only). Kept as constants so callers/tests can see exactly
 # what runs on a target.
@@ -238,11 +240,15 @@ def parse_netstat(text: str) -> list[dict]:
 # Linux/Unix collector over SSH
 # ===========================================================================
 def _paramiko_run(ip, username, password, key_filename, port, timeout):
-    """Connect with paramiko and return (client, run) where run(cmd)->stdout string."""
+    """Connect with paramiko and return (client, run) where run(cmd)->stdout string.
+
+    Host keys are checked trust-on-first-use (see :mod:`netmap.sshtrust`): a key that differs
+    from the one recorded earlier raises and the host is reported as ``host key changed``."""
     import paramiko
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    from .sshtrust import prepare_client
+
+    client = prepare_client(paramiko.SSHClient())
     client.connect(ip, port=port, username=username, password=password or None,
                    key_filename=key_filename, timeout=timeout, banner_timeout=timeout,
                    auth_timeout=timeout, look_for_keys=bool(key_filename), allow_agent=False)
@@ -329,6 +335,13 @@ def inspect_ssh(ip: str, username: str, password: str = "", key_filename: Option
         try:
             client, run = _paramiko_run(ip, username, password, key_filename, port, timeout)
         except Exception as e:  # noqa: BLE001 - connect/auth failure -> ok=False, never raise
+            from .sshtrust import describe_error
+
+            hk = describe_error(e)
+            if hk:
+                out = _empty("ssh", hk)
+                out["host_key_changed"] = True
+                return out
             return _empty("ssh", f"{type(e).__name__}: {e}")
     try:
         return _collect_ssh(run)
@@ -496,12 +509,25 @@ Get-NetTCPConnection -State Established |
 """
 
 
-def _winrm_run_ps(ip, username, password, transport, timeout):
-    """Return a run_ps(script)->stdout callable backed by a pywinrm session."""
+WINRM_HTTP_PORT, WINRM_HTTPS_PORT = 5985, 5986
+
+
+def _winrm_run_ps(ip, username, password, transport, timeout, port: int = WINRM_HTTP_PORT,
+                  use_ssl: bool = False, verify_ssl: bool = True):
+    """Return a run_ps(script)->stdout callable backed by a pywinrm session.
+
+    Plain HTTP is only used with an authentication scheme that never sends the password in
+    the clear (NTLM/Kerberos/CredSSP); ``basic``/``plaintext`` need ``use_ssl=True``."""
     import winrm
 
-    session = winrm.Session(f"http://{ip}:5985/wsman", auth=(username, password),
-                            transport=transport)
+    if transport in ("basic", "plaintext") and not use_ssl:
+        raise ValueError("WinRM basic authentication over plain HTTP would send the password in clear; "
+                         "use transport='ntlm' (default) or use_ssl=True (port 5986)")
+    scheme = "https" if use_ssl else "http"
+    kwargs = {"transport": transport}
+    if use_ssl:
+        kwargs["server_cert_validation"] = "validate" if verify_ssl else "ignore"
+    session = winrm.Session(f"{scheme}://{ip}:{port}/wsman", auth=(username, password), **kwargs)
     # pywinrm reads timeouts from the underlying protocol; set if available
     try:
         session.protocol.transport.timeout = timeout
@@ -519,15 +545,21 @@ def _winrm_run_ps(ip, username, password, transport, timeout):
 
 def inspect_winrm(ip: str, username: str, password: str, transport: str = "ntlm",
                   timeout: int = 20,
-                  run_ps: Optional[Callable[[str], str]] = None) -> dict:
+                  run_ps: Optional[Callable[[str], str]] = None,
+                  port: Optional[int] = None, use_ssl: bool = False, verify_ssl: bool = True) -> dict:
     """Deep-inspect a Windows host over WinRM (read-only PowerShell). Never raises.
 
     ``run_ps`` is an injectable ``(script)->stdout`` callable; when omitted a pywinrm
-    session is opened. Returns the standard facts dict; on failure ``ok=False``.
+    session is opened on ``port`` (5985, or 5986 with ``use_ssl``). The default transport is
+    NTLM; basic authentication is refused unless the session is TLS. Returns the standard
+    facts dict; on failure ``ok=False``.
     """
+    if port is None:
+        port = WINRM_HTTPS_PORT if use_ssl else WINRM_HTTP_PORT
     try:
         if run_ps is None:
-            run_ps = _winrm_run_ps(ip, username, password, transport, timeout)
+            run_ps = _winrm_run_ps(ip, username, password, transport, timeout, port=port,
+                                   use_ssl=use_ssl, verify_ssl=verify_ssl)
         # The first call establishes the session; a failure here means auth/connect.
         sysj = run_ps(PS_SYSTEM)
     except Exception as e:  # noqa: BLE001 - connect/auth failure -> ok=False, never raise
@@ -571,14 +603,57 @@ def apply_facts(host, facts: dict) -> None:
 
 def _family(host) -> str:
     fam = (getattr(host, "os_family", "") or "").lower()
-    if fam in ("linux", "macos", "unix", "bsd", "darwin"):
+    if fam in ("linux", "macos", "unix", "bsd", "darwin", "esxi"):
         return "linux"
     if fam == "windows":
         return "windows"
     return "unknown"
 
 
+# Appliances and network gear: their SSH/HTTP is a management plane with its own local
+# accounts, and a read-only service account tried against them is a lockout waiting to
+# happen. They are never inspected, whatever ports they expose.
+
+SKIP_ROLES = frozenset(_PROFILE_APPLIANCES) | {"media", "unpolled", "subnet"}
+SSH_PORT = 22
+WINRM_PORTS = (WINRM_HTTP_PORT, WINRM_HTTPS_PORT)
+
+
+def _open_ports(host) -> set[int]:
+    out: set[int] = set()
+    for p in getattr(host, "ports", None) or []:
+        try:
+            out.add(int(p.get("port")) if isinstance(p, dict) else int(p))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def _tcp_reachable(ip: str, port: int, timeout: float = 2.0) -> bool:
+    """Read-only reachability check: TCP connect then close, nothing sent."""
+    import socket
+
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _port_ok(host, ip: str, ports: tuple, check, timeout: float) -> bool:
+    """True if one of `ports` is known open on the host, or (when its port list is unknown)
+    answers a quick TCP connect via `check(ip, port)`."""
+    known = _open_ports(host)
+    if known:
+        return any(p in known for p in ports)
+    if check is None:
+        return True
+    return any(check(ip, p, timeout) for p in ports)
+
+
 def _inspectable(host, creds: dict) -> bool:
+    if (getattr(host, "role", "") or "") in SKIP_ROLES:
+        return False
     fam = _family(host)
     if fam == "linux":
         return bool(creds.get("linux"))
@@ -589,73 +664,114 @@ def _inspectable(host, creds: dict) -> bool:
 
 async def inspect_hosts(inv, creds: dict, hosts=None, workers: int = 16, timeout: int = 15,
                         ssh_inspector: Optional[Callable] = None,
-                        winrm_inspector: Optional[Callable] = None) -> dict:
+                        winrm_inspector: Optional[Callable] = None,
+                        scope=None, exclude=None,
+                        port_check: Optional[Callable] = None) -> dict:
     """Deep-inspect a set of hosts concurrently and write the facts back onto ``inv``.
 
-    ``creds`` is ``{"linux": {"username","password","key_filename"}, "windows":
-    {"username","password","transport"}}``. By default the targets are the hosts in
-    ``inv.hosts`` that are not already SNMP devices (``ip not in inv.ip_to_device``) and
-    look inspectable: os_family linux/macos -> SSH, windows -> WinRM, unknown -> SSH then
-    WinRM (whichever creds exist). Pass ``hosts`` (a list of IP strings) to override.
+    ``creds`` is ``{"linux": {"username","password","key_filename","port"}, "windows":
+    {"username","password","transport","port","use_ssl"}}``. By default the targets are the
+    hosts in ``inv.hosts`` that are not already SNMP devices (``ip not in inv.ip_to_device``),
+    are not appliances (:data:`SKIP_ROLES` - printers, cameras, PLCs, BMCs, phones, network
+    gear...) and look inspectable: os_family linux/macos/bsd -> SSH, windows -> WinRM,
+    unknown -> SSH then WinRM (whichever creds exist). Pass ``hosts`` (a list of IP strings)
+    to override the selection.
+
+    ``scope``/``exclude`` are lists of ``ipaddress.ip_network``; when ``scope`` is given every
+    target must fall inside it and outside ``exclude`` (the GUI passes the project's scan scope
+    so credentials are never presented to an address outside it).
+
+    Credentials are only presented where the service is: SSH needs port 22 (WinRM 5985/5986)
+    in the host's known open ports, or - when no port scan was done - a quick TCP connect
+    (``port_check(ip, port, timeout) -> bool``; the default connects for real when the real
+    inspectors are used and assumes reachable when injected, offline inspectors are used).
 
     Injection seam: the inspectors default to the module-level :func:`inspect_ssh` /
     :func:`inspect_winrm` (monkeypatchable), or pass ``ssh_inspector=`` / ``winrm_inspector=``
     with the same signatures to run without any network.
 
-    Returns ``{"inspected", "ok", "linux", "windows", "failed"}``.
+    Returns ``{"inspected", "ok", "linux", "windows", "failed"}`` (plus ``"skipped"`` when
+    any host was skipped for missing ports or an appliance role).
     """
     import asyncio
+
+    from .util import in_scope
 
     do_ssh = ssh_inspector or inspect_ssh
     do_winrm = winrm_inspector or inspect_winrm
     lc = creds.get("linux") or {}
     wc = creds.get("windows") or {}
+    if port_check is None and ssh_inspector is None and winrm_inspector is None:
+        port_check = _tcp_reachable
 
     if hosts is None:
         targets = [ip for ip, h in inv.hosts.items()
                    if ip not in inv.ip_to_device and _inspectable(h, creds)]
     else:
         targets = list(hosts)
+    if scope is not None:
+        targets = [ip for ip in targets if in_scope(ip, list(scope), list(exclude or []))]
 
     counts = {"inspected": 0, "ok": 0, "linux": 0, "windows": 0, "failed": 0}
     if not targets:
         return counts
+    skipped = 0
 
     def _ssh(ip):
         return do_ssh(ip, username=lc.get("username", ""), password=lc.get("password", ""),
-                      key_filename=lc.get("key_filename"), port=lc.get("port", 22), timeout=timeout)
+                      key_filename=lc.get("key_filename"), port=lc.get("port", SSH_PORT), timeout=timeout)
 
     def _winrm(ip):
+        kw = {}
+        if wc.get("port") or wc.get("use_ssl"):
+            kw = {"port": wc.get("port") or (WINRM_HTTPS_PORT if wc.get("use_ssl") else WINRM_HTTP_PORT),
+                  "use_ssl": bool(wc.get("use_ssl"))}
         return do_winrm(ip, username=wc.get("username", ""), password=wc.get("password", ""),
-                        transport=wc.get("transport", "ntlm"), timeout=timeout)
+                        transport=wc.get("transport", "ntlm"), timeout=timeout, **kw)
 
     def work(ip: str) -> dict:
         """Blocking: pick the transport, run the inspector(s). Returns the facts dict."""
         host = inv.hosts.get(ip)
+        role = (getattr(host, "role", "") or "") if host is not None else ""
+        if role in SKIP_ROLES:
+            return _empty("", f"skipped: {role} is an appliance/network device; credentials are not presented to it")
         fam = _family(host) if host is not None else "unknown"
+        probe_t = min(float(timeout), 3.0)
+        ssh_ports = (int(lc.get("port", SSH_PORT)),) if lc else ()
+        win_ports = ((int(wc["port"]),) if wc.get("port") else WINRM_PORTS) if wc else ()
+        ssh_ok = bool(lc) and _port_ok(host, ip, ssh_ports, port_check, probe_t)
+        win_ok = bool(wc) and _port_ok(host, ip, win_ports, port_check, probe_t)
         if fam == "linux" and lc:
-            return _ssh(ip)
+            return _ssh(ip) if ssh_ok else _empty("ssh", "skipped: SSH port not open/reachable")
         if fam == "windows" and wc:
-            return _winrm(ip)
-        # unknown: try SSH, then WinRM
+            return _winrm(ip) if win_ok else _empty("winrm", "skipped: WinRM port (5985/5986) not open/reachable")
+        # unknown: try SSH, then WinRM - only where the service is actually listening
         facts = None
-        if lc:
+        if ssh_ok:
             facts = _ssh(ip)
             if facts.get("ok"):
                 return facts
-        if wc:
+        if win_ok:
             wfacts = _winrm(ip)
             if wfacts.get("ok") or facts is None:
                 return wfacts
-        return facts or _empty("ssh", "no credentials for host")
+        if facts is None:
+            if lc or wc:
+                return _empty("", "skipped: neither SSH (22) nor WinRM (5985/5986) is open/reachable")
+            return _empty("ssh", "no credentials for host")
+        return facts
 
     loop = asyncio.get_running_loop()
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="netmap-inspect")
     sem = asyncio.Semaphore(workers)
 
     async def one(ip: str) -> None:
+        nonlocal skipped
         async with sem:
             facts = await loop.run_in_executor(pool, work, ip)
+        if (facts.get("error") or "").startswith("skipped:"):
+            skipped += 1
+            return
         counts["inspected"] += 1
         host = inv.hosts.get(ip)
         if host is not None:
@@ -673,4 +789,6 @@ async def inspect_hosts(inv, creds: dict, hosts=None, workers: int = 16, timeout
         await asyncio.gather(*(one(ip) for ip in targets))
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+    if skipped:
+        counts["skipped"] = skipped
     return counts
