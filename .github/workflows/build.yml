@@ -106,6 +106,8 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
+          # the runner's desktop is 1024x768; give the app a laptop-sized screen for the pictures
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "could not change resolution: $_" }
           Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath dist\NetMap\NetMap.exe -ArgumentList "--selftest","--screenshots","shots-native","netmap\data\sample-campus.netmap" -Wait -PassThru
           if (Test-Path shots-native\selftest.txt) { Get-Content shots-native\selftest.txt }

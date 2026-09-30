@@ -13,7 +13,7 @@ import logging
 import time
 from collections import Counter
 
-from .graph import ipam_rows, vlan_rows
+from .graph import edge_ports, ipam_rows, vlan_rows
 from .model import Inventory
 
 log = logging.getLogger("netmap.report")
@@ -110,8 +110,9 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
         wb, "Links",
         ["A", "A name", "A port", "B", "B name", "B port", "Kind", "Detail"],
         [
-            [u, g.nodes[u].get("label"), a.get("src_port", ""), v, g.nodes[v].get("label"), a.get("dst_port", ""), a["kind"], a.get("label", "")]
+            [u, g.nodes[u].get("label"), pu, v, g.nodes[v].get("label"), pv, a["kind"], a.get("label", "")]
             for u, v, a in g.edges(data=True) if a.get("kind") in ("lldp", "cdp", "l3")
+            for pu, pv in [edge_ports(u, v, a)]
         ],
     )
 

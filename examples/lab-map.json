@@ -1,9 +1,10 @@
 {
  "meta": {
-  "created": 1790086032.4558847,
-  "version": 1,
-  "saved": 1790086032.4590907
+  "created": 1790733703.7088554,
+  "version": 2,
+  "saved": 1790733703.7403278
  },
+ "project": {},
  "devices": {
   "10.0.0.1": {
    "id": "10.0.0.1",
@@ -17,6 +18,8 @@
    "vendor": "Cisco",
    "model": "ISR4331/K9",
    "serial": "FDO2222R1XX",
+   "os_version": "17.6.4",
+   "dns_name": "",
    "role": "router",
    "credential": "lab",
    "depth": 0,
@@ -35,7 +38,11 @@
      "oper_up": true,
      "ips": [
       "10.0.0.1/30"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 11
     },
     {
      "index": 2,
@@ -49,7 +56,11 @@
      "oper_up": true,
      "ips": [
       "203.0.113.2/30"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 12
     }
    ],
    "neighbors": [
@@ -111,6 +122,21 @@
    ],
    "fdb": [],
    "vlans": {},
+   "components": [
+    {
+     "index": 1,
+     "cls": "chassis",
+     "name": "Chassis",
+     "descr": "ISR4331/K9",
+     "model": "ISR4331/K9",
+     "serial": "FDO2222R1XX",
+     "hw_rev": "",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 0
+    }
+   ],
    "ips": [
     "10.0.0.1",
     "203.0.113.2"
@@ -119,8 +145,9 @@
     "00:11:22:33:44:01",
     "00:11:22:33:44:02"
    ],
-   "collected_at": 1790086032.4570367,
+   "collected_at": 1790733703.7110596,
    "collect_seconds": 0.0,
+   "first_seen": 1790733703.7110596,
    "errors": []
   },
   "10.0.0.2": {
@@ -135,6 +162,8 @@
    "vendor": "Cisco",
    "model": "WS-C3850-24T",
    "serial": "FOC1234SW1X",
+   "os_version": "16.12.4",
+   "dns_name": "",
    "role": "l3switch",
    "credential": "lab",
    "depth": 1,
@@ -153,7 +182,11 @@
      "oper_up": true,
      "ips": [
       "10.0.0.2/30"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 11
     },
     {
      "index": 2,
@@ -165,7 +198,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 1,
+     "mode": "trunk",
+     "lag": "",
+     "last_change_s": 12
     },
     {
      "index": 5,
@@ -177,7 +214,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 20,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 987
     },
     {
      "index": 10,
@@ -191,7 +232,11 @@
      "oper_up": true,
      "ips": [
       "10.1.0.1/24"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 20
     },
     {
      "index": 20,
@@ -205,7 +250,11 @@
      "oper_up": true,
      "ips": [
       "10.2.0.1/24"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 30
     },
     {
      "index": 24,
@@ -217,7 +266,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 10,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 34
     },
     {
      "index": 30,
@@ -231,7 +284,11 @@
      "oper_up": true,
      "ips": [
       "192.168.99.1/24"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 40
     }
    ],
    "neighbors": [
@@ -398,6 +455,112 @@
     "20": "SERVERS",
     "30": "BRANCH"
    },
+   "components": [
+    {
+     "index": 1,
+     "cls": "stack",
+     "name": "c38xx Stack",
+     "descr": "c38xx Stack",
+     "model": "",
+     "serial": "",
+     "hw_rev": "",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": false,
+     "parent": 0
+    },
+    {
+     "index": 1000,
+     "cls": "chassis",
+     "name": "Switch 1",
+     "descr": "WS-C3850-24T-S",
+     "model": "WS-C3850-24T",
+     "serial": "FOC1234SW1X",
+     "hw_rev": "V07",
+     "fw_rev": "16.12.2r",
+     "sw_rev": "16.12.4",
+     "fru": true,
+     "parent": 1
+    },
+    {
+     "index": 1002,
+     "cls": "powerSupply",
+     "name": "Switch 1 - Power Supply A",
+     "descr": "Switch 1 - Power Supply A",
+     "model": "PWR-C1-350WAC",
+     "serial": "LIT21330ABC",
+     "hw_rev": "V02",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 1000
+    },
+    {
+     "index": 1003,
+     "cls": "fan",
+     "name": "Switch 1 - FAN - T1 1",
+     "descr": "Switch 1 - FAN - T1 1",
+     "model": "",
+     "serial": "",
+     "hw_rev": "",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 1000
+    },
+    {
+     "index": 1005,
+     "cls": "module",
+     "name": "Switch 1 FRU Uplink Module 1",
+     "descr": "4x10G Uplink Module",
+     "model": "C3850-NM-4-10G",
+     "serial": "FOC2210X1AB",
+     "hw_rev": "V01",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 1000
+    },
+    {
+     "index": 1008,
+     "cls": "port",
+     "name": "subslot 1/1 transceiver 1",
+     "descr": "SFP-10GBase-SR",
+     "model": "SFP-10G-SR",
+     "serial": "AVD2045K1LM",
+     "hw_rev": "V03",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 1005
+    },
+    {
+     "index": 2000,
+     "cls": "chassis",
+     "name": "Switch 2",
+     "descr": "WS-C3850-24T-S",
+     "model": "WS-C3850-24T",
+     "serial": "FOC1234SW2Y",
+     "hw_rev": "V07",
+     "fw_rev": "16.12.2r",
+     "sw_rev": "16.12.4",
+     "fru": true,
+     "parent": 1
+    },
+    {
+     "index": 2002,
+     "cls": "powerSupply",
+     "name": "Switch 2 - Power Supply A",
+     "descr": "Switch 2 - Power Supply A",
+     "model": "PWR-C1-350WAC",
+     "serial": "LIT21330DEF",
+     "hw_rev": "V02",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 2000
+    }
+   ],
    "ips": [
     "10.0.0.2",
     "10.1.0.1",
@@ -411,8 +574,9 @@
     "00:11:22:33:44:10",
     "00:11:22:33:44:1f"
    ],
-   "collected_at": 1790086032.4580371,
+   "collected_at": 1790733703.7147753,
    "collect_seconds": 0.0,
+   "first_seen": 1790733703.7147753,
    "errors": []
   },
   "10.1.0.2": {
@@ -427,6 +591,8 @@
    "vendor": "HP",
    "model": "J9772A",
    "serial": "CN51ABC123",
+   "os_version": "YA.16.10.0016",
+   "dns_name": "",
    "role": "switch",
    "credential": "lab",
    "depth": 2,
@@ -443,7 +609,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 1,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 11
     },
     {
      "index": 2,
@@ -455,7 +625,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 1,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 12
     },
     {
      "index": 3,
@@ -467,7 +641,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 10,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 13
     },
     {
      "index": 4,
@@ -479,7 +657,43 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 10,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 14
+    },
+    {
+     "index": 21,
+     "name": "21",
+     "descr": "21",
+     "alias": "",
+     "mac": "00:11:22:33:55:15",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [],
+     "vlan": null,
+     "mode": "",
+     "lag": "Trk1",
+     "last_change_s": 31
+    },
+    {
+     "index": 22,
+     "name": "22",
+     "descr": "22",
+     "alias": "",
+     "mac": "00:11:22:33:55:16",
+     "type": 6,
+     "speed_mbps": 1000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [],
+     "vlan": null,
+     "mode": "",
+     "lag": "Trk1",
+     "last_change_s": 32
     },
     {
      "index": 24,
@@ -491,7 +705,11 @@
      "speed_mbps": 1000,
      "admin_up": true,
      "oper_up": true,
-     "ips": []
+     "ips": [],
+     "vlan": 1,
+     "mode": "trunk",
+     "lag": "",
+     "last_change_s": 34
     },
     {
      "index": 100,
@@ -505,7 +723,27 @@
      "oper_up": true,
      "ips": [
       "10.1.0.2/24"
-     ]
+     ],
+     "vlan": null,
+     "mode": "",
+     "lag": "",
+     "last_change_s": 110
+    },
+    {
+     "index": 289,
+     "name": "Trk1",
+     "descr": "Trk1",
+     "alias": "nas-01",
+     "mac": "00:11:22:33:55:f1",
+     "type": 161,
+     "speed_mbps": 2000,
+     "admin_up": true,
+     "oper_up": true,
+     "ips": [],
+     "vlan": 20,
+     "mode": "access",
+     "lag": "",
+     "last_change_s": 299
     }
    ],
    "neighbors": [
@@ -637,6 +875,21 @@
     }
    ],
    "vlans": {},
+   "components": [
+    {
+     "index": 1,
+     "cls": "chassis",
+     "name": "Chassis",
+     "descr": "J9772A",
+     "model": "J9772A",
+     "serial": "CN51ABC123",
+     "hw_rev": "",
+     "fw_rev": "",
+     "sw_rev": "",
+     "fru": true,
+     "parent": 0
+    }
+   ],
    "ips": [
     "10.1.0.2"
    ],
@@ -645,11 +898,15 @@
     "00:11:22:33:55:02",
     "00:11:22:33:55:03",
     "00:11:22:33:55:04",
+    "00:11:22:33:55:15",
+    "00:11:22:33:55:16",
     "00:11:22:33:55:18",
-    "00:11:22:33:44:20"
+    "00:11:22:33:44:20",
+    "00:11:22:33:55:f1"
    ],
-   "collected_at": 1790086032.4587684,
+   "collected_at": 1790733703.7168303,
    "collect_seconds": 0.0,
+   "first_seen": 1790733703.7168303,
    "errors": []
   }
  },
@@ -658,7 +915,7 @@
    "ip": "10.0.0.2",
    "mac": "00:11:22:33:44:10",
    "hostname": "",
-   "vendor": "",
+   "vendor": "Cimsys",
    "role": "host",
    "sources": [
     "arp"
@@ -672,13 +929,15 @@
     }
    ],
    "ports": [],
-   "snmp_failed": false
+   "snmp_failed": false,
+   "first_seen": 1790733703.7111592,
+   "last_seen": 1790733703.7111592
   },
   "10.0.0.1": {
    "ip": "10.0.0.1",
    "mac": "00:11:22:33:44:01",
    "hostname": "",
-   "vendor": "",
+   "vendor": "Cimsys",
    "role": "host",
    "sources": [
     "arp"
@@ -692,13 +951,15 @@
     }
    ],
    "ports": [],
-   "snmp_failed": false
+   "snmp_failed": false,
+   "first_seen": 1790733703.7148407,
+   "last_seen": 1790733703.7148407
   },
   "10.1.0.2": {
    "ip": "10.1.0.2",
    "mac": "00:11:22:33:44:20",
    "hostname": "",
-   "vendor": "",
+   "vendor": "Cimsys",
    "role": "host",
    "sources": [
     "arp"
@@ -712,7 +973,9 @@
     }
    ],
    "ports": [],
-   "snmp_failed": false
+   "snmp_failed": false,
+   "first_seen": 1790733703.714853,
+   "last_seen": 1790733703.714853
   },
   "10.1.0.50": {
    "ip": "10.1.0.50",
@@ -729,10 +992,18 @@
      "interface": "Vlan10",
      "vlan": null,
      "via": "arp"
+    },
+    {
+     "device": "10.1.0.2",
+     "interface": "3",
+     "vlan": null,
+     "via": "fdb"
     }
    ],
    "ports": [],
-   "snmp_failed": false
+   "snmp_failed": false,
+   "first_seen": 1790733703.7148633,
+   "last_seen": 1790733703.7148633
   },
   "10.1.0.51": {
    "ip": "10.1.0.51",
@@ -749,17 +1020,25 @@
      "interface": "Vlan10",
      "vlan": null,
      "via": "arp"
+    },
+    {
+     "device": "10.1.0.2",
+     "interface": "4",
+     "vlan": null,
+     "via": "fdb"
     }
    ],
    "ports": [],
-   "snmp_failed": false
+   "snmp_failed": false,
+   "first_seen": 1790733703.7148721,
+   "last_seen": 1790733703.7148721
   },
   "10.1.0.60": {
    "ip": "10.1.0.60",
    "mac": "aa:bb:cc:00:00:01",
-   "hostname": "",
+   "hostname": "ap-lobby",
    "vendor": "",
-   "role": "host",
+   "role": "wireless",
    "sources": [
     "arp",
     "lldp-mac"
@@ -773,14 +1052,16 @@
     }
    ],
    "ports": [],
-   "snmp_failed": true
+   "snmp_failed": true,
+   "first_seen": 1790733703.714888,
+   "last_seen": 1790733703.7170577
   },
   "10.1.0.90": {
    "ip": "10.1.0.90",
    "mac": "aa:bb:cc:00:00:02",
-   "hostname": "",
+   "hostname": "SEPAABBCC000002",
    "vendor": "",
-   "role": "host",
+   "role": "phone",
    "sources": [
     "arp",
     "lldp"
@@ -800,17 +1081,18 @@
     }
    ],
    "ports": [],
-   "snmp_failed": true
+   "snmp_failed": true,
+   "first_seen": 1790733703.714898,
+   "last_seen": 1790733703.7169633
   },
   "10.2.0.10": {
    "ip": "10.2.0.10",
    "mac": "de:ad:be:ef:00:0c",
-   "hostname": "srv-files",
-   "vendor": "Dell Inc.",
-   "role": "windows",
+   "hostname": "",
+   "vendor": "",
+   "role": "host",
    "sources": [
-    "arp",
-    "sweep"
+    "arp"
    ],
    "seen_on": [
     {
@@ -818,29 +1100,24 @@
      "interface": "Vlan20",
      "vlan": null,
      "via": "arp"
-    }
-   ],
-   "ports": [
-    {
-     "port": 445,
-     "proto": "tcp",
-     "service": "microsoft-ds",
-     "product": "Windows Server 2019"
     },
     {
-     "port": 3389,
-     "proto": "tcp",
-     "service": "ms-wbt-server",
-     "product": ""
+     "device": "10.0.0.2",
+     "interface": "Gi1/0/5",
+     "vlan": 20,
+     "via": "fdb"
     }
    ],
-   "snmp_failed": false
+   "ports": [],
+   "snmp_failed": false,
+   "first_seen": 1790733703.71492,
+   "last_seen": 1790733703.71492
   },
   "10.1.0.1": {
    "ip": "10.1.0.1",
    "mac": "00:11:22:33:44:10",
    "hostname": "",
-   "vendor": "",
+   "vendor": "Cimsys",
    "role": "host",
    "sources": [
     "arp"
@@ -854,7 +1131,9 @@
     }
    ],
    "ports": [],
-   "snmp_failed": false
+   "snmp_failed": false,
+   "first_seen": 1790733703.716866,
+   "last_seen": 1790733703.716866
   }
  },
  "subnets": {
@@ -863,7 +1142,10 @@
    "sources": [
     "device"
    ],
-   "gateways": [],
+   "gateways": [
+    "10.0.0.1",
+    "10.0.0.2"
+   ],
    "vlan": null,
    "swept": false
   },
@@ -872,7 +1154,9 @@
    "sources": [
     "device"
    ],
-   "gateways": [],
+   "gateways": [
+    "10.0.0.1"
+   ],
    "vlan": null,
    "swept": false
   },
@@ -881,7 +1165,10 @@
    "sources": [
     "device"
    ],
-   "gateways": [],
+   "gateways": [
+    "10.0.0.2",
+    "10.1.0.2"
+   ],
    "vlan": null,
    "swept": false
   },
@@ -890,7 +1177,9 @@
    "sources": [
     "device"
    ],
-   "gateways": [],
+   "gateways": [
+    "10.0.0.2"
+   ],
    "vlan": null,
    "swept": false
   },
@@ -899,7 +1188,9 @@
    "sources": [
     "device"
    ],
-   "gateways": [],
+   "gateways": [
+    "10.0.0.2"
+   ],
    "vlan": null,
    "swept": false
   }
@@ -909,5 +1200,73 @@
   "10.2.0.254": "gateway:10.2.0.0/24",
   "10.1.0.90": "lldp:acc-sw2",
   "10.1.0.60": "lldp-mac:dist-sw1"
- }
+ },
+ "annotations": {},
+ "layout": {},
+ "history": [
+  {
+   "started": 1790733703.7091217,
+   "finished": 1790733703.7385168,
+   "seconds": 0.0,
+   "cancelled": false,
+   "request": {
+    "seeds": [
+     "10.0.0.1"
+    ],
+    "targets": [],
+    "scope": [
+     "10.0.0.0/8"
+    ],
+    "exclude": [],
+    "probe_all": false,
+    "sweep": false,
+    "fingerprint": false,
+    "probe_hosts": false,
+    "resolve_names": false,
+    "follow_routes": true,
+    "follow_gateways": true,
+    "arp": true,
+    "fdb": true,
+    "routes": true,
+    "cisco_vlan_fdb": false,
+    "refresh": false,
+    "refresh_ids": null,
+    "retry_unreachable": false,
+    "resweep": false,
+    "max_depth": 6,
+    "workers": 12,
+    "timeout": 2.0,
+    "retries": 1,
+    "port": 161,
+    "max_devices": 5000,
+    "sweep_max_prefix": 22,
+    "credentials": [
+     "lab"
+    ]
+   },
+   "scope": [
+    "10.0.0.0/8"
+   ],
+   "exclude": [],
+   "found": {
+    "devices": 3,
+    "hosts": 9,
+    "subnets": 5,
+    "new_devices": [
+     "10.0.0.1",
+     "10.0.0.2",
+     "10.1.0.2"
+    ],
+    "new_hosts": 9,
+    "new_subnets": [
+     "10.0.0.0/30",
+     "10.1.0.0/24",
+     "10.2.0.0/24",
+     "192.168.99.0/24",
+     "203.0.113.0/30"
+    ],
+    "refreshed": 0
+   }
+  }
+ ]
 }

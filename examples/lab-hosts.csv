@@ -1,6 +1,6 @@
 ip,hostname,mac,vendor,role,subnet,sources,switch,port,vlan,open_ports
 10.1.0.50,,de:ad:be:ef:00:0a,,host,10.1.0.0/24,arp,acc-sw2,3,,
 10.1.0.51,,de:ad:be:ef:00:0b,,host,10.1.0.0/24,arp,acc-sw2,4,,
-10.1.0.60,,aa:bb:cc:00:00:01,,host,10.1.0.0/24,arp lldp-mac,,,,
-10.1.0.90,,aa:bb:cc:00:00:02,,host,10.1.0.0/24,arp lldp,,,,
-10.2.0.10,srv-files,de:ad:be:ef:00:0c,Dell Inc.,windows,10.2.0.0/24,arp sweep,dist-sw1,Gi1/0/5,20,445/microsoft-ds 3389/ms-wbt-server
+10.1.0.60,ap-lobby,aa:bb:cc:00:00:01,,wireless,10.1.0.0/24,arp lldp-mac,,,,
+10.1.0.90,SEPAABBCC000002,aa:bb:cc:00:00:02,,phone,10.1.0.0/24,arp lldp,,,,
+10.2.0.10,,de:ad:be:ef:00:0c,,host,10.2.0.0/24,arp,dist-sw1,Gi1/0/5,20,

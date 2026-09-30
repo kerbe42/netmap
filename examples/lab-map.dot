@@ -7,7 +7,7 @@ graph netmap {
   "10.1.0.51" [label="10.1.0.51", shape=ellipse];
   "10.1.0.60" [label="ap-lobby", shape=ellipse];
   "10.1.0.90" [label="SEPAABBCC000002", shape=ellipse];
-  "10.2.0.10" [label="srv-files", shape=ellipse];
+  "10.2.0.10" [label="10.2.0.10", shape=ellipse];
   "stub:branch-fw" [label="branch-fw\n192.168.99.2\nunpolled", shape=box];
   "10.0.0.0/30" [label="10.0.0.0/30", shape=hexagon];
   "203.0.113.0/30" [label="203.0.113.0/30", shape=hexagon];

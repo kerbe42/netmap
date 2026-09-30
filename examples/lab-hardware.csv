@@ -1,0 +1,11 @@
+device,device_name,class,name,descr,model,serial,hw_rev,fw_rev,sw_rev,fru
+10.0.0.1,core-rtr,chassis,Chassis,ISR4331/K9,ISR4331/K9,FDO2222R1XX,,,,True
+10.0.0.2,dist-sw1,stack,c38xx Stack,c38xx Stack,,,,,,False
+10.0.0.2,dist-sw1,chassis,Switch 1,WS-C3850-24T-S,WS-C3850-24T,FOC1234SW1X,V07,16.12.2r,16.12.4,True
+10.0.0.2,dist-sw1,powerSupply,Switch 1 - Power Supply A,Switch 1 - Power Supply A,PWR-C1-350WAC,LIT21330ABC,V02,,,True
+10.0.0.2,dist-sw1,fan,Switch 1 - FAN - T1 1,Switch 1 - FAN - T1 1,,,,,,True
+10.0.0.2,dist-sw1,module,Switch 1 FRU Uplink Module 1,4x10G Uplink Module,C3850-NM-4-10G,FOC2210X1AB,V01,,,True
+10.0.0.2,dist-sw1,port,subslot 1/1 transceiver 1,SFP-10GBase-SR,SFP-10G-SR,AVD2045K1LM,V03,,,True
+10.0.0.2,dist-sw1,chassis,Switch 2,WS-C3850-24T-S,WS-C3850-24T,FOC1234SW2Y,V07,16.12.2r,16.12.4,True
+10.0.0.2,dist-sw1,powerSupply,Switch 2 - Power Supply A,Switch 2 - Power Supply A,PWR-C1-350WAC,LIT21330DEF,V02,,,True
+10.1.0.2,acc-sw2,chassis,Chassis,J9772A,J9772A,CN51ABC123,,,,True

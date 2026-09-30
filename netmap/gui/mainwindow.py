@@ -182,7 +182,7 @@ class MainWindow(QMainWindow):
         self.details.annotationChanged.connect(self.annotate)
         self.details.actionRequested.connect(self.node_action)
         self.details_dock = self._dock("Details", self.details, Qt.RightDockWidgetArea, "details")
-        self.details_dock.setMinimumWidth(340)
+        self.details_dock.setMinimumWidth(280)
 
         act = QWidget()
         al = QVBoxLayout(act)
@@ -509,14 +509,21 @@ class MainWindow(QMainWindow):
             self.dashboard.set_snapshot(self.snapshot, self.project_name())
 
     # ================================================================ views
-    def refresh(self, keep_details: bool = False):
-        """Rebuild everything derived from the inventory; pages not on screen refresh when shown."""
+    def refresh(self, keep_details: bool = False, live: bool = False):
+        """Rebuild everything derived from the inventory; pages not on screen refresh when shown.
+
+        `live` is a refresh from a scan in progress: the map is not rebuilt under the user
+        while they look at it (it would re-lay itself out every few seconds); it catches up
+        when the scan ends or when they ask.
+        """
         t0 = time.time()
         self.snapshot = Snapshot(self.inv)
         self._stale = set(self.pages)
         cur = self.current_page()
-        if cur:
+        if cur and not (live and cur == "map" and self.topology.nodes):
             self._load_page(cur)
+        elif cur == "map":
+            self.topology.info.setText("A scan is running: the map updates when it finishes, or when you come back to this page.")
         self._update_nav_counts()
         self._update_status()
         if self.current_node and not keep_details:
@@ -526,7 +533,8 @@ class MainWindow(QMainWindow):
                 self.details.clear()
         elif self.current_node and keep_details:
             self.details.snapshot = self.snapshot
-        log.debug("refresh took %.2fs", time.time() - t0)
+        self._refresh_cost = time.time() - t0
+        log.debug("refresh took %.2fs", self._refresh_cost)
 
     def current_page(self) -> str:
         w = self.stack.currentWidget()
@@ -566,6 +574,8 @@ class MainWindow(QMainWindow):
         w = self.pages.get(key)
         if isinstance(w, DataPage):
             w.filter.setText(filter_text)
+            w._filter_timer.stop()
+            w._on_filter(filter_text)
 
     def _update_nav_counts(self):
         s = self.snapshot
@@ -872,7 +882,9 @@ class MainWindow(QMainWindow):
         self._scan_title = title
         self._scan_started = time.time()
         self.log_view.appendPlainText(f"\n=== {title} — {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
-        self.activity_dock.show()
+        if not self.activity_dock.isVisible():
+            self.activity_dock.show()
+            self.resizeDocks([self.activity_dock], [max(110, min(190, int(self.height() * 0.2)))], Qt.Vertical)
         self.activity_dock.raise_()
         self.logbridge.attach()
         work = self.inv.copy()
@@ -919,8 +931,14 @@ class MainWindow(QMainWindow):
     def _on_snapshot(self, d: dict):
         if self.worker is None:
             return
+        # on a big network a refresh can take a while: never spend more than a quarter of
+        # the time redrawing, so the window stays responsive while a scan runs
+        now = time.time()
+        if now - getattr(self, "_last_live", 0.0) < 4 * getattr(self, "_refresh_cost", 0.0):
+            return
+        self._last_live = now
         self._merge(d)
-        self.refresh(keep_details=True)
+        self.refresh(keep_details=True, live=True)
 
     def _on_finished(self, inv, record: dict):
         self._merge(inv)
@@ -1121,13 +1139,20 @@ class MainWindow(QMainWindow):
         if isinstance(g, QByteArray):
             self.restoreGeometry(g)
         else:
-            self.resize(1400, 860)
+            screen = QGuiApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen else None
+            w = int(min(1440, avail.width() * 0.92)) if avail else 1400
+            h = int(min(900, avail.height() * 0.9)) if avail else 860
+            self.resize(w, h)
         st = s.value("ui/state")
         if isinstance(st, QByteArray):
             self.restoreState(st)
         else:
-            QTimer.singleShot(0, lambda: (self.resizeDocks([self.activity_dock], [170], Qt.Vertical),
-                                          self.resizeDocks([self.details_dock], [430], Qt.Horizontal)))
+            # first run: the page gets the room. Details scales with the window; the activity
+            # log stays out of the way until a scan starts (start_scan shows it).
+            self.activity_dock.hide()
+            self.tools_dock.hide()
+            QTimer.singleShot(0, lambda: self.resizeDocks([self.details_dock], [max(300, min(440, int(self.width() * 0.28)))], Qt.Horizontal))
 
     def closeEvent(self, e):
         if self.worker is not None:

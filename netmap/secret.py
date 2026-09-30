@@ -57,25 +57,34 @@ else:
     except Exception:  # noqa: BLE001
         keyring = None
 
-    def _key(plain_id: str) -> str:
-        return plain_id
-
     def protect(plain: str, key: str = "") -> str:
-        if keyring is None:
+        if not available():
             raise SecretUnavailable("no secret store on this platform")
         import hashlib
 
         ident = key or hashlib.sha256(plain.encode("utf-8")).hexdigest()[:16]
-        keyring.set_password("netmap", ident, plain)
+        try:
+            keyring.set_password("netmap", ident, plain)
+        except Exception as e:  # noqa: BLE001 - a locked or missing backend
+            raise SecretUnavailable(str(e)) from e
         return "keyring:" + ident
 
     def unprotect(token: str) -> str:
-        if keyring is None or not token.startswith("keyring:"):
+        if not available() or not token.startswith("keyring:"):
             raise SecretUnavailable("no secret store on this platform")
-        v = keyring.get_password("netmap", token[8:])
+        try:
+            v = keyring.get_password("netmap", token[8:])
+        except Exception as e:  # noqa: BLE001
+            raise SecretUnavailable(str(e)) from e
         if v is None:
             raise SecretUnavailable("secret not found in keyring")
         return v
 
     def available() -> str:
-        return "system keyring" if keyring is not None else ""
+        if keyring is None:
+            return ""
+        try:
+            backend = keyring.get_keyring()
+        except Exception:  # noqa: BLE001
+            return ""
+        return "" if "fail" in type(backend).__module__ else "the system keyring"

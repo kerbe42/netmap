@@ -224,7 +224,15 @@ class DataPage(QWidget):
         self.filter = QLineEdit()
         self.filter.setPlaceholderText(hint or "Filter… (words match any column; column:value for one, e.g. role:switch)")
         self.filter.setClearButtonEnabled(True)
-        self.filter.textChanged.connect(self._on_filter)
+        # filter as you type, but not on every keystroke of a 20,000-row list
+        from PySide6.QtCore import QTimer
+
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(180)
+        self._filter_timer.timeout.connect(lambda: self._on_filter(self.filter.text()))
+        self.filter.textChanged.connect(lambda _: self._filter_timer.start())
+        self.filter.returnPressed.connect(lambda: (self._filter_timer.stop(), self._on_filter(self.filter.text())))
         self.columns_btn = QToolButton()
         self.columns_btn.setText("Columns")
         self.columns_btn.setPopupMode(QToolButton.InstantPopup)

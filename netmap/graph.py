@@ -375,7 +375,9 @@ def edge_ports(u: str, v: str, attrs: dict) -> tuple[str, str]:
 
 def graph_to_dict(g: nx.MultiGraph) -> dict:
     nodes = [{"id": n, **{k: v for k, v in a.items()}} for n, a in g.nodes(data=True)]
-    edges = [{"source": u, "target": v, **{k: w for k, w in a.items()}} for u, v, a in g.edges(data=True)]
+    # source is the device that reported the link, so src_port/dst_port read the right way round
+    edges = [{"source": v if a.get("src") == v else u, "target": u if a.get("src") == v else v, **{k: w for k, w in a.items()}}
+             for u, v, a in g.edges(data=True)]
     return {"nodes": nodes, "edges": edges}
 
 
@@ -432,7 +434,8 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
         w.writerow(["a", "a_name", "a_port", "b", "b_name", "b_port", "kind", "detail"])
         for u, v, a in g.edges(data=True):
             if a.get("kind") in ("lldp", "cdp", "l3"):
-                w.writerow([u, g.nodes[u].get("label"), a.get("src_port", ""), v, g.nodes[v].get("label"), a.get("dst_port", ""), a["kind"], a.get("label", "")])
+                pu, pv = edge_ports(u, v, a)
+                w.writerow([u, g.nodes[u].get("label"), pu, v, g.nodes[v].get("label"), pv, a["kind"], a.get("label", "")])
     files.append(p)
     p = f"{prefix}hosts.csv"
     with open(p, "w", newline="", encoding="utf-8") as f:
@@ -507,7 +510,8 @@ def text_summary(inv: Inventory, g: nx.MultiGraph) -> str:
     lines += ["", "Links (L2/L3):"]
     for u, v, a in g.edges(data=True):
         if a["kind"] in ("lldp", "cdp", "l3"):
-            lines.append(f"  {g.nodes[u]['label']:28} {a.get('src_port',''):22} <-{a['kind']:4}-> {g.nodes[v]['label']:28} {a.get('dst_port','') or a.get('label','')}")
+            pu, pv = edge_ports(u, v, a)
+            lines.append(f"  {g.nodes[u]['label']:28} {pu:22} <-{a['kind']:4}-> {g.nodes[v]['label']:28} {pv or a.get('label','')}")
     vl = vlan_rows(inv)
     if vl:
         lines += ["", f"VLANs ({len(vl)}):"]
