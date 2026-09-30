@@ -13,7 +13,7 @@ ROLE_COLORS = {
     "server": "#10b981", "printer": "#a16207", "unpolled": "#6b7280", "unknown": "#9ca3af",
     "host": "#94a3b8", "workstation": "#94a3b8", "windows": "#38bdf8", "phone": "#c084fc", "camera": "#fb7185",
     "vm": "#34d399", "database": "#facc15", "subnet": "#334155",
-    "nas": "#0ea5e9", "ups": "#f59e0b",
+    "nas": "#0ea5e9", "ups": "#f59e0b", "plc": "#0d9488", "bms": "#0369a1", "ot": "#0d9488", "bmc": "#7c3aed",
 }
 
 TEMPLATE = r"""<!doctype html>

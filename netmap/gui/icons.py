@@ -26,6 +26,10 @@ ROLE_COLORS = {
     "camera": "#e11d48",
     "nas": "#0891b2",
     "ups": "#d97706",
+    "plc": "#0d9488",
+    "bms": "#0369a1",
+    "ot": "#0d9488",
+    "bmc": "#7c3aed",
     "unpolled": "#6b7280",
     "unknown": "#6b7280",
     "subnet": "#475569",
@@ -48,6 +52,10 @@ ROLE_LABELS = {
     "camera": "Camera",
     "nas": "Storage / NAS",
     "ups": "UPS / power",
+    "plc": "PLC / controller",
+    "bms": "Building automation",
+    "ot": "OT / industrial",
+    "bmc": "Lights-out (BMC)",
     "unpolled": "Not polled",
     "unknown": "Unknown",
     "subnet": "Subnet",
@@ -156,6 +164,24 @@ def _glyph(role: str) -> tuple[QPainterPath, QPainterPath]:
             f.addEllipse(QPointF(x, 0.62), 0.045, 0.045)
             s.moveTo(x, 0.62), s.lineTo(x, 0.44)
         s.moveTo(0.20, 0.44), s.lineTo(0.80, 0.44)
+    elif role in ("plc", "ot"):
+        s.addRoundedRect(QRectF(0.26, 0.26, 0.48, 0.48), 0.04, 0.04)
+        f.addRect(QRectF(0.40, 0.40, 0.20, 0.20))
+        for k in range(4):
+            x = 0.30 + k * 0.133
+            s.moveTo(x, 0.20), s.lineTo(x, 0.26)
+            s.moveTo(x, 0.74), s.lineTo(x, 0.80)
+            s.moveTo(0.20, x), s.lineTo(0.26, x)
+            s.moveTo(0.74, x), s.lineTo(0.80, x)
+    elif role == "bms":
+        s.addRect(QRectF(0.30, 0.22, 0.40, 0.56))
+        for r in range(3):
+            for c in range(3):
+                f.addRect(QRectF(0.36 + c * 0.10, 0.30 + r * 0.14, 0.06, 0.08))
+    elif role == "bmc":
+        s.addRoundedRect(QRectF(0.24, 0.30, 0.52, 0.40), 0.04, 0.04)
+        f.addEllipse(QPointF(0.34, 0.5), 0.04, 0.04)
+        s.moveTo(0.44, 0.5), s.lineTo(0.70, 0.5)
     else:  # unknown / unpolled: a question mark
         s.moveTo(0.38, 0.36)
         s.cubicTo(0.38, 0.20, 0.62, 0.20, 0.62, 0.36)

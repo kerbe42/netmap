@@ -629,6 +629,24 @@ def finding_rows(s: Snapshot) -> list[dict]:
             continue
         if not any(a in n for n in known_nets):
             add("check", "Address outside every known subnet", ip, ip, f"seen via {' '.join(h.sources)}", "In use but in no subnet a device reported: a range missing from the address plan")
+    # coverage gaps: networks the routers know about that we never scanned (runZero-style)
+    known = [ipaddress.ip_network(c) for c in inv.subnets]
+    seen_gap: set = set()
+    for d in inv.devices.values():
+        for r in d.routes:
+            try:
+                net = ipaddress.ip_network(r.dest)
+            except ValueError:
+                continue
+            if net.prefixlen in (0, 32) or net.is_loopback or not net.is_private:
+                continue
+            if str(net) in inv.subnets or str(net) in seen_gap:
+                continue
+            if any(net.subnet_of(k) or net.supernet_of(k) for k in known if k.version == net.version):
+                continue
+            seen_gap.add(str(net))
+            add("check", "Subnet not yet scanned", str(net), str(net), f"routed by {s.name(d.id)} but no device or host was found in it",
+                "A network the routing tables know about that this scan never reached: add it to the ranges to get full coverage")
     # Silence is normal for most addresses (PCs, phones, guessed gateways); it matters for a
     # device you named as a starting point, and for a router other devices route through.
     for ip, via in inv.unreachable.items():

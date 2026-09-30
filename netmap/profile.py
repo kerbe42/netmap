@@ -18,7 +18,7 @@ from typing import Optional
 from .util import oui_vendor
 
 # role -> the OS family it usually implies, when nothing more specific is known
-ROLE_OS = {"printer": "printer", "camera": "embedded", "phone": "embedded", "ups": "embedded", "nas": "embedded", "wireless": "network"}
+ROLE_OS = {"printer": "printer", "camera": "embedded", "phone": "embedded", "ups": "embedded", "nas": "embedded", "wireless": "network", "plc": "embedded", "bms": "embedded", "ot": "embedded", "bmc": "embedded"}
 
 # service/port -> what it suggests. (port, role, weight, note)
 PORT_HINTS = [
@@ -255,6 +255,27 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
             nm["os"], of=fam or None, os_=nm["os"])
         if nm.get("os_vendor") and not vendor:
             vendor = nm["os_vendor"]
+    # ---- OT / ICS and other unauthenticated protocol probes (definitive) --
+    mb = probes.get("modbus") or {}
+    if mb.get("modbus"):
+        add("Modbus", "answered Modbus/TCP (502)", "industrial controller (PLC)", "plc", 9, of="embedded",
+            ven=mb.get("vendor") or None, mdl=mb.get("product") or None)
+    en = probes.get("enip") or {}
+    if en.get("enip"):
+        add("EtherNet/IP", f"answered EtherNet/IP List Identity: {en.get('product', '')}".strip(), "industrial controller (PLC)", "plc", 9,
+            of="embedded", mdl=en.get("product") or None)
+    bac = probes.get("bacnet") or {}
+    if bac.get("bacnet"):
+        add("BACnet", f"answered BACnet I-Am (device {bac.get('device_id', '?')})", "building-automation controller", "bms", 9, of="embedded")
+    ipmi = probes.get("ipmi") or {}
+    if ipmi.get("ipmi"):
+        add("IPMI", f"answered IPMI {ipmi.get('version', '')} (623)".strip(), "server lights-out controller (BMC)", "bmc", 8, of="embedded")
+    wsd = probes.get("wsd") or {}
+    if wsd.get("kind"):
+        role = {"camera": "camera", "printer": "printer", "windows": "windows"}.get(wsd["kind"], "host")
+        add("WS-Discovery", f"advertises WS-Discovery ({', '.join(wsd.get('types', [])[:2])})", role, role, 6,
+            of="windows" if role == "windows" else ("embedded" if role in ("camera",) else "printer" if role == "printer" else None))
+
     # ---- deep inspection (SSH/WinRM), the most authoritative -------------
     sysd = getattr(host, "system", {}) or {}
     if sysd.get("os"):
