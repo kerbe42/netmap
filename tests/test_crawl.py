@@ -298,7 +298,7 @@ def test_xlsx_report(tmp_path):
     out = tmp_path / "acme.xlsx"
     export_xlsx(inv, g, str(out))
     wb = load_workbook(out)
-    assert wb.sheetnames == ["Summary", "Devices", "IPAM", "VLANs", "Links", "Hosts", "Interfaces", "Hardware", "Gaps"]
+    assert wb.sheetnames == ["Summary", "Devices", "IPAM", "VLANs", "Links", "Hosts", "Interfaces", "Hardware", "Findings", "Compliance", "Hardware support", "Dependencies", "Gaps"]
     devices = list(wb["Devices"].values)
     assert devices[0][0] == "IP" and any(r[1] == "core-rtr" for r in devices[1:])
     assert devices[0][4:6] == ("Model", "OS version") and any(r[1] == "acc-sw2" and r[5] == "YA.16.10.0016" for r in devices[1:])

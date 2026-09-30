@@ -894,7 +894,7 @@ def record_truncations(sess, dev: Device) -> None:
 
 async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysinfo: Optional[dict] = None) -> Device:
     t0 = time.time()
-    dev = Device(id=ip, credential=sess.cred.label)
+    dev = Device(id=ip, credential=sess.cred.label, snmp_version=getattr(sess.cred, "kind", "") or "")
     await _safe(dev, "system", collect_system(sess, dev, sysinfo))
     await _safe(dev, "entity", collect_entity(sess, dev))
     await _safe(dev, "interfaces", collect_interfaces(sess, dev))
