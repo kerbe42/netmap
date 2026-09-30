@@ -204,6 +204,15 @@ def vlan_rows(inv: Inventory) -> dict:
 
 
 def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: bool = True, fdb_links: bool = True) -> nx.MultiGraph:
+    # Building the graph (and the enrichment it drives - re-profiling every host) is the
+    # most expensive thing a refresh does. Nothing changes it but a change to the
+    # inventory, which bumps inv.rev (and, during a live scan, replaces the whole object),
+    # so cache the result and reuse it for refreshes that changed nothing - page switches,
+    # filtering, resizing, selecting a node.
+    key = (inv.rev, include_hosts, include_subnets, fdb_links)
+    cache = getattr(inv, "_graph_cache", ())
+    if cache and cache[:4] == key:
+        return cache[4]
     enrich_inventory(inv)
     g = nx.MultiGraph()
     # --- device nodes ---
@@ -383,6 +392,7 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                 if seen not in inv.hosts[hip].seen_on:
                     inv.hosts[hip].seen_on.append(seen)
     apply_annotations(g, inv)
+    inv._graph_cache = (*key, g)
     return g
 
 

@@ -246,6 +246,10 @@ class Inventory:
         self.history: list[dict] = []  # one entry per scan: when, what was asked, what was found
         self.configs: dict[str, list[dict]] = {}  # device id -> [{captured_at, text, sha}] newest last
         self.dhcp_scopes: dict[str, dict] = {}  # subnet cidr -> {leases, imported_at} from an imported DHCP export
+        # bumped whenever the inventory's structure or annotations change; lets build_graph
+        # cache its (expensive) result and skip rebuilding on refreshes that changed nothing.
+        self.rev: int = 0
+        self._graph_cache: tuple = ()  # (rev, include_hosts, include_subnets, fdb_links, graph)
 
     # ---- devices ----
     def add_device(self, dev: Device) -> None:
@@ -278,6 +282,7 @@ class Inventory:
 
     def reindex(self) -> None:
         """Rebuild the address/MAC lookups from the devices themselves."""
+        self.rev += 1  # structure changed -> invalidate the cached graph
         self.ip_to_device = {}
         self.mac_to_device = {}
         for d in self.devices.values():
@@ -439,6 +444,7 @@ class Inventory:
             self.annotations[node_id] = rec
         else:
             self.annotations.pop(node_id, None)
+        self.rev += 1  # a user edit changes what the graph shows
         return rec
 
     def display_name(self, node_id: str) -> str:

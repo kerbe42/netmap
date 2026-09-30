@@ -153,7 +153,13 @@ class FilterProxy(QSortFilterProxyModel):
             return True
         model: RowsModel = self.sourceModel()
         row = model.rows[source_row]
-        texts = [display(c, row.get(c.key)).lower() for c in model.columns]
+        # cache the lowercased per-column text on the row: filtering re-checks every
+        # visible cell on each keystroke, and re-rendering them all is the cost at scale.
+        # The cache lives on the row dict, which is rebuilt on every set_rows.
+        texts = row.get("_disp")
+        if texts is None:
+            texts = [display(c, row.get(c.key)).lower() for c in model.columns]
+            row["_disp"] = texts
         for col, word in self.terms:
             if col is not None:
                 if word not in texts[col]:

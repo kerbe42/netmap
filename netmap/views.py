@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from functools import lru_cache
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -31,6 +32,14 @@ class Column:
     tip: str = ""
 
 
+def _is_ip(s) -> bool:
+    try:
+        ipaddress.ip_address(str(s))
+        return True
+    except ValueError:
+        return False
+
+
 def ip_key(s) -> tuple:
     s = str(s or "").split("/")[0].split()[0] if s else ""
     try:
@@ -45,6 +54,20 @@ def natural_key(s) -> tuple:
 
 
 def sort_key(kind: str, v):
+    # sorting a large table asks for the same (kind, value) key over and over as the
+    # comparison function runs; memoise so ip/natural keys aren't rebuilt each compare.
+    try:
+        return _sort_key_cached(kind, v)
+    except TypeError:  # unhashable value - fall back to the direct computation
+        return _sort_key(kind, v)
+
+
+@lru_cache(maxsize=100_000)
+def _sort_key_cached(kind: str, v):
+    return _sort_key(kind, v)
+
+
+def _sort_key(kind: str, v):
     if kind in ("ip", "cidr"):
         if kind == "cidr":
             try:
@@ -623,13 +646,10 @@ def finding_rows(s: Snapshot) -> list[dict]:
             add("check", "Subnet with no gateway found", cidr, cidr, "no polled device has an address in it", "The router for this range was not reached: its SNMP access is missing or it is outside the scope")
         if not r["swept"]:
             add("info", "Subnet not swept", cidr, cidr, f"{r['used']} addresses known from ARP/routes", "Utilisation is a floor, not a count; sweep it to see every live address")
-    known_nets = [ipaddress.ip_network(c) for c in inv.subnets]
     for ip, h in inv.hosts.items():
-        try:
-            a = ipaddress.ip_address(ip)
-        except ValueError:
-            continue
-        if not any(a in n for n in known_nets):
+        # subnet_for_ip is a cached longest-prefix lookup - O(log subnets) per host
+        # instead of scanning every subnet for every host (O(hosts x subnets)).
+        if inv.subnet_for_ip(ip) is None and _is_ip(ip):
             add("check", "Address outside every known subnet", ip, ip, f"seen via {' '.join(h.sources)}", "In use but in no subnet a device reported: a range missing from the address plan")
     # coverage gaps: networks the routers know about that we never scanned (runZero-style)
     known = [ipaddress.ip_network(c) for c in inv.subnets]
