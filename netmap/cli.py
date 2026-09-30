@@ -303,6 +303,10 @@ def cmd_inspect(args) -> int:
     scope, exclude = scope_from(args, cfg)
     result = asyncio.run(inspect_hosts(inv, creds, scope=scope, exclude=exclude))
     inv.save(args.map)
+    for ip, msg in (result.get("host_key_changed") or {}).items():
+        log.warning("HOST KEY CHANGED for %s: %s", ip, msg)
+    if result.get("skipped"):
+        log.info("%d host(s) skipped (out of scope, appliance role, or no open SSH/WinRM port)", result["skipped"])
     print(f"inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed. saved {args.map}")
     return 0
 

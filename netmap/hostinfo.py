@@ -773,6 +773,10 @@ async def inspect_hosts(inv, creds: dict, hosts=None, workers: int = 16, timeout
             skipped += 1
             return
         counts["inspected"] += 1
+        if facts.get("host_key_changed"):
+            # surfaced to the caller (CLI log / GUI) as ip -> message; the message names
+            # the known_hosts file so the operator can clear a legitimately re-keyed host
+            counts.setdefault("host_key_changed", {})[ip] = facts.get("error") or "host key changed"
         host = inv.hosts.get(ip)
         if host is not None:
             apply_facts(host, facts)
