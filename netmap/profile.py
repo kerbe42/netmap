@@ -506,7 +506,15 @@ def profile_inventory(inv) -> None:
     for dev in inv.devices.values():
         if not dev.os_family:
             dev.os_family = device_os_family(dev)
-        dev.functions = server_functions(dev)
+        # a switch/router/firewall's 22/80/443 is a management surface, not a
+        # served role - only list functions for devices that are actually servers
+        # (e.g. a Linux box polled over net-snmp), matching how hosts are treated.
+        if dev.role in _APPLIANCE_ROLES or dev.role in ("router", "switch", "l3switch", "firewall", "wireless"):
+            dev.functions = []
+        else:
+            fns = server_functions(dev)
+            strong = [f for f in fns if f not in _CLIENT_SURFACE]
+            dev.functions = fns if strong else []
     for ip, h in inv.hosts.items():
         if ip in inv.ip_to_device:
             continue
