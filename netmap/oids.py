@@ -29,7 +29,11 @@ IP_AD_NETMASK = "1.3.6.1.2.1.4.20.1.3"
 ARP_PHYS = "1.3.6.1.2.1.4.22.1.2"
 ARP_TYPE = "1.3.6.1.2.1.4.22.1.4"
 
-# Routing: ipCidrRouteTable (RFC 2096) preferred, ipRouteTable (RFC 1213) fallback
+# Routing: inetCidrRouteTable (RFC 4292) first, ipCidrRouteTable (RFC 2096) next, ipRouteTable (RFC 1213) last.
+# inetCidrRoute index: DestType.Dest(len+octets).PfxLen.Policy(len+subids).NextHopType.NextHop(len+octets)
+INET_CIDR_ROUTE_IFINDEX = "1.3.6.1.2.1.4.24.7.1.7"
+INET_CIDR_ROUTE_TYPE = "1.3.6.1.2.1.4.24.7.1.8"
+INET_CIDR_ROUTE_PROTO = "1.3.6.1.2.1.4.24.7.1.9"
 CIDR_ROUTE_IFINDEX = "1.3.6.1.2.1.4.24.4.1.5"
 CIDR_ROUTE_TYPE = "1.3.6.1.2.1.4.24.4.1.6"
 CIDR_ROUTE_PROTO = "1.3.6.1.2.1.4.24.4.1.7"
@@ -72,6 +76,7 @@ DOT1D_FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.3"
 DOT1Q_FDB_PORT = "1.3.6.1.2.1.17.7.1.2.2.1.2"
 DOT1Q_FDB_STATUS = "1.3.6.1.2.1.17.7.1.2.2.1.3"
 DOT1Q_VLAN_NAME = "1.3.6.1.2.1.17.7.1.4.3.1.1"
+DOT1Q_VLAN_FDB_ID = "1.3.6.1.2.1.17.7.1.4.2.1.3"  # dot1qVlanFdbId, index TimeMark.VlanIndex -> the FDB id used in dot1qTpFdbTable
 DOT1Q_VLAN_CUR_EGRESS = "1.3.6.1.2.1.17.7.1.4.2.1.4"  # PortList, index TimeMark.VlanIndex
 DOT1Q_VLAN_CUR_UNTAGGED = "1.3.6.1.2.1.17.7.1.4.2.1.5"  # PortList, index TimeMark.VlanIndex
 DOT1Q_PVID = "1.3.6.1.2.1.17.7.1.4.5.1.1"  # access/native VLAN, index dot1dBasePort

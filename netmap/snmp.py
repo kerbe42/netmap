@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -24,6 +26,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     UsmUserData,
     bulk_walk_cmd,
     get_cmd,
+    walk_cmd,
 )
 from pysnmp.hlapi.v3arch.asyncio import auth as _auth
 from pysnmp.proto import errind
@@ -72,9 +75,21 @@ def _resolve_secret(v: Optional[str]) -> Optional[str]:
     return v
 
 
+# Numbers the unlabelled community credentials in this process ("v2c #1", "v2c #2", ...).
+# The label ends up in every device record and export, so it must say nothing about the
+# secret itself - not even a prefix of it.
+_COMMUNITY_LABELS = itertools.count(1)
+
+
+def default_label(kind: str, user: Optional[str] = None) -> str:
+    if kind == "v3":
+        return f"v3:{user or ''}"
+    return f"{kind} #{next(_COMMUNITY_LABELS)}"
+
+
 @dataclass
 class Credential:
-    kind: str = "v2c"  # v2c | v3
+    kind: str = "v2c"  # v1 | v2c | v3
     label: str = ""
     community: Optional[str] = None
     user: Optional[str] = None
@@ -87,11 +102,11 @@ class Credential:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Credential":
-        kind = d.get("kind", "v3" if d.get("user") else "v2c")
+        kind = (d.get("kind") or ("v3" if d.get("user") else "v2c")).lower()
         return cls(
             kind=kind,
-            label=d.get("label") or (f"v2c:{d.get('community', '')[:3]}***" if kind == "v2c" else f"v3:{d.get('user')}"),
-            community=_resolve_secret(d.get("community")),
+            label=d.get("label") or default_label(kind, d.get("user")),
+            community=_resolve_secret(d.get("community")) or "",
             user=d.get("user"),
             auth=(d.get("auth") or "NONE").upper(),
             auth_key=_resolve_secret(d.get("auth_key")),
@@ -101,11 +116,11 @@ class Credential:
         )
 
     def auth_data(self, vlan: Optional[int] = None):
-        if self.kind == "v2c":
+        if self.kind in ("v1", "v2c"):
             comm = self.community or ""
             if vlan is not None:
                 comm = f"{comm}@{vlan}"  # Cisco community-string indexing
-            return CommunityData(comm, mpModel=1)
+            return CommunityData(comm, mpModel=0 if self.kind == "v1" else 1)
         if self.kind == "v3":
             if self.auth not in AUTH_PROTOS:
                 raise SnmpError(f"unknown auth protocol {self.auth}")
@@ -142,8 +157,16 @@ def convert(v: Any) -> Any:
         return str(v)
 
 
+def _oid_key(oid: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in oid.split("."))
+
+
 class SnmpSession:
-    """One target + one credential. `get` and `walk` return plain python values keyed by dotted OID."""
+    """One target + one credential. `get` and `walk` return plain python values keyed by dotted OID.
+
+    `truncations` collects a line for every table walk that ended early (timeout mid-walk,
+    an agent repeating OIDs, the row cap or the deadline), so the collector can record that
+    a table is incomplete instead of presenting a partial one as the whole."""
 
     def __init__(
         self,
@@ -155,6 +178,8 @@ class SnmpSession:
         retries: int = 1,
         vlan: Optional[int] = None,
         max_repetitions: int = 25,
+        walk_deadline: float = 180.0,
+        max_rows: int = 200_000,
     ):
         self.engine = engine
         self.ip = ip
@@ -164,10 +189,16 @@ class SnmpSession:
         self.retries = retries
         self.vlan = vlan
         self.max_repetitions = max_repetitions
+        self.walk_deadline = walk_deadline  # seconds one table walk may take in all
+        self.max_rows = max_rows  # rows one table walk may return before it is cut off
+        self.truncations: list[str] = []
         self._target = None
 
     def with_vlan(self, vlan: int) -> "SnmpSession":
-        return SnmpSession(self.engine, self.ip, self.cred, self.port, self.timeout, self.retries, vlan, self.max_repetitions)
+        s = SnmpSession(self.engine, self.ip, self.cred, self.port, self.timeout, self.retries, vlan, self.max_repetitions,
+                        self.walk_deadline, self.max_rows)
+        s.truncations = self.truncations  # per-VLAN walks report into the same device
+        return s
 
     async def _tgt(self):
         if self._target is None:
@@ -198,41 +229,89 @@ class SnmpSession:
         self._check(*res)
         return {str(name): convert(val) for name, val in res[3]}
 
-    async def walk(self, base: str) -> list[tuple[str, Any]]:
-        """Bulk-walk a subtree. Returns [(oid, value)] in lexicographic order, limited to the subtree."""
-        tgt = await self._tgt()
-        out: list[tuple[str, Any]] = []
-        gen = bulk_walk_cmd(
-            self.engine,
-            self.cred.auth_data(self.vlan),
-            tgt,
-            self.cred.context_data(self.vlan),
-            0,
-            self.max_repetitions,
-            ObjectType(ObjectIdentity(base)),
-            lexicographicMode=False,
-            lookupMib=False,
-            ignoreNonIncreasingOid=True,
-        )
-        async for err_ind, err_stat, err_idx, var_binds in gen:
-            try:
+    def _walk_gen(self, start: str, lexicographic: bool):
+        """The pysnmp generator for one pass over a subtree. SNMPv1 has no GETBULK."""
+        common = dict(lexicographicMode=lexicographic, lookupMib=False, ignoreNonIncreasingOid=True)
+        if self.cred.kind == "v1":
+            return walk_cmd(self.engine, self.cred.auth_data(self.vlan), self._target, self.cred.context_data(self.vlan),
+                            ObjectType(ObjectIdentity(start)), **common)
+        return bulk_walk_cmd(self.engine, self.cred.auth_data(self.vlan), self._target, self.cred.context_data(self.vlan),
+                             0, self.max_repetitions, ObjectType(ObjectIdentity(start)), **common)
+
+    async def _walk_pass(self, base: str, start: str, out: list, started: float, last: Optional[tuple]) -> Optional[str]:
+        """One pass from `start`, appending rows under `base` to `out`. Returns None when the
+        subtree ended normally, otherwise the reason the pass was cut short. Raises on a
+        protocol error (the caller decides whether rows already gathered make it a truncation)."""
+        prefix = base + "."
+        # A resumed pass must run lexicographically (the start OID is a leaf, not the subtree),
+        # so this pass stops itself at the first OID outside the subtree.
+        gen = self._walk_gen(start, lexicographic=(start != base))
+        try:
+            async for err_ind, err_stat, err_idx, var_binds in gen:
                 self._check(err_ind, err_stat, err_idx, var_binds)
-            except SnmpError:
-                # a mid-walk error after we already have rows -> a device returned a
-                # truncated table; keep what we gathered rather than dropping all of it.
-                # An error on the very first PDU is a real failure, so re-raise that.
-                if out:
-                    log.debug("%s: walk of %s truncated: %s rows kept", self.cred.label, base, len(out))
-                    break
-                raise
-            for name, val in var_binds:
-                s = str(name)
-                if not s.startswith(base + "."):
+                beyond = False
+                for name, val in var_binds:
+                    oid = str(name)
+                    if not oid.startswith(prefix):
+                        beyond = True
+                        continue
+                    key = _oid_key(oid)
+                    if last is not None and key <= last:
+                        # an agent that repeats or goes backwards would keep us here for ever
+                        return "non-increasing OID"
+                    last = key
+                    cv = convert(val)
+                    if cv is None and isinstance(val, EndOfMibView):
+                        continue
+                    out.append((oid, cv))
+                    if len(out) >= self.max_rows:
+                        return f"row limit {self.max_rows}"
+                if beyond and start != base:
+                    return None
+                if time.monotonic() - started > self.walk_deadline:
+                    return f"deadline {self.walk_deadline:g}s"
+        finally:
+            try:
+                await gen.aclose()  # a no-op once exhausted; frees an abandoned generator otherwise
+            except Exception:  # noqa: BLE001 - only tidying up
+                pass
+        return None
+
+    async def walk(self, base: str) -> list[tuple[str, Any]]:
+        """Walk a subtree. Returns [(oid, value)] in lexicographic order, limited to the subtree.
+
+        A walk that stops before the subtree ends - a timeout mid-way (retried once from the
+        last OID received), an agent that repeats OIDs, the row cap or the overall deadline -
+        keeps the rows it has and records why in `self.truncations`. An error before any row
+        arrived is a plain failure and is raised."""
+        await self._tgt()
+        out: list[tuple[str, Any]] = []
+        started = time.monotonic()
+        start = base
+        retried = False
+        while True:
+            try:
+                reason = await self._walk_pass(base, start, out, started, _oid_key(out[-1][0]) if out else None)
+                break
+            except SnmpTimeout as e:
+                if not out:
+                    raise
+                if not retried and time.monotonic() - started <= self.walk_deadline:
+                    retried = True
+                    start = out[-1][0]
+                    log.debug("%s: walk of %s timed out after %d rows; resuming once", self.ip, base, len(out))
                     continue
-                cv = convert(val)
-                if cv is None and isinstance(val, EndOfMibView):
-                    continue
-                out.append((s, cv))
+                reason = f"timeout: {e}"
+                break
+            except SnmpError as e:
+                if not out:
+                    raise
+                reason = str(e)
+                break
+        if reason:
+            note = f"{base}: truncated after {len(out)} rows ({reason})"
+            self.truncations.append(note)
+            log.warning("%s: walk of %s", self.ip, note)
         return out
 
     async def walk_map(self, base: str) -> dict[str, Any]:

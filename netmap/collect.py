@@ -251,9 +251,17 @@ async def collect_ip_addrs(sess: SnmpSession, dev: Device) -> None:
 
 async def collect_arp(sess: SnmpSession, dev: Device) -> None:
     phys = await sess.walk(O.ARP_PHYS)
+    if not phys:
+        return
+    # ipNetToMediaType: 1 other, 2 invalid, 3 dynamic, 4 static. Only learned and configured
+    # entries describe a neighbour that is really there; invalid/other rows are stale.
+    types = dict(await _safe(dev, "ipNetToMediaType", sess.walk(O.ARP_TYPE)) or [])
     for oid, val in phys:
         parts = oid_suffix(oid, O.ARP_PHYS)
         if len(parts) != 5:
+            continue
+        t = types.get(O.ARP_TYPE + oid[len(O.ARP_PHYS) :])
+        if t is not None and _int(t) not in (3, 4):
             continue
         ip = ip_from_ints(parts[1:])
         mac = mac_from_bytes(val) if isinstance(val, bytes) else None
@@ -261,7 +269,77 @@ async def collect_arp(sess: SnmpSession, dev: Device) -> None:
             dev.arp.append(ArpEntry(if_index=parts[0], ip=ip, mac=mac))
 
 
+def decode_inet_cidr_index(parts: list[int]) -> Optional[tuple[str, int, str]]:
+    """inetCidrRouteTable index -> (dest, prefix length, next hop) for an IPv4 row, else None.
+
+    Layout: DestType, Dest (length + octets), PfxLen, Policy (OID length + sub-ids),
+    NextHopType, NextHop (length + octets). A next hop of type unknown(0) or an empty one
+    is a connected route and reads as 0.0.0.0."""
+    try:
+        i = 0
+        dtype, dlen = parts[i], parts[i + 1]
+        i += 2
+        dest_parts = parts[i : i + dlen]
+        i += dlen
+        pfx = parts[i]
+        i += 1
+        plen = parts[i]
+        i += 1 + plen
+        nhtype, nhlen = parts[i], parts[i + 1]
+        i += 2
+        nh_parts = parts[i : i + nhlen]
+        if i + nhlen != len(parts):
+            return None
+    except IndexError:
+        return None
+    if dtype != 1 or dlen != 4 or not 0 <= pfx <= 32:
+        return None  # IPv6 and other address families are not inventoried here
+    dest = ip_from_ints(dest_parts)
+    if not dest:
+        return None
+    if nhtype == 1 and nhlen == 4:
+        nh = ip_from_ints(nh_parts) or "0.0.0.0"
+    elif nhtype in (0, 1) and nhlen == 0:
+        nh = "0.0.0.0"
+    else:
+        return None
+    return dest, pfx, nh
+
+
+async def _routes_inet_cidr(sess: SnmpSession, dev: Device) -> bool:
+    """RFC 4292 inetCidrRouteTable, the table current agents fill (IPv4 rows only). True if it had any."""
+    rows = await _safe(dev, "inetCidrRouteIfIndex", sess.walk(O.INET_CIDR_ROUTE_IFINDEX)) or []
+    if not rows:
+        return False
+    types = dict(await _safe(dev, "inetCidrRouteType", sess.walk(O.INET_CIDR_ROUTE_TYPE)) or [])
+    protos = dict(await _safe(dev, "inetCidrRouteProto", sess.walk(O.INET_CIDR_ROUTE_PROTO)) or [])
+    seen = set()
+    n = 0
+    for oid, ifidx in rows:
+        dec = decode_inet_cidr_index(oid_suffix(oid, O.INET_CIDR_ROUTE_IFINDEX))
+        if dec is None:
+            continue
+        dest, pfx, nh = dec
+        if (dest, pfx, nh) in seen:
+            continue
+        seen.add((dest, pfx, nh))
+        suffix = oid[len(O.INET_CIDR_ROUTE_IFINDEX) :]
+        dev.routes.append(
+            Route(
+                dest=f"{dest}/{pfx}",
+                nexthop=nh,
+                if_index=int(ifidx) if ifidx else None,
+                type=_int(types.get(O.INET_CIDR_ROUTE_TYPE + suffix)),
+                proto=_int(protos.get(O.INET_CIDR_ROUTE_PROTO + suffix)),
+            )
+        )
+        n += 1
+    return n > 0
+
+
 async def collect_routes(sess: SnmpSession, dev: Device) -> None:
+    if await _routes_inet_cidr(sess, dev):
+        return
     cidr = await sess.walk(O.CIDR_ROUTE_IFINDEX)
     seen = set()
     if cidr:
@@ -278,10 +356,14 @@ async def collect_routes(sess: SnmpSession, dev: Device) -> None:
             if key in seen:
                 continue
             seen.add(key)
+            try:
+                prefix = mask_to_prefix(mask)
+            except ValueError:
+                continue  # a non-contiguous mask on one row must not lose the rest of the table
             suffix = oid[len(O.CIDR_ROUTE_IFINDEX) :]
             dev.routes.append(
                 Route(
-                    dest=f"{dest}/{mask_to_prefix(mask)}",
+                    dest=f"{dest}/{prefix}",
                     nexthop=nh,
                     if_index=int(ifidx) if ifidx else None,
                     type=int(types.get(O.CIDR_ROUTE_TYPE + suffix) or 0),
@@ -353,13 +435,19 @@ def _find_if_by_port(dev: Device, *candidates: str) -> Optional[int]:
     return None
 
 
-async def collect_lldp(sess: SnmpSession, dev: Device) -> None:
+async def collect_lldp(sess: SnmpSession, dev: Device, bp: Optional[dict] = None) -> None:
+    """LLDP neighbours. `bp` is dot1dBasePortIfIndex when already walked: on many switches
+    lldpLocPortNum is the bridge port, not the ifIndex, and this maps between them."""
     loc = await sess.get(O.LLDP_LOC_CHASSIS_SUBTYPE, O.LLDP_LOC_CHASSIS_ID)
     dev.lldp_chassis_id = _lldp_id(loc.get(O.LLDP_LOC_CHASSIS_SUBTYPE), loc.get(O.LLDP_LOC_CHASSIS_ID), "chassis")
     rem_sys = await sess.walk(O.LLDP_REM_SYSNAME)
     if not rem_sys:
         return
-    loc_port_id = await _safe(dev, "lldpLocPortId", sess.walk_map(O.LLDP_LOC_PORT_ID)) or {}
+    loc_port_st = await _safe(dev, "lldpLocPortIdSubtype", sess.walk_map(O.LLDP_LOC_PORT_ID_SUBTYPE)) or {}
+    loc_port_raw = await _safe(dev, "lldpLocPortId", sess.walk_map(O.LLDP_LOC_PORT_ID)) or {}
+    # decoded by subtype: a MAC-address port id becomes "aa:bb:..." (matched against ifPhysAddress)
+    # rather than six unprintable bytes
+    loc_port_id = {k: _lldp_id(loc_port_st.get(k), v, "port") for k, v in loc_port_raw.items()}
     loc_port_desc = await _safe(dev, "lldpLocPortDesc", sess.walk_map(O.LLDP_LOC_PORT_DESC)) or {}
     chassis_st = await sess.walk_map(O.LLDP_REM_CHASSIS_SUBTYPE)
     chassis_id = await sess.walk_map(O.LLDP_REM_CHASSIS_ID)
@@ -383,8 +471,10 @@ async def collect_lldp(sess: SnmpSession, dev: Device) -> None:
         if len(parts) != 3:
             continue
         local_port_num = parts[1]
-        lp_name = to_text(loc_port_desc.get(local_port_num)) or to_text(loc_port_id.get(local_port_num))
-        lif = _find_if_by_port(dev, to_text(loc_port_id.get(local_port_num)), to_text(loc_port_desc.get(local_port_num)))
+        lp_name = to_text(loc_port_desc.get(local_port_num)) or loc_port_id.get(local_port_num, "")
+        lif = _find_if_by_port(dev, loc_port_id.get(local_port_num, ""), to_text(loc_port_desc.get(local_port_num)))
+        if lif is None and bp and bp.get(local_port_num) and dev.iface(_int(bp.get(local_port_num))):
+            lif = _int(bp.get(local_port_num))  # lldpLocPortNum is a bridge port on this platform
         if lif is None and dev.iface(int(local_port_num)):
             lif = int(local_port_num)
         n = Neighbor(
@@ -466,6 +556,16 @@ async def _fdb_dot1d(sess: SnmpSession, dev: Device, vlan: Optional[int], bp: Op
     return n
 
 
+def fdb_id_to_vlan(rows) -> dict[int, int]:
+    """dot1qVlanFdbId rows [(oid, fdbId)] with index TimeMark.VlanIndex -> {fdbId: vlan}."""
+    out: dict[int, int] = {}
+    for oid, fid in rows:
+        p = oid_suffix(oid, O.DOT1Q_VLAN_FDB_ID)
+        if len(p) == 2 and fid is not None:
+            out.setdefault(_int(fid), p[1])
+    return out
+
+
 async def collect_fdb(sess: SnmpSession, dev: Device, opts: CollectOptions, bp: Optional[dict] = None) -> None:
     """Bridge forwarding table. `bp` is dot1dBasePortIfIndex if the caller already walked it."""
     # Q-BRIDGE first: includes VLAN in the index
@@ -474,6 +574,9 @@ async def collect_fdb(sess: SnmpSession, dev: Device, opts: CollectOptions, bp: 
         if bp is None:
             bp = await sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)
         status = dict(await _safe(dev, "dot1qTpFdbStatus", sess.walk(O.DOT1Q_FDB_STATUS)) or [])
+        # The first index of dot1qTpFdbTable is an FDB id, which is the VLAN id only on
+        # switches with one FDB per VLAN. dot1qVlanFdbId says which FDB each VLAN uses.
+        fdb_vlan = fdb_id_to_vlan(await _safe(dev, "dot1qVlanFdbId", sess.walk(O.DOT1Q_VLAN_FDB_ID)) or [])
         for oid, port in q:
             p = oid_suffix(oid, O.DOT1Q_FDB_PORT)
             if len(p) != 7 or not port:
@@ -483,13 +586,20 @@ async def collect_fdb(sess: SnmpSession, dev: Device, opts: CollectOptions, bp: 
                 continue
             mac = mac_from_ints(p[1:])
             ifidx = bp.get(str(port))
-            dev.fdb.append(FdbEntry(mac=mac, if_index=int(ifidx) if ifidx else None, vlan=p[0]))
+            dev.fdb.append(FdbEntry(mac=mac, if_index=int(ifidx) if ifidx else None, vlan=fdb_vlan.get(p[0], p[0])))
         if dev.fdb:
             return
     n = await _safe(dev, "dot1dTpFdb", _fdb_dot1d(sess, dev, None, bp))
     if opts.cisco_vlan_fdb and dev.vendor == "Cisco" and dev.vlans:
-        # Cisco IOS keeps a separate bridge per VLAN; walk each with community@vlan / vlan-N context
-        vlans = [v for v in sorted(dev.vlans) if v not in range(1002, 1006)][: opts.max_vlans]
+        # Cisco IOS keeps a separate bridge per VLAN; walk each with community@vlan / vlan-N context.
+        # Only operational VLANs (vtpVlanState 1) have a bridge; suspended ones just time out.
+        state = await _safe(dev, "vtpVlanState", sess.walk(O.VTP_VLAN_STATE)) or []
+        operational = {p[1] for oid, st in state if len(p := oid_suffix(oid, O.VTP_VLAN_STATE)) == 2 and _int(st) == 1}
+        candidates = [v for v in sorted(dev.vlans) if v not in range(1002, 1006) and (not operational or v in operational)]
+        vlans = candidates[: opts.max_vlans]
+        if len(candidates) > opts.max_vlans:
+            dev.errors.append(f"fdb: per-VLAN bridge tables read for {opts.max_vlans} of {len(candidates)} VLANs (max_vlans); "
+                              f"MACs in VLANs {candidates[opts.max_vlans]}.. are missing")
         for v in vlans:
             await _safe(dev, f"fdb vlan {v}", _fdb_dot1d(sess.with_vlan(v), dev, v))
         # drop the context-less entries if per-vlan gave us anything with vlan set
@@ -593,6 +703,9 @@ async def collect_counters(sess: SnmpSession, dev: Device) -> None:
     hc_out = await _safe(dev, "ifHCOutOctets", sess.walk_map(O.IF_HC_OUT_OCTETS)) or {}
     in_oct = hc_in or (await _safe(dev, "ifInOctets", sess.walk_map(O.IF_IN_OCTETS)) or {})
     out_oct = hc_out or (await _safe(dev, "ifOutOctets", sess.walk_map(O.IF_OUT_OCTETS)) or {})
+    # Which counters are 64-bit decides how a negative delta is read on the next scan (wrap vs
+    # reset). Kept on the object for this process only; it is not part of the saved record.
+    dev._hc_counters = {("in", _int(k)) for k in hc_in} | {("out", _int(k)) for k in hc_out}  # type: ignore[attr-defined]
     ie = await _safe(dev, "ifInErrors", sess.walk_map(O.IF_IN_ERRORS)) or {}
     oe = await _safe(dev, "ifOutErrors", sess.walk_map(O.IF_OUT_ERRORS)) or {}
     idis = await _safe(dev, "ifInDiscards", sess.walk_map(O.IF_IN_DISCARDS)) or {}
@@ -626,14 +739,27 @@ async def collect_poe(sess: SnmpSession, dev: Device) -> None:
     cls = await _safe(dev, "pethPsePortClass", sess.walk_map(O.PETH_PORT_CLASS)) or {}
     power = await _safe(dev, "cpeExtPsePortPwrConsumption", sess.walk_map(O.CISCO_PETH_PORT_POWER)) or {}
     by_index = {i.index: i for i in dev.interfaces}
-    by_portnum = {}
-    for i in dev.interfaces:  # last number in the name, e.g. Gi1/0/24 -> 24
-        m = re.search(r"(\d+)\s*$", i.name or i.descr or "")
+    by_portnum: dict[int, Interface] = {}
+    by_group_port: dict[tuple[int, int], Interface] = {}
+    for i in dev.interfaces:
+        label = i.name or i.descr or ""
+        m = re.search(r"(\d+)\s*$", label)  # last number in the name, e.g. Gi1/0/24 -> 24
         if m:
             by_portnum.setdefault(int(m.group(1)), i)
+        # "Gi2/0/24" / "2/24": the leading number is the stack member or slot, which is the
+        # PoE group; matching on both is what keeps a stack's members apart
+        m = re.search(r"(?<!\d)(\d+)/(?:\d+/)?(\d+)\s*$", label)
+        if m:
+            by_group_port.setdefault((int(m.group(1)), int(m.group(2))), i)
     for key, st in status.items():
-        port = int(key.split(".")[-1])
-        iface = by_index.get(port) or by_portnum.get(port)
+        parts = key.split(".")
+        port = _int(parts[-1])
+        group = _int(parts[0]) if len(parts) > 1 else 0
+        iface = by_group_port.get((group, port))
+        if iface is None and not any(g == group for g, _p in by_group_port):
+            # no interface names this group at all: fall back to the plain port number,
+            # and to ifIndex only as a last resort (it rarely equals the port number)
+            iface = by_portnum.get(port) or by_index.get(port)
         if iface is None:
             continue
         iface.poe_status = PETH_STATUS.get(_int(st), "")
@@ -656,14 +782,17 @@ def apply_counter_deltas(old: Device, new: Device) -> None:
         if dt < 1:
             continue
         speed_bps = (i.speed_mbps or 0) * 1_000_000
-        for cur, was, attr in ((i.in_octets, o.in_octets, "in_util_pct"), (i.out_octets, o.out_octets, "out_util_pct")):
+        hc = getattr(new, "_hc_counters", None)
+        for cur, was, attr, direction in ((i.in_octets, o.in_octets, "in_util_pct", "in"), (i.out_octets, o.out_octets, "out_util_pct", "out")):
             d = cur - was
             if d < 0:
                 # a 32-bit ifInOctets counter wraps every ~34s on a gigabit link; recover
                 # the delta if adding one 32-bit turn gives a rate within the link speed.
-                # A larger negative delta is a counter reset (reboot), which we skip.
+                # A larger negative delta is a counter reset (reboot), which we skip - and
+                # so is any negative delta on a 64-bit counter, which does not wrap in practice.
+                is_64 = (direction, i.index) in hc if hc is not None else max(cur, was) >= (1 << 32)
                 wrapped = d + (1 << 32)
-                d = wrapped if speed_bps and wrapped * 8.0 / dt <= speed_bps else -1
+                d = wrapped if not is_64 and speed_bps and wrapped * 8.0 / dt <= speed_bps else -1
             if d >= 0 and speed_bps:
                 setattr(i, attr, round(min(100.0, d * 8.0 / dt / speed_bps * 100.0), 1))
         derr = (i.in_errors + i.out_errors) - (o.in_errors + o.out_errors)
@@ -741,6 +870,28 @@ async def collect_stp(sess: SnmpSession, dev: Device) -> None:
                "is_root": bool(own and root_mac and own == root_mac), "root_port": dev.iface_label(rp) if rp else ""}
 
 
+_OID_NAMES = {v: k for k, v in vars(O).items() if isinstance(v, str) and v[:1].isdigit() and k.isupper()}
+
+
+def _table_name(note: str) -> str:
+    """'1.3.6.1.2.1.17.7.1.2.2.1.2: truncated ...' -> 'DOT1Q_FDB_PORT: truncated ...'."""
+    oid, sep, rest = note.partition(":")
+    return f"{_OID_NAMES.get(oid, oid)}{sep}{rest}"
+
+
+def record_truncations(sess, dev: Device) -> None:
+    """Move the session's truncated-walk notes onto the device, so an incomplete table is
+    visible in the record rather than looking like the whole table."""
+    notes = getattr(sess, "truncations", None)
+    if not notes:
+        return
+    for n in notes:
+        msg = _table_name(n)
+        if msg not in dev.errors:
+            dev.errors.append(msg)
+    notes.clear()
+
+
 async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysinfo: Optional[dict] = None) -> Device:
     t0 = time.time()
     dev = Device(id=ip, credential=sess.cred.label)
@@ -750,15 +901,15 @@ async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysin
     await _safe(dev, "ipAddrTable", collect_ip_addrs(sess, dev))
     if ip not in dev.ips:
         dev.ips.append(ip)
-    await _safe(dev, "lldp", collect_lldp(sess, dev))
+    # walked once here: LLDP local ports, the FDB and the per-port VLANs are all keyed by bridge port
+    bp = await _safe(dev, "dot1dBasePortIfIndex", sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)) or {}
+    await _safe(dev, "lldp", collect_lldp(sess, dev, bp))
     await _safe(dev, "cdp", collect_cdp(sess, dev))
     if opts.arp:
         await _safe(dev, "arp", collect_arp(sess, dev))
     if opts.routes:
         await _safe(dev, "routes", collect_routes(sess, dev))
     await _safe(dev, "vlans", collect_vlans(sess, dev))
-    # walked once here: the FDB and the per-port VLANs are both keyed by bridge port
-    bp = await _safe(dev, "dot1dBasePortIfIndex", sess.walk_map(O.DOT1D_BASE_PORT_IFINDEX)) or {}
     if opts.fdb:
         await _safe(dev, "fdb", collect_fdb(sess, dev, opts, bp))
     await _safe(dev, "port vlans", collect_port_vlans(sess, dev, bp))
@@ -773,6 +924,7 @@ async def collect_device(sess: SnmpSession, ip: str, opts: CollectOptions, sysin
         await _safe(dev, "counters", collect_counters(sess, dev))
         if bp or dev.fdb:
             await _safe(dev, "poe", collect_poe(sess, dev))
+    record_truncations(sess, dev)
     dev.role = classify_role(dev)
     dev.collected_at = time.time()
     dev.collect_seconds = round(dev.collected_at - t0, 2)
