@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 
 from .model import Inventory
-from .util import in_scope, norm_mac, plausible_mac
+from .util import in_scope, norm_mac, plausible_mac, scoped_networks
 
 log = logging.getLogger("netmap.sweep")
 
@@ -212,12 +212,34 @@ async def _ping(ip: str, sem: asyncio.Semaphore) -> Optional[str]:
         return ip if ok else None
 
 
-async def sweep_subnet(cidr: str, fingerprint: bool = False, nmap_timeout: float = 900.0, top_ports: int = 25) -> list[dict]:
-    net = ipaddress.ip_network(cidr)
+def sweep_addresses(net) -> list:
+    """Every address a sweep may try in `net`: the usable hosts of a normal subnet, both
+    addresses of a /31 and the single address of a /32 (the network address itself)."""
+    net = ipaddress.ip_network(str(net), strict=False)
+    if net.prefixlen >= net.max_prefixlen - 1:
+        return list(net)
+    return list(net.hosts())
+
+
+async def sweep_subnet(cidr: str, fingerprint: bool = False, nmap_timeout: float = 900.0, top_ports: int = 25,
+                       scope: Optional[list] = None, exclude: Optional[list] = None) -> list[dict]:
+    """Find live addresses in `cidr`. With `scope`/`exclude` given, only the part of the
+    subnet inside the scope and outside every excluded range is ever probed: nmap gets
+    exactly those ranges, and the ping fallback skips everything else."""
+    net = ipaddress.ip_network(cidr, strict=False)
+    if scope is None:
+        pieces = [net]
+    else:
+        pieces = scoped_networks(net, scope, exclude or [])
+        if not pieces:
+            log.warning("%s lies entirely outside the scope/exclude rules; not swept", net)
+            return []
+        if pieces != [net]:
+            log.info("%s: sweeping only the in-scope part: %s", net, ", ".join(str(p) for p in pieces))
     if find_nmap():
         if not is_admin():
             log.warning("not elevated: nmap will use TCP pings only (no ARP/ICMP); run with sudo / as Administrator for full host discovery")
-        xml = await _run_nmap([*nmap_ping_opts(), str(net)], nmap_timeout)
+        xml = await _run_nmap([*nmap_ping_opts(), *(str(p) for p in pieces)], nmap_timeout)
         hosts = _parse_nmap_xml(xml) if xml else []
         if fingerprint and hosts:
             targets = [h["ip"] for h in hosts]
@@ -231,7 +253,8 @@ async def sweep_subnet(cidr: str, fingerprint: bool = False, nmap_timeout: float
         return hosts
     log.warning("nmap not found; falling back to ICMP ping only (no MAC/vendor data)")
     sem = asyncio.Semaphore(128)
-    results = await asyncio.gather(*[_ping(str(ip), sem) for ip in net.hosts()])
+    addrs = [str(ip) for ip in sweep_addresses(net) if any(ip in p for p in pieces)]
+    results = await asyncio.gather(*[_ping(ip, sem) for ip in addrs])
     return [{"ip": ip, "mac": None, "vendor": "", "hostname": "", "ports": []} for ip in results if ip]
 
 
@@ -293,7 +316,8 @@ async def discover_targets(
     nets = []
     for t in targets:
         net = ipaddress.ip_network(str(t), strict=False)
-        if not in_scope(str(net.network_address + 1), scope, exclude) and net.prefixlen < 32:
+        if not scoped_networks(net, scope, exclude):
+            # nothing in it may be touched: an excluded /32, or a range outside the scope
             log.warning("target %s is outside the scope/exclude rules; skipping", net)
             continue
         nets.append(net)
@@ -304,9 +328,8 @@ async def discover_targets(
     if probe_all:
         ips = []
         for net in nets:
-            # /31 (RFC 3021) has two usable p2p addresses - net.hosts() yields both;
-            # only a /32 is the single address.
-            hosts = [net.network_address] if net.prefixlen == 32 else list(net.hosts())
+            # /31 (RFC 3021) has two usable p2p addresses; a /32 is the single address.
+            hosts = sweep_addresses(net)
             if net.prefixlen < max_prefix:
                 log.warning("target %s is larger than /%d; --probe-all would send %d probes, skipping", net, max_prefix, len(hosts))
                 continue
@@ -323,7 +346,7 @@ async def discover_targets(
             log.info("skipping target %s: larger than /%d (raise --sweep-max-size to include)", net, max_prefix)
             return
         async with sem:
-            hosts = await sweep_subnet(str(net), fingerprint=fingerprint)
+            hosts = await sweep_subnet(str(net), fingerprint=fingerprint, scope=scope, exclude=exclude)
         for rec in hosts:
             if not in_scope(rec["ip"], scope, exclude):
                 continue
@@ -351,7 +374,7 @@ async def sweep(inv: Inventory, subnets: list[str], scope: list, exclude: list, 
         if net.prefixlen < max_prefix:
             log.info("skipping %s: larger than /%d (raise --sweep-max-size to include)", cidr, max_prefix)
             continue
-        if not in_scope(str(net.network_address + 1), scope, exclude):
+        if not scoped_networks(net, scope, exclude):
             log.info("skipping %s: out of scope", cidr)
             continue
         s = inv.add_subnet(str(net), "sweep")
@@ -367,7 +390,7 @@ async def sweep(inv: Inventory, subnets: list[str], scope: list, exclude: list, 
     async def one(cidr: str):
         nonlocal found
         async with sem:
-            hosts = await sweep_subnet(cidr, fingerprint=fingerprint)
+            hosts = await sweep_subnet(cidr, fingerprint=fingerprint, scope=scope, exclude=exclude)
         for rec in hosts:
             if not in_scope(rec["ip"], scope, exclude):
                 continue

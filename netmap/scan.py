@@ -22,7 +22,7 @@ from .graph import enrich_inventory
 from .model import Inventory
 from .snmp import Credential
 from .sweep import discover_targets, sweep
-from .util import RFC1918, in_scope
+from .util import RFC1918, in_scope, scope_devices, scope_hosts
 
 log = logging.getLogger("netmap.scan")
 
@@ -184,23 +184,30 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
             phase("Sweeping subnets")
             n = await sweep(inv, list(inv.subnets), scope, exclude, fingerprint=req.fingerprint, max_prefix=req.sweep_max_prefix, resweep=req.resweep)
             log.info("sweep found %d hosts", n)
+        # Everything after the crawl works from the inventory, which may hold addresses this
+        # scan is not allowed to touch (a DHCP or hypervisor import, an earlier wider scan):
+        # every phase below gets only the in-scope addresses.
+        devices_in, hosts_in = scope_devices(inv, scope, exclude), scope_hosts(inv, scope, exclude)
+        skipped = (len(inv.devices) - len(devices_in)) + (sum(1 for h in inv.hosts if h not in inv.ip_to_device) - len(hosts_in))
+        if skipped and (req.resolve_names or req.identify or req.port_scan):
+            log.info("%d address(es) in the inventory are outside this scan's scope and are left alone", skipped)
         if req.resolve_names:
             phase("Resolving names")
-            await resolve_names(inv)
+            await resolve_names(inv, hosts=devices_in + hosts_in)
         if req.identify:
             from .discover import identify_hosts
 
             phase("Identifying hosts", "NetBIOS, mDNS, SSDP and web probes")
-            n = await identify_hosts(inv)
+            n = await identify_hosts(inv, hosts=hosts_in)
             log.info("active identification: %d host(s) answered a probe", n)
             from .discover import probe_management
 
-            m = await probe_management(inv)
+            m = await probe_management(inv, device_ids=devices_in)
             log.info("management-plane check: %d device(s) expose a management port", m)
             try:
                 from .probes_extra import probe_extra
 
-                x = await probe_extra(inv)
+                x = await probe_extra(inv, hosts=hosts_in)
                 log.info("broad protocol probes: %d host(s) answered (WS-Discovery/IPMI/OT)", x)
             except ImportError:
                 pass
@@ -208,8 +215,7 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
             from .sweep import nmap_inspect
 
             phase("Scanning ports", "nmap service" + (" and OS" if req.os_detect else "") + " detection")
-            ips = [ip for ip in list(inv.devices) + [h for h in inv.hosts if h not in inv.ip_to_device]
-                   if in_scope(ip, scope, exclude)]
+            ips = devices_in + hosts_in
             results = await nmap_inspect(ips, fingerprint=True, os_detect=req.os_detect, top_ports=req.top_ports)
             for ip, rec in results.items():
                 _apply_nmap(inv, ip, rec)

@@ -191,6 +191,8 @@ class Crawler:
         for a in dev.arp:
             if not in_scope(a.ip, self.cfg.scope, self.cfg.exclude):
                 continue
+            if a.ip in self.inv.ip_to_device:
+                continue  # one of a polled device's own addresses, not a host
             h = self.inv.touch_host(a.ip, "arp", a.mac)
             seen = {"device": dev.id, "interface": dev.iface_label(a.if_index), "vlan": None, "via": "arp"}
             if seen not in h.seen_on:

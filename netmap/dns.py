@@ -28,15 +28,17 @@ def ptr(ip: str) -> Optional[str]:
     return name
 
 
-async def resolve_names(inv: Inventory, workers: int = 32, timeout: float = 4.0, lookup=ptr) -> int:
+async def resolve_names(inv: Inventory, workers: int = 32, timeout: float = 4.0, lookup=ptr, hosts: Optional[list] = None) -> int:
     """Fill Host.hostname and Device.dns_name from PTR records where they are empty.
 
     The system resolver has no per-call timeout, so each lookup runs in a thread and is
     abandoned after `timeout`; a slow DNS server costs time, never correctness.
-    Returns the number of names found.
+    `hosts` limits the lookups to those addresses (devices or hosts); None means every
+    address in the inventory. Returns the number of names found.
     """
-    todo: list[str] = [d.id for d in inv.devices.values() if not d.dns_name]
-    todo += [ip for ip, h in inv.hosts.items() if not h.hostname and ip not in inv.ip_to_device]
+    allowed = None if hosts is None else set(hosts)
+    todo: list[str] = [d.id for d in inv.devices.values() if not d.dns_name and (allowed is None or d.id in allowed)]
+    todo += [ip for ip, h in inv.hosts.items() if not h.hostname and ip not in inv.ip_to_device and (allowed is None or ip in allowed)]
     if not todo:
         return 0
     log.info("resolving names for %d addresses", len(todo))

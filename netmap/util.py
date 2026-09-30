@@ -126,6 +126,57 @@ def in_scope(ip: str, allow: list, deny: list) -> bool:
     return any(a in n for n in allow)
 
 
+def split_scope(addrs: Iterable[str], allow: list, deny: list) -> tuple[list[str], list[str]]:
+    """Partition addresses into (inside, outside) the scope/exclude rules, order kept."""
+    inside: list[str] = []
+    outside: list[str] = []
+    for ip in addrs:
+        (inside if in_scope(ip, allow, deny) else outside).append(ip)
+    return inside, outside
+
+
+def scope_hosts(inv, allow: list, deny: list) -> list[str]:
+    """Host addresses a scan phase may probe or resolve: inside the scope, not excluded,
+    and not one of a polled device's own addresses (those are handled as devices).
+
+    Hosts can enter an inventory from a DHCP export, a hypervisor import or an earlier,
+    wider scan; none of that widens what this scan is allowed to touch."""
+    return [ip for ip in inv.hosts if ip not in inv.ip_to_device and in_scope(ip, allow, deny)]
+
+
+def scope_devices(inv, allow: list, deny: list) -> list[str]:
+    """Device ids (their polled address) inside the scope/exclude rules."""
+    return [did for did in inv.devices if in_scope(did, allow, deny)]
+
+
+def scoped_networks(net, allow: list, deny: list) -> list:
+    """The parts of `net` a scan may touch: the subnet intersected with the scope, minus
+    every excluded range (and the never-scanned ranges), as a minimal list of networks.
+
+    An empty list means the subnet lies entirely outside the rules."""
+    net = ipaddress.ip_network(str(net), strict=False)
+    pieces = []
+    for s in allow:
+        s = ipaddress.ip_network(str(s), strict=False)
+        if s.version != net.version:
+            continue
+        if net.subnet_of(s):
+            pieces.append(net)
+        elif s.subnet_of(net):
+            pieces.append(s)
+    pieces = list(ipaddress.collapse_addresses(pieces))
+    for ex in [ipaddress.ip_network(str(d), strict=False) for d in deny] + ALWAYS_EXCLUDED:
+        nxt = []
+        for p in pieces:
+            if p.version != ex.version or not (p.subnet_of(ex) or ex.subnet_of(p)):
+                nxt.append(p)
+            elif ex.subnet_of(p) and ex != p:
+                nxt.extend(p.address_exclude(ex))
+            # else: p sits inside the excluded range - dropped
+        pieces = nxt
+    return sorted(ipaddress.collapse_addresses(pieces))
+
+
 def short_name(name: str) -> str:
     """Lower-case, strip domain suffix and CDP '(serial)' decoration for fuzzy hostname matching."""
     n = (name or "").strip().lower()
