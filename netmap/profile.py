@@ -331,8 +331,11 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
             add("NetBIOS", "answered UDP 137 with its adapter MAC", "Windows / SMB host", "windows", 6,
                 of=None if (ssh_fam and ssh_fam != "windows") else "windows")
         else:
-            # a null unit id is how Samba (Linux servers, consumer NAS) answers - weak evidence only
-            add("NetBIOS", "answered UDP 137 (no adapter MAC: Samba-style)", "SMB host", "windows", 2)
+            # a null unit id is how Samba (Linux servers, consumer NAS) answers - weak evidence
+            # only, and none at all for Windows when the SSH banner already names another OS
+            samba_like = bool(ssh_fam) and ssh_fam != "windows"
+            add("NetBIOS", "answered UDP 137 (no adapter MAC: Samba-style)", "SMB host",
+                None if samba_like else "windows", 0 if samba_like else 2)
         if nb.get("is_dc"):
             add("NetBIOS", "advertises the domain-controller role (0x1C)", "Active Directory domain controller", "windows", 6, of="windows", os_="Windows Server")
         if nb.get("domain"):
