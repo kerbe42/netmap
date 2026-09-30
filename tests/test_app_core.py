@@ -363,6 +363,37 @@ def test_profile_identifies_from_multiple_signals():
     assert pb.vendor.startswith("Raspberry") and pb.confidence in ("low", "medium")
 
 
+def test_device_model_from_sysdescr():
+    from netmap.util import device_model, oui_vendor
+    # the vendors that don't populate ENTITY-MIB - model must come from sysDescr
+    assert device_model("", "FortiGate-60F v7.2.8,build1639b", "Fortinet") == "FortiGate-60F"
+    assert device_model("", "Palo Alto Networks PA-3220 series", "Palo Alto") == "PA-3220"
+    assert device_model("", "cisco WS-C2960X-48FPD-L", "Cisco") == "WS-C2960X-48FPD-L"
+    assert device_model("", "RouterOS RB4011iGS+", "MikroTik") == "RB4011iGS+"
+    assert device_model("", "Some generic host", "Linux") == ""  # no false model
+    # MA-M/MA-S addresses fall back to the IEEE parent - report unknown, not that
+    import netmap.util as u
+    orig = u._load_oui
+    u._load_oui = lambda: {"AABBCC": "IEEE Registration Authority", "DDEEFF": "Acme Corp"}
+    try:
+        assert oui_vendor("AA:BB:CC:11:22:33") == ""
+        assert oui_vendor("DD:EE:FF:11:22:33") == "Acme Corp"
+    finally:
+        u._load_oui = orig
+
+
+def test_ssh_banner_identifies_os():
+    from netmap.model import Host
+    from netmap.profile import profile_host
+    h = Host(ip="10.0.0.9")
+    h.ports = [{"port": 22, "service": "ssh"}]
+    h.probes = {"ssh": {"banner": "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5",
+                        "software": "OpenSSH_8.2p1 Ubuntu-4ubuntu0.5", "os": "Ubuntu", "os_family": "linux"}}
+    p = profile_host(h)
+    assert p.os == "Ubuntu" and p.os_family == "linux"
+    assert any("SSH" in e["source"] for e in p.evidence)
+
+
 def test_fdb_places_host_on_leaf_not_uplink():
     """A host MAC is learned by every switch on its path. It must land on the access
     port of the leaf switch, never on a LAG/trunk uplink that carries many MACs."""

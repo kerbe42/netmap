@@ -13,7 +13,7 @@ import networkx as nx
 
 from .model import Inventory
 from .sweep import classify_host
-from .util import oui_vendor, parse_os_version, plausible_mac, short_name
+from .util import device_model, oui_vendor, parse_os_version, plausible_mac, short_name
 
 TRUNK_MAC_THRESHOLD = 8
 
@@ -76,6 +76,7 @@ def enrich_inventory(inv: Inventory) -> None:
                     d.vendor = v
                     break
         d.os_version = d.os_version or parse_os_version(d.sysdescr, d.vendor)  # maps saved before it was collected
+        d.model = d.model or device_model(d.sysobjectid, d.sysdescr, d.vendor)  # sysDescr model where ENTITY-MIB was blank
     _register_vips(inv)
 
 

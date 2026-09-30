@@ -160,7 +160,15 @@ def oui_vendor(mac: Optional[str]) -> str:
     hexs = re.sub(r"[^0-9a-fA-F]", "", mac).upper()
     if len(hexs) < 6:
         return ""
-    return _load_oui().get(hexs[:6], "")
+    v = _load_oui().get(hexs[:6], "")
+    # MA-M (/28) and MA-S (/36) blocks share a /24 parent registered to the IEEE
+    # itself; returning that parent is worse than saying "unknown", so drop it.
+    if v in _OUI_PLACEHOLDERS:
+        return ""
+    return v
+
+
+_OUI_PLACEHOLDERS = {"IEEE Registration Authority", "Private", "IEEE REGISTRATION AUTHORITY"}
 
 
 def portlist_ports(b) -> set[int]:
@@ -213,6 +221,45 @@ def parse_os_version(sysdescr: str, vendor: str = "") -> str:
             m = rx.search(text)
             if m:
                 return m.group(1).rstrip(".,;:-")[:40]
+    return ""
+
+
+# Per-vendor patterns that pull the hardware model out of a sysDescr. These matter
+# because the vendors here (FortiGate, PAN, MikroTik, Aruba, many Cisco access
+# switches) frequently DON'T populate ENTITY-MIB entPhysicalModelName, so without
+# this the model column stays blank on exactly the gear you inherit. Matched
+# case-insensitively; the matched text (normalised) becomes the model.
+_MODEL_RES = {
+    "Fortinet": [re.compile(r"\b(Forti(?:Gate|Switch|AP|WiFi|Analyzer|Manager|ADC))[- ]?([0-9]{2,4}[A-Za-z]{0,3})\b", re.I)],
+    "Palo Alto": [re.compile(r"\b(PA-[0-9]{3,4}[A-Za-z]?)\b", re.I)],
+    "MikroTik": [re.compile(r"\b(RB[\w-]{2,}\+?|CCR\d{4}[\w-]*|CRS\d{3}[\w-]*|hAP\w*|hEX\w*|CHR)", re.I)],
+    "Cisco": [re.compile(r"\b(WS-C\S+|C9\d{3}[A-Za-z0-9-]*|N\dK-\S+|ISR\d{4}[A-Za-z0-9/]*|ASR\d{4}[A-Za-z0-9-]*|IE-\d{4}[A-Za-z0-9-]*|AIR-\S+|Cat\d{4})\b", re.I)],
+    "Aruba": [re.compile(r"MODEL:\s*([A-Za-z0-9-]+)", re.I),
+              re.compile(r"\b(AP-\d{3}[A-Za-z]*|IAP-\d{3}[A-Za-z]*|29\d{2}[A-Z]?|25\d{2}[A-Z]?|CX[- ]?\d{4})\b", re.I)],
+    "HPE": [re.compile(r"\b(JL\d{3}[A-Z]|JG\d{3}[A-Z]|ProLiant\s+\S+\s?\S*)\b", re.I)],
+    "Juniper": [re.compile(r"\b(SRX\d{3,4}\w*|EX\d{4}\w*|MX\d{2,4}\w*|QFX\d{4}\w*|ACX\d{4}\w*)\b", re.I)],
+    "Ubiquiti": [re.compile(r"\b(U[6A-Za-z]+-[\w-]+|USW-[\w-]+|UDM[- ]?\w*|USG[- ]?\w*|UAP-[\w-]+|EdgeSwitch\s?\S*|EdgeRouter\s?\S*)", re.I)],
+    "Arista": [re.compile(r"\b(DCS-\S+)\b", re.I)],
+    "Synology": [re.compile(r"\b([DR]S\d{3,4}\+?[a-z]*)")],
+    "QNAP": [re.compile(r"\b(TS-\w+|TVS-\w+)\b", re.I)],
+}
+
+
+def device_model(sysobjectid: str, sysdescr: str, vendor: str = "") -> str:
+    """Best-effort hardware model from the sysDescr, keyed by the detected vendor.
+    Returns '' when nothing matches (so it never overwrites a real ENTITY-MIB model)."""
+    text = (sysdescr or "").strip()
+    if not text:
+        return ""
+    pats = _MODEL_RES.get((vendor or "").strip())
+    if not pats:
+        return ""
+    for rx in pats:
+        m = rx.search(text)
+        if m:
+            if len(m.groups()) >= 2 and m.group(2):  # Fortinet: family + number
+                return f"{m.group(1)}-{m.group(2)}".rstrip("-")
+            return m.group(1).strip()[:40]
     return ""
 
 

@@ -367,6 +367,13 @@ def profile_host(host, snmp_role_fn=None) -> Profile:
         add("WS-Discovery", f"advertises WS-Discovery ({', '.join(wsd.get('types', [])[:2])})", role, role, 6,
             of="windows" if role == "windows" else ("embedded" if role in ("camera",) else "printer" if role == "printer" else None))
 
+    # ---- SSH identification banner (unauthenticated) ----------------------
+    ssh = probes.get("ssh") or {}
+    if ssh.get("banner"):
+        note = f"SSH banner: {ssh.get('software') or ssh['banner']}"
+        add("SSH banner", note, ssh.get("os") or "SSH server", "server", 2,
+            of=ssh.get("os_family") or None, os_=ssh.get("os") or None)
+
     # ---- deep inspection (SSH/WinRM), the most authoritative -------------
     sysd = getattr(host, "system", {}) or {}
     if sysd.get("os"):

@@ -717,6 +717,47 @@ def _add_source(host, source: str) -> None:
         setattr(host, "sources", [source])
 
 
+# software token -> (os_family, note) for the SSH banner. Unauthenticated, read-only:
+# the server sends its identification string before any auth, and it often names the
+# distro/OS outright ("SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5").
+_SSH_OS = [
+    ("ubuntu", "linux", "Ubuntu"), ("debian", "linux", "Debian"), ("raspbian", "linux", "Raspberry Pi OS"),
+    ("el7", "linux", "RHEL/CentOS 7"), ("el8", "linux", "RHEL/CentOS 8"), ("el9", "linux", "RHEL/CentOS 9"),
+    ("freebsd", "linux", "FreeBSD"), ("openbsd", "linux", "OpenBSD"),
+    ("windows", "windows", "Windows (OpenSSH)"), ("cisco", "ios", "Cisco"), ("mikrotik", "routeros", "MikroTik"),
+    ("dropbear", "embedded", "embedded (Dropbear)"), ("rosssh", "routeros", "MikroTik"),
+]
+
+
+def ssh_banner(ip: str, timeout: float) -> Optional[dict]:
+    """Read a host's SSH identification banner (read-only; we send our own ident then
+    close, never attempt auth). Returns {banner, software, os, os_family} or None."""
+    import socket
+
+    try:
+        with socket.create_connection((ip, 22), timeout) as s:
+            s.settimeout(timeout)
+            data = s.recv(256)
+            try:
+                s.sendall(b"SSH-2.0-NetMap\r\n")  # polite ident so the server doesn't log a scan-abort
+            except OSError:
+                pass
+    except (OSError, socket.timeout):
+        return None
+    line = data.split(b"\n", 1)[0].decode("latin-1", "replace").strip()
+    if not line.startswith("SSH-"):
+        return None
+    parts = line.split("-", 2)
+    software = parts[2] if len(parts) > 2 else ""
+    low = line.lower()
+    os_txt = os_fam = ""
+    for token, fam, label in _SSH_OS:
+        if token in low:
+            os_txt, os_fam = label, fam
+            break
+    return {"banner": line[:120], "software": software[:80], "os": os_txt, "os_family": os_fam}
+
+
 async def identify_hosts(
     inv: Inventory,
     hosts: Optional[list] = None,
@@ -724,6 +765,7 @@ async def identify_hosts(
     do_mdns: bool = True,
     do_ssdp: bool = True,
     do_http: bool = True,
+    do_ssh: bool = True,
     workers: int = 64,
     timeout: float = 2.0,
     probes: Optional[dict] = None,
@@ -750,7 +792,7 @@ async def identify_hosts(
 
     enabled = [
         name for name, on in (
-            ("netbios", do_netbios), ("mdns", do_mdns), ("ssdp", do_ssdp), ("http", do_http)
+            ("netbios", do_netbios), ("mdns", do_mdns), ("ssdp", do_ssdp), ("http", do_http), ("ssh", do_ssh)
         ) if on
     ]
     if not enabled:
@@ -774,6 +816,8 @@ async def identify_hosts(
             return lambda: ssdp_probe(ip, timeout)
         if name == "http":
             return lambda: _http_probe_host(ip, host, timeout)
+        if name == "ssh":
+            return lambda: ssh_banner(ip, timeout)
         return lambda: None
 
     async def _run(name: str, ip: str, host):

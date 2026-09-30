@@ -185,7 +185,10 @@ it sends a few small **read-only** probes to each host and needs no admin rights
 | mDNS / Bonjour (UDP 5353) | `.local` name and advertised services — printers (IPP), Apple AV (AirPlay), Chromecast, HomeKit, file shares |
 | SSDP / UPnP (UDP 1900) | device description: manufacturer, model, friendly name, device type (media, gateway, NAS, camera) |
 | HTTP / TLS banner | web-UI Server header and the TLS certificate CN/SAN — identifies appliances, cameras, NAS, iLO/iDRAC |
+| SSH banner | the server's identification string (read-only, no auth) — names the distro/OS, e.g. `OpenSSH_8.2p1 Ubuntu`, even on a no-privilege field laptop |
 | nmap (optional) | open ports and service/version detection |
+
+Device **model** is read from ENTITY-MIB, and — for the gear that leaves that blank (FortiGate, Palo Alto, MikroTik, Aruba, many Cisco access switches) — parsed from the sysDescr, so the model column is populated on far more real kit.
 
 Every host ends up with a **role, OS, vendor, model and a confidence** (high/medium/low), and its details
 carry a **Why** tab listing each signal, what was seen, and what it implies — so you can trust or correct
