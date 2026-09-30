@@ -6,7 +6,7 @@ All notable changes to NetMap are recorded here. The format follows
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
-## [Unreleased]
+## [0.10.0] - 2026-09-30
 
 Fixes from a review of the whole codebase, grouped by what they mean for someone using the tool.
 
@@ -120,8 +120,37 @@ Fixes from a review of the whole codebase, grouped by what they mean for someone
   importing nothing.
 
 ### Desktop app
-- Fixes from the review of the desktop app (scan dialog, lists, details panel, exports); to be
-  summarised here at release time.
+- Nothing you typed or moved is lost any more: the last node drag before Save is written, the
+  last half-second of Notes typing is kept when you click another item or close, and the
+  project is no longer overwritten after a cancelled scan unless you had already saved it this
+  session. Three rotating backups (`.bak1`-`.bak3`) are kept beside the project, with File ▸
+  Revert to saved and Tools ▸ Compare with the previous saved version.
+- Undo and redo (Ctrl+Z / Ctrl+Shift+Z) for note and role edits, Remove from project and
+  Re-arrange.
+- Crash recovery: while there are unsaved changes a recovery copy is written every two
+  minutes and offered on the next start.
+- Needs attention and Compliance rows can be acknowledged (right-click); acknowledged rows are
+  hidden until you tick Show acknowledged, and the acknowledgement is saved with the project.
+- Closing the window waits for every background job (scan, config capture, host inspection,
+  vCenter discovery, update check) instead of tearing threads down mid-flight; starting a
+  scan, opening or creating a project, or removing an item is blocked with a message while
+  another job runs, and side jobs work on a copy of the inventory and merge on the UI thread.
+- Large inventories: list sorting happens once in the model, saving, exporting and the scan's
+  working copy run off the UI thread behind a wait cursor, and live scan updates are prepared
+  in the background. On a 14,000-host project the Hosts page update went from about 5 s to
+  0.2 s, a header sort from 2 s to 0.2 s, and the spreadsheet export no longer freezes the
+  window.
+- The map keeps its selection when it rebuilds, a traced path stays zoomed to the path, and
+  exported images are capped at 8,192 px with a real error if writing fails.
+- Lists: hosts sort by address by default, the Type column shows the same labels as the
+  dashboard and details, percentage bars stay readable at every fill level, empty lists say
+  what to do next, exports remember the export folder, and the navigation pane fits its
+  longest label. The port panel shows "Port N" interfaces and sizes itself correctly for small
+  switches.
+- Query results use the same fast table as the other pages; large subnets build their address
+  grid once and cap the address list.
+- Credential labels default to "v2c credential N"; the credentials list explains how to add
+  the first one. Menu and toolbar wording names file formats rather than products.
 - Uninstalling offers to remove the settings and saved credentials from the registry, removes
   the log folder, and an upgrade clears the previous version's program files first so no stale
   libraries are left behind.
@@ -274,7 +303,7 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
-[Unreleased]: https://github.com/kerbe42/netmap/compare/v0.9.0...HEAD
+[0.10.0]: https://github.com/kerbe42/netmap/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kerbe42/netmap/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/kerbe42/netmap/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/kerbe42/netmap/compare/v0.7.0...v0.8.0

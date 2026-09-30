@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netmap"
-version = "0.9.0"
+version = "0.10.0"
 description = "Network inventory and topology mapping: a desktop app and CLI that discover devices, links, subnets and hosts over SNMP"
 readme = "README.md"
 license = "MIT"
