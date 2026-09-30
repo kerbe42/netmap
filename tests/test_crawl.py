@@ -7,16 +7,18 @@ import tempfile
 
 import pytest
 
+from netmap import oids as O
+from netmap.collect import MAX_COMPONENTS, CollectOptions, collect_device, collect_entity, collect_system
 from netmap.crawl import CrawlConfig, Crawler
 from netmap.graph import build_graph, enrich_inventory, export_csv, export_dot, export_graphml, ipam_rows, text_summary, vlan_rows
 from netmap.model import Device, Interface, Inventory
 from netmap.render import render_html
 from netmap.report import export_xlsx
 from netmap.snmp import Credential
-from netmap.util import in_scope, mask_to_prefix, oid_suffix, oui_vendor, short_name
+from netmap.util import in_scope, mask_to_prefix, oid_suffix, oui_vendor, parse_os_version, portlist_ports, short_name
 
 from . import labnet
-from .fake_snmp import make_prober
+from .fake_snmp import FakeSession, make_prober
 
 
 def crawl(base="10", **kw):
@@ -76,6 +78,136 @@ def test_crawl_finds_all_devices_and_links():
     assert not sw1.errors and not sw2.errors and not r1.errors
 
 
+def test_hardware_os_version_port_vlans_and_lags():
+    inv, _, _ = crawl()
+    r1, sw1, sw2 = inv.devices["10.0.0.1"], inv.devices["10.0.0.2"], inv.devices["10.1.0.2"]
+    assert (r1.os_version, sw1.os_version, sw2.os_version) == ("17.6.4", "16.12.4", "YA.16.10.0016")
+    # ENTITY-MIB: the stack, both members, their supplies, a fan, the uplink module and its optic.
+    # Slot containers, the sensor, the copper port, the empty SFP cage and the anonymous entity are gone.
+    comps = {c.index: c for c in sw1.components}
+    assert sorted(comps) == [1, 1000, 1002, 1003, 1005, 1008, 2000, 2002]
+    assert [(c.name, c.serial) for c in sw1.components if c.cls == "chassis"] == [("Switch 1", "FOC1234SW1X"), ("Switch 2", "FOC1234SW2Y")]
+    sfp = comps[1008]
+    assert (sfp.cls, sfp.model, sfp.serial, sfp.hw_rev, sfp.fru) == ("port", "SFP-10G-SR", "AVD2045K1LM", "V03", True)
+    # parents skip the dropped cage/slot: the optic hangs off the module, the supply off its chassis
+    assert (sfp.parent, comps[1002].parent, comps[1005].parent, comps[1000].parent, comps[1].parent) == (1005, 1000, 1000, 1, 0)
+    assert (comps[1].cls, comps[1].fru, comps[1003].cls, comps[1000].sw_rev, comps[1000].fw_rev) == ("stack", False, "fan", "16.12.4", "16.12.2r")
+    # the device itself still carries the primary chassis
+    assert (sw1.model, sw1.serial) == ("WS-C3850-24T", "FOC1234SW1X")
+    assert [(c.cls, c.model, c.serial) for c in r1.components] == [("chassis", "ISR4331/K9", "FDO2222R1XX")]
+    # Cisco: trunk with its native VLAN, access ports with theirs, the routed port untouched
+    assert [(sw1.iface(i).mode, sw1.iface(i).vlan) for i in (2, 5, 24, 1, 10)] == [("trunk", 1), ("access", 20), ("access", 10), ("", None), ("", None)]
+    # Q-BRIDGE on the HP: PVID per bridge port; tagged in two VLANs = trunk, one tagged voice VLAN is not
+    assert {p: (sw2.iface(p).vlan, sw2.iface(p).mode) for p in (1, 2, 3, 4, 24, 289, 21)} == {
+        1: (1, "access"), 2: (1, "access"), 3: (10, "access"), 4: (10, "access"), 24: (1, "trunk"), 289: (20, "access"), 21: (None, "")}
+    # LAG: members name their aggregator; 0 and self-references mean "not aggregated"
+    assert [sw2.iface(p).lag for p in (21, 22, 24, 3, 289)] == ["Trk1", "Trk1", "", "", ""]
+    assert not any(i.lag for d in (r1, sw1) for i in d.interfaces)
+    # ifLastChange is TimeTicks
+    assert sw1.iface(5).last_change_s == 987 and sw2.iface(3).last_change_s == 13 and r1.iface(2).last_change_s == 12
+
+
+def test_switch_tables_are_walked_only_where_they_can_exist():
+    """Routers and servers must not pay for VLAN walks, and the bridge-port map is walked once."""
+    lab = labnet.build("10")
+    walked = {}
+    for ip, d in lab.items():
+        s = FakeSession(ip, d.values())
+        dev = asyncio.run(collect_device(s, ip, CollectOptions()))
+        assert not dev.errors, dev.errors
+        walked[dev.name] = s.walked
+    port_tables = {O.DOT1Q_PVID, O.DOT1Q_VLAN_CUR_EGRESS, O.CISCO_VM_VLAN, O.CISCO_TRUNK_STATUS, O.CISCO_TRUNK_NATIVE}
+    assert not port_tables & set(walked["core-rtr"])
+    assert O.CISCO_VM_VLAN in walked["dist-sw1"] and O.DOT1Q_PVID not in walked["dist-sw1"]  # Cisco answered its own MIB
+    assert O.DOT1Q_PVID in walked["acc-sw2"] and O.CISCO_VM_VLAN not in walked["acc-sw2"]
+    for name, w in walked.items():  # dot1q FDB (dist-sw1) and dot1d FDB (acc-sw2) both reuse the one walk
+        assert w.count(O.DOT1D_BASE_PORT_IFINDEX) == 1, name
+        assert O.LAG_ATTACHED_AGG in w and O.IF_LAST_CHANGE in w
+
+
+def test_entity_component_cap_keeps_the_boxes_before_the_optics():
+    t = {f"{O.ENT_CLASS}.1": 3, f"{O.ENT_MODEL}.1": "N7K-C7018", f"{O.ENT_SERIAL}.1": "JAF0000X01"}
+    for n in range(2, 2 + MAX_COMPONENTS + 100):  # more optics than the cap, then a supply at the end
+        t[f"{O.ENT_CLASS}.{n}"], t[f"{O.ENT_SERIAL}.{n}"], t[f"{O.ENT_CONTAINED_IN}.{n}"] = 10, f"SFP{n:05d}", 1
+    last = 2 + MAX_COMPONENTS + 100
+    t[f"{O.ENT_CLASS}.{last}"], t[f"{O.ENT_MODEL}.{last}"], t[f"{O.ENT_CONTAINED_IN}.{last}"] = 6, "N7K-AC-6.0KW", 1
+    dev = Device(id="10.9.9.9")
+    asyncio.run(collect_entity(FakeSession(dev.id, t), dev))
+    assert len(dev.components) == MAX_COMPONENTS and not dev.errors
+    assert [c.cls for c in dev.components][:1] == ["chassis"] and dev.components[-1].model == "N7K-AC-6.0KW"
+    assert all(c.parent == 1 for c in dev.components[1:]) and (dev.model, dev.serial) == ("N7K-C7018", "JAF0000X01")
+
+
+@pytest.mark.parametrize(
+    "sysdescr, vendor, expected",
+    [
+        ("Cisco IOS Software, IOS-XE Software, Catalyst L3 Switch Software (CAT3K_CAA-UNIVERSALK9-M), Version 16.12.4, RELEASE SOFTWARE (fc5)", "Cisco", "16.12.4"),
+        ("Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE (fc5)", "Cisco", "17.9.4a"),
+        ("Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.2(7)E4, RELEASE SOFTWARE (fc2)\r\nTechnical Support: http://www.cisco.com/techsupport", "Cisco", "15.2(7)E4"),
+        ("Cisco Internetwork Operating System Software \r\nIOS (tm) C2950 Software (C2950-I6Q4L2-M), Version 12.1(22)EA14, RELEASE SOFTWARE (fc1)", "Cisco", "12.1(22)EA14"),
+        ("Cisco NX-OS(tm) n9000, Software (n9000-dk9), Version 9.3(8), RELEASE SOFTWARE Copyright (c) 2002-2021 by Cisco Systems, Inc.", "Cisco", "9.3(8)"),
+        ("Cisco NX-OS(tm) nxos.7.0.3.I7.9.bin, Software (nxos), Version 7.0(3)I7(9), RELEASE SOFTWARE", "Cisco", "7.0(3)I7(9)"),
+        ("Cisco Adaptive Security Appliance Version 9.16(3)", "Cisco", "9.16(3)"),
+        ("Cisco IOS XR Software (Cisco ASR9K Series),  Version 6.5.3[Default]\nCopyright (c) 2019 by Cisco Systems, Inc.", "Cisco", "6.5.3"),
+        ("Juniper Networks, Inc. ex4300-48p Ethernet Switch, kernel JUNOS 20.4R3-S2, Build date: 2022-01-20 03:47:45 UTC", "Juniper", "20.4R3-S2"),
+        ("Juniper Networks, Inc. mx480 internet router, kernel JUNOS 21.2R3.8, Build date: 2022-03-01", "Juniper", "21.2R3.8"),
+        ("Arista Networks EOS version 4.28.3M running on an Arista Networks DCS-7050SX3-48YC8", "Arista", "4.28.3M"),
+        ("HP J9772A 2530-48G-PoEP Switch, revision YA.16.10.0016, ROM YA.15.20 (/ws/swbuildm/rel_yakima_qaoff/code/build/lakes)", "HP", "YA.16.10.0016"),
+        ("ProCurve J8697A Switch 5406zl, revision K.15.18.0013, ROM K.15.30 (/sw/code/build/btm(K_15))", "HP", "K.15.18.0013"),
+        ("Aruba JL658A 6300M 24SFP+ 4SFP56 Swch FL.10.08.1010", "HP", "FL.10.08.1010"),
+        ("ArubaOS-CX Version: FL.10.08.1010", "Aruba", "FL.10.08.1010"),
+        ("ArubaOS (MODEL: 7010), Version 8.10.0.2 (84785)", "Aruba", "8.10.0.2"),
+        ("FortiGate-60F v7.2.5,build1517,230606 (GA.F)", "Fortinet", "7.2.5"),
+        ("FortiGate-60F", "Fortinet", ""),
+        ("Palo Alto Networks PA-3220 series firewall", "Palo Alto", ""),
+        ("Palo Alto Networks PAN-OS 10.2.4-h4", "Palo Alto", "10.2.4-h4"),
+        ("RouterOS 7.12", "MikroTik", "7.12"),
+        ("RouterOS RB4011iGS+", "MikroTik", ""),  # a model, not a version
+        ("EdgeOS v2.0.9-hotfix.6.5574651.221230.1015", "Ubiquiti", "2.0.9-hotfix.6"),
+        ("USW-24-PoE, 6.5.59.14777, Linux 3.6.5", "Ubiquiti", "6.5.59.14777"),
+        ("EdgeSwitch 24-Port Lite, 1.9.3.5381055, Linux 3.6.5-1b604f2a", "Ubiquiti", "1.9.3.5381055"),
+        ("SonicWALL TZ 370 (SonicOS 7.0.1-5035)", "SonicWall", "7.0.1-5035"),
+        ("VMware ESXi 7.0.3 build-20036589 VMware, Inc. x86_64", "", "7.0.3 build-20036589"),
+        ("pfSense fw.example.test 2.7.0-RELEASE FreeBSD 14.0-CURRENT amd64", "FreeBSD/pfSense", "2.7.0-RELEASE"),
+        ("Dell EMC Networking OS10 Enterprise.\r\nSystem Description: OS10 Enterprise.\r\nOS Version: 10.5.2.6.\r\nSystem Type: S4148F-ON", "Dell/Force10", "10.5.2.6"),
+        ("Linux host 5.15.0-91-generic #101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 x86_64", "Net-SNMP", "5.15.0-91-generic"),
+        ("Linux host 5.15.0-91-generic #101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 x86_64", "", "5.15.0-91-generic"),
+        ("Linux DiskStation 4.4.59+ #25426 SMP PREEMPT Mon Dec 14 18:48:50 CST 2020 x86_64", "Synology", ""),  # kernel is not DSM
+        ("Hardware: Intel64 Family 6 Model 85 Stepping 7 AT/AT COMPATIBLE - Software: Windows Version 6.3 (Build 17763 Multiprocessor Free)", "Microsoft", "6.3 Build 17763"),
+        ("Some Appliance Firmware Version 3.2.1 (b17)", "", "3.2.1"),
+        ("HP ETHERNET MULTI-ENVIRONMENT,ROM none,JETDIRECT,JD153,EEPROM JSI24090012,CIDATE 07/02/2021", "HP", ""),
+        ("Cisco Controller", "Cisco", ""),
+        ("", "", ""),
+    ],
+)
+def test_parse_os_version(sysdescr, vendor, expected):
+    assert parse_os_version(sysdescr, vendor) == expected
+
+
+def test_os_version_from_vendor_mib_and_offline():
+    # FortiGate's sysDescr is just the model: one GET to fgSysVersion fills the gap
+    t = {O.SYS_DESCR: b"FortiGate-60F", O.SYS_OBJECTID: "1.3.6.1.4.1.12356.101.1.60", O.SYS_NAME: b"fw1",
+         O.OS_VERSION_OIDS["Fortinet"]: b"v7.2.5,build1517,230606 (GA.F)"}
+    dev = Device(id="10.9.9.1")
+    s = FakeSession(dev.id, t)
+    asyncio.run(collect_system(s, dev))
+    assert (dev.vendor, dev.os_version) == ("Fortinet", "7.2.5") and not dev.errors
+    # ...and nobody else is asked for it
+    s2, dev2 = FakeSession("10.9.9.2", {O.SYS_DESCR: b"Cisco IOS Software, Version 15.2(7)E4", O.SYS_OBJECTID: "1.3.6.1.4.1.9.1.1"}), Device(id="10.9.9.2")
+    asyncio.run(collect_system(s2, dev2))
+    assert dev2.os_version == "15.2(7)E4" and not set(O.OS_VERSION_OIDS.values()) & set(s2.got)
+    # a map saved before os_version existed gains it when it is loaded and graphed
+    inv = Inventory.from_dict({"devices": {"10.9.9.3": {"id": "10.9.9.3", "sysdescr": "Cisco Adaptive Security Appliance Version 9.16(3)23", "vendor": "Cisco"}}})
+    enrich_inventory(inv)
+    assert inv.devices["10.9.9.3"].os_version == "9.16(3)23"
+
+
+def test_portlist_ports():
+    assert portlist_ports(bytes([0x80, 0x01, 0x00, 0x40])) == {1, 16, 26}
+    assert portlist_ports(labnet.portlist([1, 8, 9, 289])) == {1, 8, 9, 289}
+    assert portlist_ports(b"") == set() and portlist_ports(None) == set()
+
+
 def test_graph_edges_and_exports(tmp_path):
     inv, _, _ = crawl()
     g = build_graph(inv)
@@ -103,9 +235,20 @@ def test_graph_edges_and_exports(tmp_path):
     p = tmp_path / "m"
     render_html(g, str(p) + ".html"), export_graphml(g, str(p) + ".graphml"), export_dot(g, str(p) + ".dot")
     files = export_csv(inv, g, str(p) + "-")
-    assert (p.parent / "m.html").stat().st_size > 5000 and len(files) == 7
+    assert (p.parent / "m.html").stat().st_size > 5000 and len(files) == 8
     assert "acc-sw2" in (p.parent / "m-hosts.csv").read_text()  # host A placed on acc-sw2
     assert "USERS" in (p.parent / "m-vlans.csv").read_text()
+    import csv
+
+    with open(p.parent / "m-hardware.csv", encoding="utf-8") as f:
+        hw = list(csv.DictReader(f))
+    assert {"device": "10.0.0.2", "class": "port", "model": "SFP-10G-SR", "serial": "AVD2045K1LM", "fru": "True"}.items() <= next(r for r in hw if r["serial"] == "AVD2045K1LM").items()
+    with open(p.parent / "m-interfaces.csv", encoding="utf-8") as f:
+        ifs = {(r["device"], r["name"]): r for r in csv.DictReader(f)}
+    assert (ifs[("10.0.0.2", "Gi1/0/2")]["mode"], ifs[("10.0.0.2", "Gi1/0/2")]["vlan"]) == ("trunk", "1")
+    assert ifs[("10.1.0.2", "21")]["lag"] == "Trk1" and ifs[("10.0.0.2", "Vlan10")]["vlan"] == ""
+    with open(p.parent / "m-devices.csv", encoding="utf-8") as f:
+        assert {r["ip"]: r["os_version"] for r in csv.DictReader(f)}["10.0.0.2"] == "16.12.4"
     ipam = (p.parent / "m-ipam.csv").read_text()
     assert "10.1.0.0/24" in ipam and "utilisation_pct" in ipam
     txt = text_summary(inv, g)
@@ -155,9 +298,18 @@ def test_xlsx_report(tmp_path):
     out = tmp_path / "acme.xlsx"
     export_xlsx(inv, g, str(out))
     wb = load_workbook(out)
-    assert wb.sheetnames == ["Summary", "Devices", "IPAM", "VLANs", "Links", "Hosts", "Interfaces", "Gaps"]
+    assert wb.sheetnames == ["Summary", "Devices", "IPAM", "VLANs", "Links", "Hosts", "Interfaces", "Hardware", "Gaps"]
     devices = list(wb["Devices"].values)
     assert devices[0][0] == "IP" and any(r[1] == "core-rtr" for r in devices[1:])
+    assert devices[0][4:6] == ("Model", "OS version") and any(r[1] == "acc-sw2" and r[5] == "YA.16.10.0016" for r in devices[1:])
+    ifs = list(wb["Interfaces"].values)
+    col = {h: n for n, h in enumerate(ifs[0])}
+    gi5 = next(r for r in ifs[1:] if r[0] == "10.0.0.2" and r[col["Name"]] == "Gi1/0/5")
+    assert (gi5[col["VLAN"]], gi5[col["Mode"]], gi5[col["LAG"]]) == (20, "access", None)  # openpyxl reads "" back as None
+    hw = list(wb["Hardware"].values)
+    assert hw[0] == ("Device", "Device name", "Class", "Name", "Description", "Model", "Serial", "HW rev", "FW rev", "SW rev", "FRU")
+    assert ("10.0.0.2", "dist-sw1", "powerSupply", "Switch 2 - Power Supply A") == next(r for r in hw if r[6] == "LIT21330DEF")[:4]
+    assert sum(r[0] == "10.0.0.2" for r in hw[1:]) == 8 and sum(r[0] == "10.0.0.1" for r in hw[1:]) == 1
     assert any(r[0] == "10.0.0.0/30" for r in list(wb["IPAM"].values)[1:])
     # the gaps sheet is the point of the pack: the firewall nobody gave us credentials for
     assert any("branch-fw" in str(r[1]) for r in list(wb["Gaps"].values)[1:])

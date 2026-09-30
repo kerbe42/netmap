@@ -31,14 +31,25 @@ def ip_bytes(ip: str) -> bytes:
     return bytes(int(x) for x in ip.split("."))
 
 
+def portlist(ports, size=40) -> bytes:
+    """Q-BRIDGE PortList: one bit per bridge port, MSB of the first octet is port 1."""
+    b = bytearray(size)
+    for p in ports:
+        b[(p - 1) // 8] |= 0x80 >> ((p - 1) % 8)
+    return bytes(b)
+
+
 class Dev:
-    """OID -> (snmprec type, python value). Types: 2 int, 4 octets, 6 oid, 64 ipaddr, 67 timeticks."""
+    """OID -> (snmprec type, python value). Types: 2 int, 4 octets, 6 oid, 64 ipaddr, 66 gauge32, 67 timeticks."""
 
     def __init__(self):
         self.t: dict[str, tuple[int, object]] = {}
 
     def i(self, oid, v):
         self.t[oid] = (2, int(v))
+
+    def u(self, oid, v):
+        self.t[oid] = (66, int(v))
 
     def s(self, oid, v):
         self.t[oid] = (4, v.encode() if isinstance(v, str) else bytes(v))
@@ -56,10 +67,11 @@ class Dev:
         self.s(O.SYS_DESCR, descr), self.o(O.SYS_OBJECTID, soid), self.tt(O.SYS_UPTIME, uptime)
         self.s(O.SYS_CONTACT, "netops@example.test"), self.s(O.SYS_NAME, name), self.s(O.SYS_LOCATION, "DC1"), self.i(O.SYS_SERVICES, services)
 
-    def iface(self, idx, name, descr=None, mac=None, speed=1000, up=True, alias=""):
-        self.s(f"{O.IF_DESCR}.{idx}", descr or name), self.i(f"{O.IF_TYPE}.{idx}", 6), self.i(f"{O.IF_SPEED}.{idx}", min(speed * 1_000_000, 4294967295))
+    def iface(self, idx, name, descr=None, mac=None, speed=1000, up=True, alias="", last_change=None, iftype=6):
+        self.s(f"{O.IF_DESCR}.{idx}", descr or name), self.i(f"{O.IF_TYPE}.{idx}", iftype), self.i(f"{O.IF_SPEED}.{idx}", min(speed * 1_000_000, 4294967295))
         self.s(f"{O.IF_PHYS}.{idx}", mac_bytes(mac) if mac else b""), self.i(f"{O.IF_ADMIN}.{idx}", 1), self.i(f"{O.IF_OPER}.{idx}", 1 if up else 2)
         self.s(f"{O.IF_NAME}.{idx}", name), self.i(f"{O.IF_HIGHSPEED}.{idx}", speed), self.s(f"{O.IF_ALIAS}.{idx}", alias)
+        self.tt(f"{O.IF_LAST_CHANGE}.{idx}", 100 * (idx + 10) if last_change is None else last_change)  # default: idx+10 seconds
 
     def addr(self, ip, idx, mask):
         self.ip(f"1.3.6.1.2.1.4.20.1.1.{ip}", ip), self.i(f"{O.IP_AD_IFINDEX}.{ip}", idx), self.ip(f"{O.IP_AD_NETMASK}.{ip}", mask)
@@ -105,8 +117,30 @@ class Dev:
     def vlan(self, vid, name):
         self.s(f"{O.DOT1Q_VLAN_NAME}.{vid}", name)
 
+    def pvids(self, mapping: dict):
+        for bport, vid in mapping.items():
+            self.u(f"{O.DOT1Q_PVID}.{bport}", vid)
+
+    def vlan_ports(self, vid, egress, untagged):
+        self.s(f"{O.DOT1Q_VLAN_CUR_EGRESS}.0.{vid}", portlist(egress)), self.s(f"{O.DOT1Q_VLAN_CUR_UNTAGGED}.0.{vid}", portlist(untagged))
+
+    def cisco_port(self, ifidx, access=None, trunk=False, native=1):
+        """vlanTrunkPortTable row for any switchport; vmMembership row (static) for an access port."""
+        self.i(f"{O.CISCO_TRUNK_NATIVE}.{ifidx}", native), self.i(f"{O.CISCO_TRUNK_STATUS}.{ifidx}", 1 if trunk else 2)
+        if access is not None:
+            self.i(f"1.3.6.1.4.1.9.9.68.1.2.2.1.1.{ifidx}", 1), self.i(f"{O.CISCO_VM_VLAN}.{ifidx}", access)
+
+    def lag(self, members: dict):
+        for ifidx, agg in members.items():
+            self.i(f"{O.LAG_ATTACHED_AGG}.{ifidx}", agg)
+
+    def ent(self, idx, cls, descr, name="", parent=0, model="", serial="", hw="", fw="", sw="", fru=False):
+        self.s(f"{O.ENT_DESCR}.{idx}", descr), self.i(f"{O.ENT_CONTAINED_IN}.{idx}", parent), self.i(f"{O.ENT_CLASS}.{idx}", cls)
+        self.s(f"{O.ENT_NAME}.{idx}", name), self.s(f"{O.ENT_HW_REV}.{idx}", hw), self.s(f"{O.ENT_FW_REV}.{idx}", fw), self.s(f"{O.ENT_SW_REV}.{idx}", sw)
+        self.s(f"{O.ENT_SERIAL}.{idx}", serial), self.s(f"{O.ENT_MODEL}.{idx}", model), self.i(f"{O.ENT_IS_FRU}.{idx}", 1 if fru else 2)
+
     def entity(self, model, serial):
-        self.i(f"{O.ENT_CLASS}.1", 3), self.s(f"{O.ENT_MODEL}.1", model), self.s(f"{O.ENT_SERIAL}.1", serial), self.s("1.3.6.1.2.1.47.1.1.1.1.7.1", "Chassis")
+        self.ent(1, 3, model, "Chassis", model=model, serial=serial, fru=True)
 
     # --- outputs ---
     def values(self) -> dict[str, object]:
@@ -150,10 +184,24 @@ def build(base: str = "10") -> dict[str, Dev]:
     # ---- SW1: Cisco 3850 L3 switch, LLDP + CDP, dot1q FDB, SVIs ----
     sw1 = Dev()
     sw1.system("dist-sw1", "Cisco IOS Software, IOS-XE Software, Catalyst L3 Switch Software (CAT3K_CAA-UNIVERSALK9-M), Version 16.12.4", "1.3.6.1.4.1.9.1.1745", 6)
-    sw1.entity("WS-C3850-24T", "FOC1234SW1X")
+    # a two-member stack as IOS-XE reports it; containers, the sensor, the copper port, the empty
+    # SFP cage and the anonymous entity must not reach the asset register
+    sw1.ent(1, 11, "c38xx Stack", "c38xx Stack")
+    sw1.ent(1000, 3, "WS-C3850-24T-S", "Switch 1", 1, "WS-C3850-24T", "FOC1234SW1X", hw="V07", fw="16.12.2r", sw="16.12.4", fru=True)
+    sw1.ent(1001, 5, "Switch 1 - Power Supply A Container", "Switch 1 - Power Supply A Container", 1000)
+    sw1.ent(1002, 6, "Switch 1 - Power Supply A", "Switch 1 - Power Supply A", 1001, "PWR-C1-350WAC", "LIT21330ABC", hw="V02", fru=True)
+    sw1.ent(1003, 7, "Switch 1 - FAN - T1 1", "Switch 1 - FAN - T1 1", 1000, fru=True)
+    sw1.ent(1004, 8, "Switch 1 - Inlet Temp Sensor", "Switch 1 - Inlet", 1000)
+    sw1.ent(1005, 9, "4x10G Uplink Module", "Switch 1 FRU Uplink Module 1", 1000, "C3850-NM-4-10G", "FOC2210X1AB", hw="V01", fru=True)
+    sw1.ent(1006, 10, "GigabitEthernet1/0/1", "Gi1/0/1", 1000)
+    sw1.ent(1007, 10, "TenGigabitEthernet1/1/1", "Te1/1/1", 1005)
+    sw1.ent(1008, 10, "SFP-10GBase-SR", "subslot 1/1 transceiver 1", 1007, "SFP-10G-SR", "AVD2045K1LM", hw="V03", fru=True)
+    sw1.ent(2000, 3, "WS-C3850-24T-S", "Switch 2", 1, "WS-C3850-24T", "FOC1234SW2Y", hw="V07", fw="16.12.2r", sw="16.12.4", fru=True)
+    sw1.ent(2002, 6, "Switch 2 - Power Supply A", "Switch 2 - Power Supply A", 2000, "PWR-C1-350WAC", "LIT21330DEF", hw="V02", fru=True)
+    sw1.ent(2010, 1, "", "", 2000)
     sw1.iface(1, "Gi1/0/1", "GigabitEthernet1/0/1", "00:11:22:33:44:11", alias="uplink core-rtr")
     sw1.iface(2, "Gi1/0/2", "GigabitEthernet1/0/2", "00:11:22:33:44:12", alias="to acc-sw2")
-    sw1.iface(5, "Gi1/0/5", "GigabitEthernet1/0/5", "00:11:22:33:44:15", alias="srv-c")
+    sw1.iface(5, "Gi1/0/5", "GigabitEthernet1/0/5", "00:11:22:33:44:15", alias="srv-c", last_change=98765)
     sw1.iface(24, "Gi1/0/24", "GigabitEthernet1/0/24", "00:11:22:33:44:1f", alias="ap-1")
     sw1.iface(10, "Vlan10", "Vlan10", MAC_SW1)
     sw1.iface(20, "Vlan20", "Vlan20", MAC_SW1)
@@ -175,24 +223,34 @@ def build(base: str = "10") -> dict[str, Dev]:
         sw1.fdb_q(10, mac, 2)  # everything behind acc-sw2 shows on the uplink port
     sw1.fdb_q(10, MAC_AP, 24), sw1.fdb_q(20, MAC_C, 5)
     sw1.vlan(10, "USERS"), sw1.vlan(20, "SERVERS"), sw1.vlan(30, "BRANCH")
+    # Gi1/0/1 is routed (no switchport row); the uplink to acc-sw2 trunks; server and AP ports are access
+    sw1.cisco_port(2, trunk=True, native=1), sw1.cisco_port(5, access=20), sw1.cisco_port(24, access=10)
 
     # ---- SW2: HP ProCurve L2 access switch, LLDP only, dot1d FDB, uplink with many MACs ----
     sw2 = Dev()
     sw2.system("acc-sw2", "HP J9772A 2530-48G-PoEP Switch, revision YA.16.10.0016, ROM YA.15.20", "1.3.6.1.4.1.11.2.3.7.11.155", 2)
     sw2.entity("J9772A", "CN51ABC123")
-    for p in (1, 2, 3, 4, 24):
+    for p in (1, 2, 3, 4, 21, 22, 24):
         sw2.iface(p, str(p), str(p), f"00:11:22:33:55:{p:02x}", speed=1000)
+    sw2.iface(289, "Trk1", "Trk1", "00:11:22:33:55:f1", speed=2000, alias="nas-01", iftype=161)  # ports 21-22, LACP
     sw2.iface(100, "VLAN10", "VLAN10", MAC_SW2, alias="mgmt")
     sw2.addr(SW2_IP, 100, "255.255.255.0")
     sw2.arp(100, SW1_V10, MAC_SW1), sw2.arp(100, PHONE_IP, MAC_PHONE)
     sw2.lldp_local(MAC_SW2, "acc-sw2", {24: ("24", "24"), 3: ("3", "3"), 4: ("4", "4"), 5: ("5", "5")})
     sw2.lldp_rem(24, 1, MAC_SW1, "Gi1/0/2", "GigabitEthernet1/0/2", "dist-sw1", "Cisco IOS-XE 16.12.4", 0x14, mgmt_ip=SW1_V10)
     sw2.lldp_rem(5, 2, MAC_PHONE, MAC_PHONE, "", "SEP" + MAC_PHONE.replace(":", "").upper(), "Cisco IP Phone 8845", 0x04, mgmt_ip=PHONE_IP)
-    sw2.bridge_ports({1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 24: 24})
+    sw2.bridge_ports({1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 24: 24, 289: 289})  # LAG members are not bridge ports; Trk1 is
     sw2.fdb_d(MAC_A, 3), sw2.fdb_d(MAC_B, 4), sw2.fdb_d(MAC_PHONE, 5)
     for i in range(12):  # uplink learns many MACs
         sw2.fdb_d(f"00:11:22:33:66:{i:02x}", 24)
     sw2.fdb_d(MAC_SW1, 24), sw2.fdb_d(MAC_C, 24)
+    # Q-BRIDGE: 3/4 are VLAN 10 access; 24 carries 10 and 20 tagged (trunk, native 1); port 2 has
+    # one tagged voice VLAN on top of VLAN 1, which is still an access port; Trk1 is VLAN 20 access
+    sw2.pvids({1: 1, 2: 1, 3: 10, 4: 10, 24: 1, 289: 20})
+    sw2.vlan_ports(1, egress=[1, 2, 24], untagged=[1, 2, 24])
+    sw2.vlan_ports(10, egress=[3, 4, 24], untagged=[3, 4])
+    sw2.vlan_ports(20, egress=[2, 24, 289], untagged=[289])
+    sw2.lag({1: 0, 2: 0, 3: 0, 4: 0, 21: 289, 22: 289, 24: 24})  # 0 or itself = not aggregated
 
     return {R1_IP: r1, SW1_IP: sw1, SW2_IP: sw2}
 

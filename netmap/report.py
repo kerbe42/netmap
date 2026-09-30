@@ -1,6 +1,7 @@
 """Excel workbook of the inventory: the hand-over artefact for a due-diligence pack.
 
-One sheet per thing an acquirer asks about - what is on the network, how it is wired,
+One sheet per thing an acquirer asks about - what is on the network and what hardware it
+is built from (serials, supplies, optics for the asset register), how it is wired,
 which addresses are in use, what VLANs exist, and what we saw but could not get into.
 Everything here comes from the saved map, so it can be rebuilt without touching the
 network again.
@@ -82,10 +83,10 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
 
     _sheet(
         wb, "Devices",
-        ["IP", "Name", "Role", "Vendor", "Model", "Serial", "Location", "Contact", "OS / sysDescr", "All IPs",
+        ["IP", "Name", "Role", "Vendor", "Model", "OS version", "Serial", "Location", "Contact", "OS / sysDescr", "All IPs",
          "Interfaces", "VLANs", "LLDP", "CDP", "ARP", "Routes", "FDB", "Uptime (days)", "Depth", "Discovered via", "Credential", "Errors"],
         [
-            [d.id, d.name, d.role, d.vendor, d.model, d.serial, d.location, d.contact, d.sysdescr[:300], " ".join(d.ips),
+            [d.id, d.name, d.role, d.vendor, d.model, d.os_version, d.serial, d.location, d.contact, d.sysdescr[:300], " ".join(d.ips),
              len(d.interfaces), len(d.vlans), sum(n.proto == "lldp" for n in d.neighbors), sum(n.proto == "cdp" for n in d.neighbors),
              len(d.arp), len(d.routes), len(d.fdb), d.uptime_s // 86400, d.depth, d.discovered_via, d.credential, "; ".join(d.errors)[:300]]
             for d in sorted(inv.devices.values(), key=lambda x: (x.depth, ipaddress.ip_address(x.id)))
@@ -131,12 +132,23 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
 
     _sheet(
         wb, "Interfaces",
-        ["Device", "Device name", "ifIndex", "Name", "Description", "Alias", "MAC", "Speed (Mbps)", "Admin", "Oper", "Addresses"],
+        ["Device", "Device name", "ifIndex", "Name", "Description", "Alias", "MAC", "Speed (Mbps)", "Admin", "Oper", "VLAN", "Mode", "LAG", "Addresses"],
         [
-            [d.id, d.name, i.index, i.name, i.descr, i.alias, i.mac or "", i.speed_mbps, "up" if i.admin_up else "down", "up" if i.oper_up else "down", " ".join(i.ips)]
+            [d.id, d.name, i.index, i.name, i.descr, i.alias, i.mac or "", i.speed_mbps, "up" if i.admin_up else "down", "up" if i.oper_up else "down",
+             i.vlan if i.vlan is not None else "", i.mode, i.lag, " ".join(i.ips)]
             for d in inv.devices.values() for i in d.interfaces
         ],
         widths={"Description": 34, "Alias": 30},
+    )
+
+    _sheet(
+        wb, "Hardware",
+        ["Device", "Device name", "Class", "Name", "Description", "Model", "Serial", "HW rev", "FW rev", "SW rev", "FRU"],
+        [
+            [d.id, d.name, c.cls, c.name, c.descr, c.model, c.serial, c.hw_rev, c.fw_rev, c.sw_rev, "yes" if c.fru else "no"]
+            for d in inv.devices.values() for c in d.components
+        ],
+        widths={"Description": 40},
     )
 
     _sheet(
