@@ -1,6 +1,6 @@
-"""Excel workbook of the inventory: the hand-over artefact for a due-diligence pack.
+"""Excel workbook of the inventory: the hand-over artefact for documenting a network.
 
-One sheet per thing an acquirer asks about - what is on the network and what hardware it
+One sheet per thing you get asked about - what is on the network and what hardware it
 is built from (serials, supplies, optics for the asset register), how it is wired,
 which addresses are in use, what VLANs exist, and what we saw but could not get into.
 Everything here comes from the saved map, so it can be rebuilt without touching the

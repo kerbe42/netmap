@@ -1,5 +1,5 @@
-"""Work out what a host is, from every signal a scan gathered - the way Cisco ISE or
-Axonius profile an endpoint: many weak clues, weighed together, with the evidence kept.
+"""Work out what a host is by combining every signal a scan gathered - many weak clues
+weighed together, with the evidence kept, the way endpoint-profiling systems do.
 
 `profile_host` reads a `Host` (its MAC/OUI vendor, open ports and service banners, and the
 results of the active probes in `host.probes` - NetBIOS, mDNS, SSDP, HTTP/TLS - plus any

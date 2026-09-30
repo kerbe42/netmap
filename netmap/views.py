@@ -678,6 +678,25 @@ def history_rows(s: Snapshot) -> list[dict]:
     return rows
 
 
+COMPLIANCE_COLUMNS = [
+    Column("severity", "Level", "severity", 80),
+    Column("category", "Standard", width=210),
+    Column("item", "Item", width=180),
+    Column("found", "Finding", width=240),
+    Column("standard", "What the standard expects", width=360),
+]
+
+
+def compliance_rows(s: Snapshot) -> list[dict]:
+    from .compliance import compliance_checks
+
+    rows = []
+    for c in compliance_checks(s):
+        rows.append({"_id": c.node, "_kind": s.kind(c.node) or "device", "_role": s.role(c.node),
+                     "severity": c.severity.capitalize(), "category": c.category, "item": c.item, "found": c.found, "standard": c.standard})
+    return rows
+
+
 PAGES: dict[str, tuple[list[Column], Callable[[Snapshot], list[dict]]]] = {
     "devices": (DEVICE_COLUMNS, device_rows),
     "hosts": (HOST_COLUMNS, host_rows),
@@ -687,5 +706,6 @@ PAGES: dict[str, tuple[list[Column], Callable[[Snapshot], list[dict]]]] = {
     "interfaces": (IFACE_COLUMNS, interface_rows),
     "hardware": (HARDWARE_COLUMNS, hardware_rows),
     "findings": (FINDING_COLUMNS, finding_rows),
+    "compliance": (COMPLIANCE_COLUMNS, compliance_rows),
     "history": (HISTORY_COLUMNS, history_rows),
 }

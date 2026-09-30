@@ -815,3 +815,49 @@ async def identify_hosts(
         pool.shutdown(wait=False, cancel_futures=True)
     log.info("identification: %d of %d hosts answered a probe", answered, len(targets))
     return answered
+
+
+async def _tcp_open(ip: str, port: int, timeout: float) -> bool:
+    """True if a TCP connection to ip:port completes. Read-only: connect then close."""
+    try:
+        fut = asyncio.open_connection(ip, port)
+        reader, writer = await asyncio.wait_for(fut, timeout)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    except (OSError, asyncio.TimeoutError):
+        return False
+
+
+MGMT_PORTS = {"telnet": 23, "ssh": 22, "http": 80, "https": 443}
+
+
+async def probe_management(inv, device_ids=None, timeout: float = 1.5, workers: int = 64) -> int:
+    """Check which management planes each polled device exposes (Telnet/SSH/HTTP/HTTPS).
+
+    A read-only TCP connect to a handful of ports, so a compliance check can flag cleartext
+    management (Telnet, HTTP). Sets device.mgmt = {telnet, ssh, http, https: bool}. Returns
+    how many devices exposed anything.
+    """
+    ids = list(device_ids if device_ids is not None else inv.devices)
+    sem = asyncio.Semaphore(workers)
+    found = 0
+
+    async def one(did):
+        nonlocal found
+        dev = inv.devices.get(did)
+        if dev is None:
+            return
+        result = {}
+        async with sem:
+            for name, port in MGMT_PORTS.items():
+                result[name] = await _tcp_open(did, port, timeout)
+        dev.mgmt = result
+        if any(result.values()):
+            found += 1
+
+    await asyncio.gather(*(one(d) for d in ids))
+    return found

@@ -422,7 +422,7 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         seeds=["10.99.0.2"],
         scope=["10.0.0.0/8"],
         exclude=[],
-        credentials=[Credential(kind="v2c", community="demo", label="hq-readonly")],
+        credentials=[Credential(kind="v3", user="netmap-ro", auth="SHA", priv="AES", label="hq-snmpv3")],
         workers=8,
         timeout=0.1,
         retries=0,
@@ -442,7 +442,15 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         "scan": {"targets": [], "seeds": ["10.99.0.2"], "scope": ["10.0.0.0/8"], "exclude": [], "max_depth": 6},
     }
     for h in inv.history:  # the sample should not claim to have been scanned at build time
-        h["request"]["credentials"] = ["hq-readonly"]
+        h["request"]["credentials"] = ["hq-snmpv3"]
+    # a couple of compliance/EoL signals so the sample shows those pages doing something
+    if "10.0.1.1" in inv.devices:  # the WAN router still has Telnet and cleartext web open
+        inv.devices["10.0.1.1"].mgmt = {"telnet": True, "ssh": True, "http": True, "https": False}
+    if "10.99.0.31" in inv.devices:  # an older access switch, past vendor end-of-support
+        wh = inv.devices["10.99.0.31"]
+        wh.model = "J9147A"
+        wh.sysdescr = "ProCurve J9147A 2910al-48G Switch, revision W.15.14.0013"
+        wh.os_family = "hp-provision"
     # a little documentation, the way someone taking the network over would start it
     inv.annotate("10.99.0.2", site="HQ comms room A", owner="Network team", status="Verified", tags=["core"],
                  notes="Core pair with core-sw-02 (StackWise Virtual). Default route to fw-edge-01.")

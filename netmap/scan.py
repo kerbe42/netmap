@@ -190,6 +190,10 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
             phase("Identifying hosts", "NetBIOS, mDNS, SSDP and web probes")
             n = await identify_hosts(inv)
             log.info("active identification: %d host(s) answered a probe", n)
+            from .discover import probe_management
+
+            m = await probe_management(inv)
+            log.info("management-plane check: %d device(s) expose a management port", m)
         if targets and not inv.devices:
             log.warning(
                 "no device in the target subnets answered SNMP: %d address(es) were probed and none replied. "

@@ -56,6 +56,31 @@ def _peers_summary(peers) -> str:
     return ", ".join(f"{n} {proto.upper()} {state}" for (proto, state), n in sorted(c.items()))
 
 
+def _eol_summary(dev) -> str:
+    try:
+        from ..eol import annotate_device
+        e = annotate_device(dev)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not e:
+        return ""
+    label = {"active": "supported", "end-of-sale": "end-of-sale", "end-of-support": "END OF SUPPORT", "unknown": "support dates unknown"}.get(e["status"], e["status"])
+    bits = [label]
+    if e.get("eol"):
+        bits.append(f"EoL {e['eol']}")
+    if e.get("family"):
+        bits.append(f"({e['family']})")
+    return " ".join(bits) + "  — verify with the vendor"
+
+
+def _mgmt_summary(mgmt) -> str:
+    if not mgmt:
+        return ""
+    on = [k.upper() for k in ("telnet", "ssh", "http", "https") if mgmt.get(k)]
+    warn = " ⚠ cleartext" if (mgmt.get("telnet") or mgmt.get("http")) else ""
+    return (", ".join(on) or "none reachable") + warn
+
+
 def _stp_summary(stp) -> str:
     if not stp or not stp.get("root"):
         return ""
@@ -378,6 +403,8 @@ class DetailsPanel(QWidget):
             ("Model", d.model),
             ("Serial", d.serial),
             ("OS version", d.os_version),
+            ("Support status", _eol_summary(d)),
+            ("Management", _mgmt_summary(getattr(d, "mgmt", {}))),
             ("Description", d.sysdescr),
             ("Location (SNMP)", d.location),
             ("Site", note.get("site")),

@@ -74,6 +74,7 @@ NAV = [
     ("hardware", "Hardware", None),
     (None, "Review", None),
     ("findings", "Needs attention", None),
+    ("compliance", "Compliance", None),
     ("history", "Scan history", None),
 ]
 
@@ -86,6 +87,7 @@ PAGE_TITLES = {
     "interfaces": ("Interfaces", ""),
     "hardware": ("Hardware", "Chassis, stack members, modules, power supplies, fans and transceivers with serial numbers."),
     "findings": ("Needs attention", ""),
+    "compliance": ("Compliance", "Where the network does not meet common enterprise hardening standards. Everything here is read-only and best-effort - confirm before acting."),
     "history": ("Scan history", ""),
 }
 
@@ -146,7 +148,7 @@ class MainWindow(QMainWindow):
         st = self.style()
         std = {"overview": QStyle.SP_FileDialogInfoView, "map": QStyle.SP_DriveNetIcon, "vlans": QStyle.SP_FileDialogListView,
                "links": QStyle.SP_ArrowRight, "interfaces": QStyle.SP_FileDialogDetailedView, "hardware": QStyle.SP_ComputerIcon,
-               "findings": QStyle.SP_MessageBoxWarning, "history": QStyle.SP_BrowserReload}
+               "findings": QStyle.SP_MessageBoxWarning, "compliance": QStyle.SP_DialogApplyButton, "history": QStyle.SP_BrowserReload}
         for key, title, icon in NAV:
             it = QTreeWidgetItem([title])
             if key is None:

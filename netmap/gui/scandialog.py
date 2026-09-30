@@ -156,7 +156,7 @@ class ScanDialog(QDialog):
         self.sweep.setChecked(d.get("sweep", False))
         self.dns = QCheckBox("Name devices and hosts from reverse DNS")
         self.dns.setChecked(d.get("resolve_names", True))
-        self.identify = QCheckBox("Identify hosts actively (NetBIOS, mDNS/Bonjour, SSDP/UPnP, web/TLS) — profiles like Cisco ISE")
+        self.identify = QCheckBox("Identify hosts actively (NetBIOS, mDNS/Bonjour, SSDP/UPnP, web/TLS)")
         self.identify.setChecked(d.get("identify", True))
         self.identify.setToolTip("Sends a few small read-only probes to each host to work out what it is, its OS and its name.\nWorks without Nmap or admin rights.")
         nmap = find_nmap()

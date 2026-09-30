@@ -175,8 +175,8 @@ interface, or learned routes), not because sysServices says so.
 
 ## Identifying hosts (profiling)
 
-For endpoints that don't answer SNMP, NetMap profiles them the way Cisco ISE or Axonius do — many weak
-signals, weighed together, with the evidence kept. Turn on **Identify hosts** in the scan (on by default);
+For endpoints that don't answer SNMP, NetMap profiles them from many weak signals weighed together, with
+the evidence kept. Turn on **Identify hosts** in the scan (on by default);
 it sends a few small **read-only** probes to each host and needs no admin rights or nmap:
 
 | Probe | Gives you |

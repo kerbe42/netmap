@@ -148,6 +148,7 @@ class Device:
     stp: dict = field(default_factory=dict)  # {root, root_port, priority, is_root}
     poe_budget_w: float = 0.0  # total PoE the switch can supply (watts)
     poe_used_w: float = 0.0  # PoE currently drawn (watts)
+    mgmt: dict = field(default_factory=dict)  # exposed management planes: {telnet,http,https,ssh,snmp: bool}
     ips: list[str] = field(default_factory=list)
     macs: list[str] = field(default_factory=list)
     collected_at: float = 0.0

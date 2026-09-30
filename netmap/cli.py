@@ -233,7 +233,7 @@ def _add_output_args(p, html_default=None):
     p.add_argument("--html", default=html_default, help="write interactive HTML map")
     p.add_argument("--graphml", help="write GraphML (yEd, Gephi, Cytoscape)")
     p.add_argument("--dot", help="write Graphviz DOT")
-    p.add_argument("--csv", help="write CSV inventory files with this prefix, e.g. out/mna-")
+    p.add_argument("--csv", help="write CSV inventory files with this prefix, e.g. out/site-")
     p.add_argument("--xlsx", help="write a multi-sheet Excel inventory workbook (devices, IPAM, VLANs, links, hosts, gaps)")
     p.add_argument("--drawio", help="write a draw.io diagram (physical and logical pages; opens in diagrams.net, converts to Visio)")
     p.add_argument("--no-summary", dest="summary", action="store_false", help="don't print the text summary")
@@ -293,7 +293,7 @@ def build_parser():
     cr.add_argument("--refresh", action="store_true", help="with --resume, poll devices already in the map again and replace what was collected (notes and layout are kept)")
     cr.add_argument("--retry-unreachable", action="store_true", help="with --resume, try again addresses that did not answer SNMP last time")
     cr.add_argument("--dns", action="store_true", help="name devices and hosts from reverse DNS (PTR) lookups")
-    cr.add_argument("--identify", action="store_true", help="actively identify hosts (NetBIOS, mDNS, SSDP, HTTP/TLS probes) - like Cisco ISE / Lansweeper profiling")
+    cr.add_argument("--identify", action="store_true", help="actively identify hosts by profiling them (NetBIOS, mDNS, SSDP, HTTP/TLS probes)")
     cr.add_argument("--out", "-o", default="netmap.json", help="inventory JSON (written after every device)")
     _add_target_args(cr), _add_scope_args(cr), _add_sweep_args(cr), _add_output_args(cr, html_default="netmap.html")
 

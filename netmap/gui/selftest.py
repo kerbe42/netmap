@@ -49,7 +49,7 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             fail("project has no devices (pass a project file)")
         s = win.snapshot
         shot("01-overview")
-        order = ["map", "devices", "hosts", "subnets", "vlans", "links", "interfaces", "hardware", "findings", "history"]
+        order = ["map", "devices", "hosts", "subnets", "vlans", "links", "interfaces", "hardware", "findings", "compliance", "history"]
         for i, key in enumerate(order, 2):
             win.navigate(key)
             _pump(200)
