@@ -91,7 +91,7 @@ def positions(nodes: dict, edges: list, saved: Optional[dict] = None, kind: str 
     if kind == "radial" and root:
         auto = L.radial(nodes, pairs, root)
     else:
-        auto = L.layered(nodes, pairs)
+        auto = L.layered(nodes, edges)  # with edge kinds, so hosts pack under their switch port
         if kind == "organic":
             auto = L.organic(nodes, pairs, init=auto)
     if not saved:
