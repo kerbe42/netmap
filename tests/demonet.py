@@ -451,6 +451,16 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         wh.model = "J9147A"
         wh.sysdescr = "ProCurve J9147A 2910al-48G Switch, revision W.15.14.0013"
         wh.os_family = "hp-provision"
+    # a few OT / ICS and BMC assets so those device types and the OT probes show in the sample
+    for _ip, _mac, _vendor, _probe in (
+        ("10.60.0.50", "00:80:f4:11:22:33", "Telemecanique", {"modbus": {"modbus": True, "vendor": "Schneider Electric", "product": "Modicon M340", "version": "2.7"}}),
+        ("10.60.0.51", "00:1d:9c:44:55:66", "Rockwell Automation", {"enip": {"enip": True, "product": "1756-L71/B LOGIX5571", "vendor_id": 1, "device_type": 14}}),
+        ("10.60.0.52", "00:40:9d:77:88:99", "Automated Logic", {"bacnet": {"bacnet": True, "device_id": 2101, "vendor_id": 24}}),
+        ("10.30.0.60", "0c:c4:7a:aa:bb:cc", "Super Micro Computer", {"ipmi": {"ipmi": True, "version": "2.0", "auth": ["md5", "password"]}}),
+    ):
+        _h = inv.touch_host(_ip, "sweep", _mac)
+        _h.probes.update(_probe)
+        _h.vendor = _h.vendor or _vendor
     for _did, _ports, _os in (("10.0.0.1", [(443, "https"), (22, "ssh")], "FortiOS 7.2"),
                               ("10.99.0.2", [(22, "ssh"), (443, "https"), (161, "snmp")], ""),
                               ("10.0.1.1", [(22, "ssh"), (23, "telnet"), (80, "http")], "Cisco IOS 15.x")):
@@ -475,6 +485,8 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
     inv.annotate("10.0.0.1", site="HQ comms room A", owner="Network team", tags=["edge", "internet"],
                  notes="ISP circuit NW-44213, support contract ends 2027-03.")
     inv.annotate("10.99.0.250", status="Unknown owner", notes="Not in the handover list and no community works. Find out who put it there.")
+    from netmap.profile import profile_inventory
+    profile_inventory(inv)  # re-profile after the post-enrich probe/OT injections above
     if path:
         inv.save(path)
     return inv
