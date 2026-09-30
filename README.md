@@ -248,6 +248,34 @@ you can see exactly what changed. NetMap only ever runs `show` commands; it neve
 * **End-of-life / end-of-sale**: each device is matched against a bundled offline dataset of common
   platforms and shows its support status (always "verify with the vendor").
 
+## Servers, virtualization and dependencies
+
+Beyond the network gear, NetMap can go deeper where you have credentials:
+
+* **Agentless server inspection** (**Tools ▸ Inspect servers**, or `netmap inspect`): read-only SSH (Linux/Unix)
+  and WinRM (Windows) collection of OS, hardware, installed software, running services and active connections.
+  A host's details gain **System**, **Software** and **Connections** tabs.
+* **Dependency mapping**: the connections collected become a **Dependencies** page and a per-host tab — which
+  client talks to which server on what service (the server side inferred from the well-known port), the way an
+  application-dependency map is built.
+* **VMware discovery** (**File ▸ Import ▸ VMware**, or `netmap vmware`): read-only vCenter/ESXi discovery that
+  folds ESXi hosts and VMs into the map with guest IPs/OS, the ESXi parent and port-group VLANs.
+* **Switch faceplate**: a switch's **Ports panel** tab draws its ports as they sit on the front of the unit,
+  coloured by up/down/disabled/errors, marking PoE ports and ports with a neighbour.
+
+## Query and automation
+
+* **Query / search** (**Tools ▸ Query**, Ctrl+Shift+F): a small query language over the whole inventory —
+  `hosts where os ~ windows and confidence = high`, `devices where role = switch order by name`,
+  `interfaces where util > 80`, `hosts where port = 3389`. Tables: devices, hosts, subnets, vlans, links,
+  interfaces, hardware, findings, compliance, dependencies.
+* **REST API** (**Tools ▸ Start API server**, or `netmap serve`): a read-only JSON API on localhost — the
+  inventory pages, individual objects, and `/query?q=…` — for scripts and integrations, with an optional token.
+* **Scheduled scans**: **Scan ▸ Schedule automatic rescans** re-polls on an interval while the app is open;
+  `netmap crawl --repeat SECONDS` does the same headless on a jump box.
+* **Preferences** (**Edit ▸ Preferences**): set the default scan pace and limits once — including the **largest
+  subnet to sweep/probe**, so scanning a /16 is a single setting — plus which steps run and the theme.
+
 ## Staying inside your ranges
 
 * Nothing outside the scope is ever sent a packet. Target ranges are always inside it; when no wider scope
