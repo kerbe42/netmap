@@ -10,19 +10,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QSettings  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-import netmap.deepscan as ds  # noqa: E402
-import netmap.sweep as sw  # noqa: E402
-from netmap.util import resource_path  # noqa: E402
+import subnetsleuth.deepscan as ds  # noqa: E402
+import subnetsleuth.sweep as sw  # noqa: E402
+from subnetsleuth.util import resource_path  # noqa: E402
 
 from .test_deepscan import SAMPLE_XML  # noqa: E402
 
-SAMPLE = resource_path("data", "sample-campus.netmap")
+SAMPLE = resource_path("data", "sample-campus.sleuth")
 
 
 @pytest.fixture(scope="module")
 def qapp(tmp_path_factory):
-    QCoreApplication.setOrganizationName("netmap-tests")
-    QCoreApplication.setApplicationName("NetMapDeepScanTests")
+    QCoreApplication.setOrganizationName("subnetsleuth-tests")
+    QCoreApplication.setApplicationName("SubnetSleuthDeepScanTests")
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path_factory.mktemp("settings")))
     yield QApplication.instance() or QApplication([])
@@ -40,7 +40,7 @@ def _wait(app, cond, timeout=15.0):
 
 @pytest.fixture
 def win(qapp):
-    from netmap.gui.mainwindow import MainWindow
+    from subnetsleuth.gui.mainwindow import MainWindow
 
     w = MainWindow(recovery_dir="")
     w.resize(1300, 850)
@@ -57,14 +57,14 @@ def win(qapp):
 
 
 def test_deep_scan_from_the_window_lands_on_the_details_tab(qapp, win, monkeypatch):
-    from netmap.gui import deepscandlg
+    from subnetsleuth.gui import deepscandlg
 
     ip = next(h for h in sorted(win.inv.hosts) if h not in win.inv.ip_to_device)
 
     async def fake_nmap(args, timeout, kind="", target=""):
         import asyncio
 
-        from netmap import activity
+        from subnetsleuth import activity
 
         with activity.working(kind, target):  # as the real runner does
             await asyncio.sleep(1.3)  # long enough for a progress tick
@@ -79,7 +79,8 @@ def test_deep_scan_from_the_window_lands_on_the_details_tab(qapp, win, monkeypat
     monkeypatch.setattr(win, "show_now", lambda summary, items: (nows.append(summary), orig(summary, items)))
     win.node_action("deepscan", ip)
     assert win._jobs.busy()
-    assert _wait(qapp, lambda: not win._jobs.busy(), 20), "deep scan did not finish"
+    # the results are merged by the done handler, which runs just after the thread ends
+    assert _wait(qapp, lambda: not win._jobs.busy() and win._deep_worker is None, 20), "deep scan did not finish"
     assert any(n.startswith("deep scan " + ip) for n in nows)
     rec = win.inv.deep_scans[ip]
     assert rec["status"] == "ok" and {p["port"] for p in win.inv.hosts[ip].ports} >= {22, 443}
@@ -98,7 +99,7 @@ def test_now_line_shows_what_is_in_flight(qapp, win):
 
 
 def test_deep_scan_dialog_reads_addresses(qapp):
-    from netmap.gui.deepscandlg import DeepScanDialog, parse_addresses
+    from subnetsleuth.gui.deepscandlg import DeepScanDialog, parse_addresses
 
     assert parse_addresses("10.0.0.1, 10.0.0.2\n10.0.0.1 nope") == (["10.0.0.1", "10.0.0.2"], ["nope"])
     dlg = DeepScanDialog(["10.0.0.5"])

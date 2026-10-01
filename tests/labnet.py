@@ -7,7 +7,7 @@ Addresses are <base>.0.0.x (router<->dist), <base>.1.0.x (VLAN10 users), <base>.
 """
 from __future__ import annotations
 
-from netmap import oids as O
+from subnetsleuth import oids as O
 
 MAC_R1 = "00:11:22:33:44:01"
 MAC_SW1 = "00:11:22:33:44:10"

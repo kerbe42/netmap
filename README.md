@@ -1,8 +1,8 @@
-# NetMap
+# SubnetSleuth
 
 Inventory a network you look after — especially one you did not build — and see how it is wired.
 
-NetMap reads the network's own devices over SNMP (read-only) and works out what is there and how it
+SubnetSleuth reads the network's own devices over SNMP (read-only) and works out what is there and how it
 connects: LLDP and CDP neighbours, routing tables, ARP and MAC address tables, VLANs, interfaces and
 hardware. The result is an inventory (devices, hosts, subnets, VLANs, links, interfaces, serial numbers)
 and a topology diagram, which you can document as you go, keep current with rescans, check against
@@ -11,6 +11,9 @@ to `.vsdx`), PDF or CSV.
 
 It comes as a **Windows desktop app** and as a **command-line tool** that share one project file.
 
+*SubnetSleuth was called NetMap up to version 0.12. Installing it over NetMap upgrades it in place, and
+`.netmap` projects, settings and saved credentials carry over.*
+
 ![Overview](docs/screenshots/overview.png)
 
 The screenshots in this README are refreshed for each release from the frozen Windows build's self-test
@@ -18,21 +21,21 @@ run in CI (`tools/refresh_screenshots.py`), so they show the app as shipped.
 
 ## Download
 
-From the [latest release](https://github.com/kerbe42/netmap/releases/latest):
+From the [latest release](https://github.com/kerbe42/subnetsleuth/releases/latest):
 
 | File | What it is |
 |---|---|
-| `NetMap-<version>-setup.exe` | The desktop app, installed for your user account (no administrator rights needed). Start menu entry, optional desktop shortcut, opens `.netmap` files. |
-| `NetMap-<version>-portable.zip` | The same app as a folder: unzip anywhere (a USB stick, a jump host) and run `NetMap.exe`. Keeps its settings in that folder. |
-| `netmap-<version>-win-x64.exe` | The command line as a single file, no Python needed. |
-| `netmap-<version>-linux-x64` | The command line for Linux (x86-64). Built on Ubuntu 22.04, so it needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, RHEL / Rocky / Alma 9+ and their contemporaries. |
+| `SubnetSleuth-<version>-setup.exe` | The desktop app, installed for your user account (no administrator rights needed). Start menu entry, optional desktop shortcut, opens `.sleuth` files. |
+| `SubnetSleuth-<version>-portable.zip` | The same app as a folder: unzip anywhere (a USB stick, a jump host) and run `SubnetSleuth.exe`. Keeps its settings in that folder. |
+| `subnetsleuth-<version>-win-x64.exe` | The command line as a single file, no Python needed. |
+| `subnetsleuth-<version>-linux-x64` | The command line for Linux (x86-64). Built on Ubuntu 22.04, so it needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, RHEL / Rocky / Alma 9+ and their contemporaries. |
 
-Check a download against `SHA256SUMS.txt`: on Windows `Get-FileHash .\NetMap-<version>-setup.exe -Algorithm SHA256`
+Check a download against `SHA256SUMS.txt`: on Windows `Get-FileHash .\SubnetSleuth-<version>-setup.exe -Algorithm SHA256`
 and compare; on Linux `sha256sum -c SHA256SUMS.txt --ignore-missing` in the download folder.
 The binaries are built by this repository's GitHub Actions workflow and are not code-signed, so SmartScreen
 may ask for confirmation the first time.
 
-To see what NetMap does before pointing it at anything, open **Help ▸ Explore the sample network**: a
+To see what SubnetSleuth does before pointing it at anything, open **Help ▸ Explore the sample network**: a
 simulated campus with a firewall, a core pair, floor and warehouse switches, a server room and about 500
 endpoints.
 
@@ -53,7 +56,7 @@ device and the one that worked is recorded against it. Secrets are encrypted wit
   single addresses, or ranges like `10.20.0.10-60`, one per line or comma separated. Every live address in
   them is checked, however large the range: a /16 or bigger is scanned in full, and the dialog says
   roughly how long it will take.
-* **Start from devices** (optional) — a core switch or router. NetMap follows LLDP/CDP neighbours, routing
+* **Start from devices** (optional) — a core switch or router. SubnetSleuth follows LLDP/CDP neighbours, routing
   next-hops and subnet gateways outwards from it.
 * **Never touch** — ranges that must not be sent anything (OT, medical, partner links).
 
@@ -141,7 +144,7 @@ and included in the workbook export. A role you set corrects a wrong automatic g
 * **Tools ▸ Check against an asset list…** compares the project with the device list you were given (a CSV or
   `.xlsx` file; the address, name, serial and MAC columns are recognised from their headers) and reports what
   was *found*, *found but different* (another model, serial or address), *not found*, and what is on the
-  network but *not in the list*. The command line does the same: `netmap check -m site.netmap assets.xlsx --csv differences.csv`.
+  network but *not in the list*. The command line does the same: `subnetsleuth check -m site.sleuth assets.xlsx --csv differences.csv`.
 * **Tools** (bottom panel): ping, traceroute, DNS (with a forward/reverse consistency check) and an SNMP
   test against any address.
 
@@ -162,17 +165,17 @@ rows in a form that pastes straight into a spreadsheet.
 
 ### Settings and files
 
-* The project (`.netmap`) is a single JSON file holding the inventory, your notes, map layouts and scan
+* The project (`.sleuth`) is a single JSON file holding the inventory, your notes, map layouts and scan
   history — never credentials (see *Project file format* below).
-* Settings live in the registry under `HKCU\Software\netmap\NetMap`, or beside the program in the portable
-  build. The log is `%LOCALAPPDATA%\NetMap\netmap.log` (**Help ▸ Open the log folder**).
+* Settings live in the registry under `HKCU\Software\subnetsleuth\SubnetSleuth`, or beside the program in the portable
+  build. The log is `%LOCALAPPDATA%\SubnetSleuth\subnetsleuth.log` (**Help ▸ Open the log folder**).
 * **View ▸ Theme**: follow Windows, light or dark.
 
 ![Dark theme](docs/screenshots/dark.png)
 
 ### Project file format
 
-A `.netmap` file (or `.json`; the command line's `--out` accepts either) is plain UTF-8 JSON, so it diffs,
+A `.sleuth` file (or `.json`; the command line's `--out` accepts either) is plain UTF-8 JSON, so it diffs,
 greps and goes into version control. Top-level keys:
 
 | Key | Holds |
@@ -217,7 +220,7 @@ interface, or learned routes), not because sysServices says so.
 
 ## Identifying hosts (profiling)
 
-For endpoints that don't answer SNMP, NetMap profiles them from many weak signals weighed together, with
+For endpoints that don't answer SNMP, SubnetSleuth profiles them from many weak signals weighed together, with
 the evidence kept. Turn on **Identify hosts** in the scan (on by default);
 it sends a few small **read-only** probes to each host and needs no admin rights or nmap:
 
@@ -239,7 +242,7 @@ is kept as "also known as".
 
 ### Server functions from open ports
 
-On top of the single role, NetMap reads a server's **open ports** to work out what it actually *does* — a
+On top of the single role, SubnetSleuth reads a server's **open ports** to work out what it actually *does* — a
 box can fill several jobs at once, so these are listed as **functions** (a column on the Hosts list, a row in
 the details panel, and a **Server functions** breakdown on the overview):
 
@@ -263,7 +266,7 @@ offers no real service is left as a plain endpoint. Filter or query on it like a
 
 ## Routed topology
 
-Beyond cabling, NetMap reads the things that decide how the network actually forwards, so you can
+Beyond cabling, SubnetSleuth reads the things that decide how the network actually forwards, so you can
 understand a routed estate you were handed:
 
 * **First-hop redundancy (HSRP / VRRP)** — the *virtual* IP hosts really use as their gateway, and which
@@ -296,9 +299,9 @@ and a PoE budget nearly full.
 
 With device login credentials you can capture running-configs **read-only** over SSH (Cisco IOS/NX-OS,
 Junos, EOS, FortiOS, ArubaOS-CX, ProCurve, RouterOS) — **Tools ▸ Capture device configs**, a device's
-right-click menu, or `netmap capture -u USER`. Configs are stored in the project with a revision history,
+right-click menu, or `subnetsleuth capture -u USER`. Configs are stored in the project with a revision history,
 and each device's **Config** tab shows the text or a coloured **diff against the previous capture**, so
-you can see exactly what changed. NetMap only ever runs `show` commands; it never writes to a device.
+you can see exactly what changed. SubnetSleuth only ever runs `show` commands; it never writes to a device.
 
 ## DHCP, syslog and traps
 
@@ -318,34 +321,34 @@ you can see exactly what changed. NetMap only ever runs `show` commands; it neve
   end-of-support. Each item says what was found and the setting it should be brought to, so it doubles as
   a to-do list for the handover.
 * **End-of-life / end-of-sale**: each device is matched against a bundled offline table of common platforms
-  (`netmap/data/eol.json`) and shows its support status and the announced dates. The table is curated by
+  (`subnetsleuth/data/eol.json`) and shows its support status and the announced dates. The table is curated by
   hand and some entries match by family only, so always confirm a milestone against the vendor's notice for
   the exact part number.
 
 ## Servers, virtualization and dependencies
 
-Beyond the network gear, NetMap can go deeper where you have credentials:
+Beyond the network gear, SubnetSleuth can go deeper where you have credentials:
 
-* **Agentless server inspection** (**Tools ▸ Inspect servers**, or `netmap inspect`): read-only SSH (Linux/Unix)
+* **Agentless server inspection** (**Tools ▸ Inspect servers**, or `subnetsleuth inspect`): read-only SSH (Linux/Unix)
   and WinRM (Windows) collection of OS, hardware, installed software, running services and active connections.
   A host's details gain **System**, **Software** and **Connections** tabs.
   WinRM prerequisites on the Windows targets: the WinRM service listening (`winrm quickconfig` or the *Allow
   remote server management through WinRM* policy), TCP **5985** (HTTP) — or **5986** with a certificate for
-  HTTPS — allowed through the host firewall from the machine running NetMap, and an account that is a local
+  HTTPS — allowed through the host firewall from the machine running SubnetSleuth, and an account that is a local
   administrator (or in *Remote Management Users*). Authentication is **NTLM** by default; Kerberos works when the
   scanning machine is domain-joined and you give the account as `user@REALM`. Nothing is installed on the
   target and only `Get-*` / WMI queries are run.
 * **Dependency mapping**: the connections collected become a **Dependencies** page and a per-host tab — which
   client talks to which server on what service (the server side inferred from the well-known port), the way an
   application-dependency map is built.
-* **VMware discovery** (**File ▸ Import ▸ VMware**, or `netmap vmware`): read-only vCenter/ESXi discovery that
+* **VMware discovery** (**File ▸ Import ▸ VMware**, or `subnetsleuth vmware`): read-only vCenter/ESXi discovery that
   folds ESXi hosts and VMs into the map with guest IPs/OS, the ESXi parent and port-group VLANs.
 * **Switch faceplate**: a switch's **Ports panel** tab draws its ports as they sit on the front of the unit,
   coloured by up/down/disabled/errors, marking PoE ports and ports with a neighbour.
 
 ## Broad discovery (unauthenticated)
 
-Beyond SNMP and the usual host probes, NetMap fingerprints assets across many protocols with no
+Beyond SNMP and the usual host probes, SubnetSleuth fingerprints assets across many protocols with no
 credentials, as part of **Identify hosts**:
 
 * **WS-Discovery** (printers, ONVIF cameras, Windows), **IPMI** (server lights-out/BMC controllers), and
@@ -361,10 +364,10 @@ credentials, as part of **Identify hosts**:
   `hosts where os ~ windows and confidence = high`, `devices where role = switch order by name`,
   `interfaces where util > 80`, `hosts where port = 3389`. Tables: devices, hosts, subnets, vlans, links,
   interfaces, hardware, findings, compliance, dependencies.
-* **REST API** (**Tools ▸ Start API server**, or `netmap serve`): a read-only JSON API on localhost — the
+* **REST API** (**Tools ▸ Start API server**, or `subnetsleuth serve`): a read-only JSON API on localhost — the
   inventory pages, individual objects, and `/query?q=…` — for scripts and integrations, with an optional token.
 * **Scheduled scans**: **Scan ▸ Schedule automatic rescans** re-polls on an interval while the app is open;
-  `netmap crawl --repeat SECONDS` does the same headless on a jump box.
+  `subnetsleuth crawl --repeat SECONDS` does the same headless on a jump box.
 * **Preferences** (**Edit ▸ Preferences**): set the default scan pace and limits once — including the **largest
   subnet to sweep/probe**, so scanning a /16 is a single setting — plus which steps run and the theme.
 
@@ -376,7 +379,7 @@ exclusion, is never contacted, whichever step found it. This is what each step s
 
 | Step | Sends | To | Runs |
 |---|---|---|---|
-| SNMP polling | GET / GETBULK (read-only; NetMap never issues SET) | seeds, live addresses in the targets, and LLDP/CDP neighbours, next-hop routers and subnet gateways learned from them | always |
+| SNMP polling | GET / GETBULK (read-only; SubnetSleuth never issues SET) | seeds, live addresses in the targets, and LLDP/CDP neighbours, next-hop routers and subnet gateways learned from them | always |
 | Ping sweep | ICMP echo, or TCP connect to a few common ports where ICMP is blocked | every address in a target range (no size limit), and in the subnets devices report up to `--sweep-max-size` (default /22) | with *Ping-sweep every subnet* / `--sweep`, or before probing a target |
 | Reverse DNS | PTR queries to **your** resolver, not to the hosts | your configured DNS server | with *Name from reverse DNS* / `--dns` |
 | Host identification | one small request each: NetBIOS name query, mDNS, SSDP, WS-Discovery, HTTP/TLS handshake, SSH banner read, IPMI, Modbus, BACnet, EtherNet/IP, DNS and NTP checks | hosts and devices already found | with *Identify hosts* / `--identify` |
@@ -394,7 +397,7 @@ exclusion, is never contacted, whichever step found it. This is what each step s
   different: it covers subnets learned from routing tables, which can include summaries such as 10.0.0.0/8,
   so it skips those larger than *Largest discovered subnet to sweep* (`--sweep-max-size`, default /22).
   `--max-devices` (default 5000) stops a crawl that keeps finding new devices.
-* Everything is read-only. Nothing NetMap sends changes state on a device or host.
+* Everything is read-only. Nothing SubnetSleuth sends changes state on a device or host.
 * Large networks: a sweep runs one `nmap` per /24 of each range (eight at a time), and the port scan only
   goes to addresses that answered a ping, in batches of 24. Each `nmap` run has a time limit (*Nmap time
   limit per run*, `--nmap-timeout`, default 30 minutes, 0 for none). A run that reaches it keeps every host it
@@ -406,67 +409,67 @@ exclusion, is never contacted, whichever step found it. This is what each step s
 
 ## Command line
 
-The same scanner and the same project file, for scripting and scheduled runs. `netmap.exe` on Windows,
-`netmap-cli.exe` inside the installed app's folder, or from source:
+The same scanner and the same project file, for scripting and scheduled runs. `subnetsleuth.exe` on Windows,
+`subnetsleuth-cli.exe` inside the installed app's folder, or from source:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .          # command line only
-.venv/bin/pip install -e ".[gui]"                            # plus the desktop app (netmap-gui)
+.venv/bin/pip install -e ".[gui]"                            # plus the desktop app (subnetsleuth-gui)
 ```
 
 Requires Python 3.11+.
 
 ```bash
-export NETMAP_COMMUNITY='their-ro-string'
+export SUBNETSLEUTH_COMMUNITY='their-ro-string'
 
 # Inventory the ranges you are responsible for, and nothing else.
-netmap crawl --target 10.20.0.0/24 --target 10.30.0.0/24 -C "$NETMAP_COMMUNITY" \
-             --dns --out site.netmap --xlsx site.xlsx --drawio site.drawio
+subnetsleuth crawl --target 10.20.0.0/24 --target 10.30.0.0/24 -C "$SUBNETSLEUTH_COMMUNITY" \
+             --dns --out site.sleuth --xlsx site.xlsx --drawio site.drawio
 
 # The same list from a file (one subnet per line, '#' comments allowed).
-netmap crawl --target-file ranges.txt -C "$NETMAP_COMMUNITY" --out site.netmap
+subnetsleuth crawl --target-file ranges.txt -C "$SUBNETSLEUTH_COMMUNITY" --out site.sleuth
 
 # ICMP is filtered: skip the ping and try SNMP on every address in the targets.
-netmap crawl --target 10.20.0.0/24 --probe-all -C "$NETMAP_COMMUNITY" --out site.netmap
+subnetsleuth crawl --target 10.20.0.0/24 --probe-all -C "$SUBNETSLEUTH_COMMUNITY" --out site.sleuth
 
 # Spider outwards from a core device, bounded by --scope.
-netmap crawl --seed 10.10.0.1 --scope 10.10.0.0/16 -C "$NETMAP_COMMUNITY" --out site.netmap
+subnetsleuth crawl --seed 10.10.0.1 --scope 10.10.0.0/16 -C "$SUBNETSLEUTH_COMMUNITY" --out site.sleuth
 
 # Later: re-poll everything already in the project and follow new links; notes and layout are kept.
-netmap crawl --resume --refresh --seed 10.10.0.1 --scope 10.10.0.0/16 -C "$NETMAP_COMMUNITY" --out site.netmap
+subnetsleuth crawl --resume --refresh --seed 10.10.0.1 --scope 10.10.0.0/16 -C "$SUBNETSLEUTH_COMMUNITY" --out site.sleuth
 
 # Go further than SNMP on the hosts found (each step stays inside the scope):
 #   --dns        names from reverse DNS
 #   --identify   small read-only identification probes (NetBIOS, mDNS, SSDP, HTTP/TLS, SSH banner, OT/BMC protocols)
 #   --port-scan  nmap service/version scan of every device and host found
 #   --os         nmap OS detection as well (needs Administrator / root)
-netmap crawl --target 10.20.0.0/24 -C "$NETMAP_COMMUNITY" --dns --identify --port-scan --out site.netmap
+subnetsleuth crawl --target 10.20.0.0/24 -C "$SUBNETSLEUTH_COMMUNITY" --dns --identify --port-scan --out site.sleuth
 
 # Guard rails: refuse to sweep anything larger than a /24, stop after 500 devices.
-netmap crawl --target 10.0.0.0/16 -C "$NETMAP_COMMUNITY" --sweep-max-size 24 --max-devices 500 --out site.netmap
+subnetsleuth crawl --target 10.0.0.0/16 -C "$SUBNETSLEUTH_COMMUNITY" --sweep-max-size 24 --max-devices 500 --out site.sleuth
 
 # A big estate (/16s across a WAN): allow /16 targets and give each nmap run up to an hour.
-netmap crawl --target-file ranges.txt -C "$NETMAP_COMMUNITY" --sweep-max-size 16 --port-scan --nmap-timeout 60 --out site.netmap
+subnetsleuth crawl --target-file ranges.txt -C "$SUBNETSLEUTH_COMMUNITY" --sweep-max-size 16 --port-scan --nmap-timeout 60 --out site.sleuth
 
-netmap show   -m site.netmap                                      # text summary
-netmap render -m site.netmap --xlsx site.xlsx --drawio site.drawio --csv out/site-   # outputs, no network
-netmap sweep  -m site.netmap --subnet 10.10.50.0/24               # ping-sweep one more subnet
-netmap diff   last-month.netmap site.netmap --csv changes.csv     # what changed
-netmap check  -m site.netmap assets.xlsx --csv differences.csv    # reconcile with the asset list you were given
-netmap gui    site.netmap                                         # open it in the desktop app
+subnetsleuth show   -m site.sleuth                                      # text summary
+subnetsleuth render -m site.sleuth --xlsx site.xlsx --drawio site.drawio --csv out/site-   # outputs, no network
+subnetsleuth sweep  -m site.sleuth --subnet 10.10.50.0/24               # ping-sweep one more subnet
+subnetsleuth diff   last-month.sleuth site.sleuth --csv changes.csv     # what changed
+subnetsleuth check  -m site.sleuth assets.xlsx --csv differences.csv    # reconcile with the asset list you were given
+subnetsleuth gui    site.sleuth                                         # open it in the desktop app
 
 # Look at one or more addresses as thoroughly as nmap can (all TCP ports, versions, OS, safe scripts);
 # --udp adds the common UDP services. Results are stored in the project.
-sudo netmap deepscan 10.20.0.15 10.20.0.16 -m site.netmap --udp
+sudo subnetsleuth deepscan 10.20.0.15 10.20.0.16 -m site.sleuth --udp
 ```
 
 For anything repeatable, keep scope, exclusions and SNMPv3 credentials in a config file (see
-`netmap.toml.example`). Any secret in it — community, v3 keys — can be written as `env:VARIABLE`, and the
+`subnetsleuth.toml.example`). Any secret in it — community, v3 keys — can be written as `env:VARIABLE`, and the
 value is read from that environment variable when the scan starts, so the file itself holds no secret:
 
 ```bash
-export NETMAP_COMMUNITY='their-ro-string'      # the file says  community = "env:NETMAP_COMMUNITY"
-netmap crawl -c site.toml --sweep --fingerprint --out site.netmap --xlsx site.xlsx
+export SUBNETSLEUTH_COMMUNITY='their-ro-string'      # the file says  community = "env:SUBNETSLEUTH_COMMUNITY"
+subnetsleuth crawl -c site.toml --sweep --fingerprint --out site.sleuth --xlsx site.xlsx
 ```
 
 `ranges.txt` takes the range list as it arrives — one subnet or address per line, or several separated by
@@ -483,7 +486,7 @@ commas, with `#` comments:
 
 | Option | Contents |
 |---|---|
-| `--out` (`.netmap` / `.json`) | the project: full inventory, notes, layouts, scan history; written after every device, so `--resume` continues an interrupted scan |
+| `--out` (`.sleuth` / `.json`) | the project: full inventory, notes, layouts, scan history; written after every device, so `--resume` continues an interrupted scan |
 | `--xlsx` | `.xlsx` workbook: Summary, Devices, IPAM, VLANs, Links, Hosts, Interfaces, Hardware, Gaps |
 | `--drawio` | draw.io diagram, physical and logical pages |
 | `--html` | self-contained interactive map (works offline) |
@@ -525,7 +528,7 @@ its count is a floor rather than a total.
 
 * **Nmap is optional.** Without it, target ranges are pinged with Windows' own `ping` and service
   identification is unavailable; SNMP, LLDP/CDP, ARP, routing, DNS and MAC-based typing all work regardless.
-  NetMap finds Nmap in its default install folder even when it is not on `PATH`.
+  SubnetSleuth finds Nmap in its default install folder even when it is not on `PATH`.
 * **Run as Administrator** only if you use Nmap sweeps and want ARP/ICMP discovery; unprivileged, Nmap falls
   back to TCP connect pings and finds fewer hosts.
 * Windows Defender Firewall does not block outbound SNMP, but a corporate endpoint agent might. If
@@ -536,14 +539,14 @@ its count is a floor rather than a total.
 
 ```bash
 pip install -r requirements-build.txt -e ".[gui]"    # pinned PyInstaller and Qt versions, as CI uses
-pyinstaller packaging/netmap-gui.spec --noconfirm   # -> dist/NetMap/ (NetMap.exe + netmap-cli.exe)
-pyinstaller netmap.spec --noconfirm                 # -> dist/netmap(.exe), the single-file command line
-iscc /DAppVersion=<version> packaging\netmap.iss    # -> dist/NetMap-<version>-setup.exe (Inno Setup, Windows)
+pyinstaller packaging/subnetsleuth-gui.spec --noconfirm   # -> dist/SubnetSleuth/ (SubnetSleuth.exe + subnetsleuth-cli.exe)
+pyinstaller subnetsleuth.spec --noconfirm                 # -> dist/subnetsleuth(.exe), the single-file command line
+iscc /DAppVersion=<version> packaging\subnetsleuth.iss    # -> dist/SubnetSleuth-<version>-setup.exe (Inno Setup, Windows)
 ```
 
 What goes into a frozen build (data files, wholesale-collected packages, exclusions) is listed once in
 `packaging/bundle.py` and used by both specs; `tests/test_packaging.py` checks that list, and the wheel's
-package data, against the files under `netmap/data` and `netmap/vendor`.
+package data, against the files under `subnetsleuth/data` and `subnetsleuth/vendor`.
 
 A Windows build has to be made on Windows: pushing to `main` or a `v*` tag runs
 `.github/workflows/build.yml`, which runs the tests on Linux (Python 3.11 and 3.12) and Windows, builds
@@ -551,7 +554,7 @@ everything, starts the frozen app with `--selftest` (every page, every export, s
 attaches the installer, the portable zip and the command-line binaries to the release with checksums and
 the release notes from `CHANGELOG.md`. The Linux binary is built on Ubuntu 22.04 so that it runs on
 anything with glibc 2.35 or newer. Release screenshots: download the tag build's
-`netmap-desktop-screenshots` artifact and run `python tools/refresh_screenshots.py --from <folder>/shots-native`.
+`subnetsleuth-desktop-screenshots` artifact and run `python tools/refresh_screenshots.py --from <folder>/shots-native`.
 The bundled sample project is generated by `python tools/make_sample.py`.
 
 ## Testing

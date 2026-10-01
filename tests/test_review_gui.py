@@ -16,16 +16,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QRect, QRectF, QSettings, Qt, QThread  # noqa: E402
 from PySide6.QtWidgets import QApplication, QGraphicsRectItem, QMessageBox  # noqa: E402
 
-from netmap.model import Inventory  # noqa: E402
-from netmap.util import resource_path  # noqa: E402
+from subnetsleuth.model import Inventory  # noqa: E402
+from subnetsleuth.util import resource_path  # noqa: E402
 
-SAMPLE = resource_path("data", "sample-campus.netmap")
+SAMPLE = resource_path("data", "sample-campus.sleuth")
 
 
 @pytest.fixture(scope="module")
 def qapp(tmp_path_factory):
-    QCoreApplication.setOrganizationName("netmap-tests")
-    QCoreApplication.setApplicationName("NetMapReviewTests")
+    QCoreApplication.setOrganizationName("subnetsleuth-tests")
+    QCoreApplication.setApplicationName("SubnetSleuthReviewTests")
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path_factory.mktemp("settings")))
     app = QApplication.instance() or QApplication([])
@@ -51,7 +51,7 @@ def _wait(app, cond, timeout=15.0):
 
 @pytest.fixture
 def win(qapp, tmp_path):
-    from netmap.gui.mainwindow import MainWindow
+    from subnetsleuth.gui.mainwindow import MainWindow
 
     w = MainWindow(recovery_dir="")
     w.resize(1300, 850)
@@ -92,7 +92,7 @@ def _yes(*_a, **_k):
 
 # ------------------------------------------------------------------ 1 / 2 / 9: workers, busy(), close
 def test_busy_blocks_scan_open_new_and_forget_while_a_side_worker_runs(qapp, win, monkeypatch):
-    from netmap.gui import mainwindow as mw
+    from subnetsleuth.gui import mainwindow as mw
 
     shown = []
     monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[2])))
@@ -130,7 +130,7 @@ def test_close_stops_side_workers_and_waits(qapp, win, monkeypatch):
 
 
 def test_close_is_deferred_while_a_worker_ignores_stop_then_completes(qapp, win, monkeypatch):
-    from netmap.gui import mainwindow as mw
+    from subnetsleuth.gui import mainwindow as mw
 
     monkeypatch.setattr(QMessageBox, "question", staticmethod(_yes))
     monkeypatch.setattr(mw, "CLOSE_WAIT_MS", 200)
@@ -152,7 +152,7 @@ def test_scan_outcome_is_applied_exactly_once_and_cancelled_scans_are_not_autosa
         def __init__(self, inv, record):
             self.outcome = ("ok", inv, record)
 
-    target = tmp_path / "proj.netmap"
+    target = tmp_path / "proj.sleuth"
     win.path = str(target)
     new_inv = win.inv.copy()
     new_inv.hosts.pop(next(iter(new_inv.hosts)))
@@ -178,7 +178,7 @@ def test_scan_outcome_is_applied_exactly_once_and_cancelled_scans_are_not_autosa
 
 # ------------------------------------------------------------------ 3: live tick off the UI thread
 def test_live_tick_builds_snapshot_and_rows_on_a_thread(qapp, win):
-    from netmap.gui.worker import SnapshotBuilder
+    from subnetsleuth.gui.worker import SnapshotBuilder
 
     win.navigate("hosts")
     _pump(qapp, 30)
@@ -199,8 +199,8 @@ def test_live_tick_builds_snapshot_and_rows_on_a_thread(qapp, win):
 
 
 def test_rows_model_sorts_once_by_kind_and_hosts_default_to_ip(qapp, win):
-    from netmap.gui.table import DataPage, RowsModel
-    from netmap.views import Column
+    from subnetsleuth.gui.table import DataPage, RowsModel
+    from subnetsleuth.views import Column
 
     m = RowsModel([Column("ip", "IP", "ip", 100), Column("n", "N", "int", 50)])
     m.sort(0, Qt.AscendingOrder)
@@ -225,7 +225,7 @@ def test_drag_then_immediate_save_keeps_the_position(qapp, win, tmp_path):
     nid, item = next(iter(win.topology.nodes.items()))
     item.setPos(item.pos().x() + 123, item.pos().y() + 45)  # a drag: the 400 ms store timer starts
     assert win.topology._save_timer.isActive()
-    out = tmp_path / "dragged.netmap"
+    out = tmp_path / "dragged.sleuth"
     assert win._write(str(out))
     saved = Inventory.load(str(out))
     x, y = saved.layout[win.topology.preset][nid]
@@ -243,7 +243,7 @@ def test_pending_note_is_flushed_on_selection_change_and_before_save(qapp, win, 
     win.select_node(b)  # switching items must not lose the note typed half a second ago
     assert win.inv.note(a).get("notes") == "closet B, patch panel 3"
     win.details.doc.notes.setPlainText("rack 2")
-    out = tmp_path / "notes.netmap"
+    out = tmp_path / "notes.sleuth"
     assert win._write(str(out))
     assert Inventory.load(str(out)).note(b).get("notes") == "rack 2"
     win.details.doc.site.setText("HQ")
@@ -254,9 +254,9 @@ def test_pending_note_is_flushed_on_selection_change_and_before_save(qapp, win, 
 
 # ------------------------------------------------------------------ 6: backups / revert
 def test_saving_rotates_three_backups(qapp, win, tmp_path):
-    from netmap.gui.fileutil import backup_paths
+    from subnetsleuth.gui.fileutil import backup_paths
 
-    out = tmp_path / "p.netmap"
+    out = tmp_path / "p.sleuth"
     contents = []
     for i in range(5):
         win.inv.project["description"] = f"version {i}"
@@ -273,7 +273,7 @@ def test_saving_rotates_three_backups(qapp, win, tmp_path):
     win.inv.project["description"] = "unsaved"
     win.set_dirty(True)
     win.revert_to_saved() if not win.dirty else None
-    import netmap.gui.mainwindow as mw
+    import subnetsleuth.gui.mainwindow as mw
 
     orig = QMessageBox.question
     QMessageBox.question = staticmethod(_yes)
@@ -375,7 +375,7 @@ def test_path_fit_is_not_overridden_by_the_deferred_whole_map_fit(qapp, win):
 
 # ------------------------------------------------------------------ 11: bar text colour
 def test_bar_text_is_white_only_when_the_fill_covers_it():
-    from netmap.gui.table import bar_text_color
+    from subnetsleuth.gui.table import bar_text_color
 
     r = QRect(0, 0, 100, 20)
     assert bar_text_color(50.0, r, text_width=30) == "text"
@@ -387,7 +387,7 @@ def test_bar_text_is_white_only_when_the_fill_covers_it():
 
 # ------------------------------------------------------------------ 12: faceplate
 def test_faceplate_keeps_port_n_names_and_disambiguates_uplinks():
-    from netmap.gui.portpanel import is_logical_interface, port_labels
+    from subnetsleuth.gui.portpanel import is_logical_interface, port_labels
 
     assert not is_logical_interface("Port 1") and not is_logical_interface("Port24")
     assert is_logical_interface("Po1") and is_logical_interface("Port-channel1") and is_logical_interface("Vlan10") and is_logical_interface("lo0")
@@ -400,7 +400,7 @@ def test_faceplate_keeps_port_n_names_and_disambiguates_uplinks():
 
 
 def test_faceplate_geometry_matches_its_rows(qapp):
-    from netmap.gui.portpanel import _Faceplate
+    from subnetsleuth.gui.portpanel import _Faceplate
 
     fp = _Faceplate()
     fp.set_ports([{"name": f"Port {i}"} for i in range(1, 9)])
@@ -412,7 +412,7 @@ def test_faceplate_geometry_matches_its_rows(qapp):
 
 # ------------------------------------------------------------------ 13: capture log per device
 def test_capture_progress_reports_each_devices_own_change(qapp, monkeypatch):
-    from netmap.gui import capturedlg
+    from subnetsleuth.gui import capturedlg
 
     class Cap:
         ok = True
@@ -434,7 +434,7 @@ def test_capture_progress_reports_each_devices_own_change(qapp, monkeypatch):
 
 # ------------------------------------------------------------------ 14: render cap
 def test_render_image_caps_the_long_side(qapp):
-    from netmap.gui.topology import MAX_RENDER_SIDE, TopologyPage
+    from subnetsleuth.gui.topology import MAX_RENDER_SIDE, TopologyPage
 
     page = TopologyPage()
     page.scene.addItem(QGraphicsRectItem(QRectF(0, 0, 10, 10)))
@@ -447,7 +447,7 @@ def test_render_image_caps_the_long_side(qapp):
 
 # ------------------------------------------------------------------ 15: credential label
 def test_default_credential_label_has_no_community_characters(qapp):
-    from netmap.gui.credentials import CredentialEditor, CredentialStore
+    from subnetsleuth.gui.credentials import CredentialEditor, CredentialStore
 
     store = CredentialStore()
     dlg = CredentialEditor(store, None, ordinal=3)
@@ -462,8 +462,8 @@ def test_default_credential_label_has_no_community_characters(qapp):
 
 # ------------------------------------------------------------------ 16: tools stale process
 def test_stale_process_finished_does_not_null_the_new_run(qapp):
-    from netmap.gui.credentials import CredentialStore
-    from netmap.gui.tools import ToolsPanel
+    from subnetsleuth.gui.credentials import CredentialStore
+    from subnetsleuth.gui.tools import ToolsPanel
 
     tp = ToolsPanel(CredentialStore())
     tp._run(["sleep", "5"])
@@ -478,8 +478,8 @@ def test_stale_process_finished_does_not_null_the_new_run(qapp):
 
 # ------------------------------------------------------------------ 17: query dialog uses the rows model
 def test_query_dialog_uses_rows_model(qapp, win):
-    from netmap.gui.querydlg import QueryDialog
-    from netmap.gui.table import RowsModel
+    from subnetsleuth.gui.querydlg import QueryDialog
+    from subnetsleuth.gui.table import RowsModel
 
     qd = QueryDialog(win.snapshot, win)
     qd.edit.setText("hosts where os ~ windows")
@@ -491,8 +491,8 @@ def test_query_dialog_uses_rows_model(qapp, win):
 
 # ------------------------------------------------------------------ 19: labels, dashes, export dir
 def test_display_maps_role_keys_and_dashes_zero_durations(qapp):
-    from netmap.gui.table import DASH, display
-    from netmap.views import Column
+    from subnetsleuth.gui.table import DASH, display
+    from subnetsleuth.views import Column
 
     assert display(Column("role", "Type"), "workstation") == "Workstation"
     assert display(Column("role", "Type"), "media") == "Media / AV device"
@@ -502,12 +502,12 @@ def test_display_maps_role_keys_and_dashes_zero_durations(qapp):
 
 
 def test_export_paths_go_through_the_shared_export_dir(qapp, tmp_path):
-    from netmap.gui.fileutil import export_dir
+    from subnetsleuth.gui.fileutil import export_dir
 
     QSettings().setValue("ui/export_dir", str(tmp_path))
     assert export_dir() == str(tmp_path)
     QSettings().remove("ui/export_dir")
-    assert export_dir(str(tmp_path / "x" / "p.netmap")) == str(tmp_path / "x")
+    assert export_dir(str(tmp_path / "x" / "p.sleuth")) == str(tmp_path / "x")
 
 
 # ------------------------------------------------------------------ 22: acknowledge
@@ -534,7 +534,7 @@ def test_acknowledged_findings_are_hidden_until_shown(qapp, win):
 def test_listen_dialog_tracks_new_events_by_seq_or_identity(qapp):
     from collections import deque
 
-    from netmap.gui.listendlg import ListenDialog
+    from subnetsleuth.gui.listendlg import ListenDialog
 
     class Ev:
         def __init__(self, i, seq=None):
@@ -562,7 +562,7 @@ def test_listen_dialog_tracks_new_events_by_seq_or_identity(qapp):
 
 # ------------------------------------------------------------------ 8: reconcile dialog
 def test_reconcile_dialog_resolves_the_current_inventory_and_applies_on_reject(qapp, win, tmp_path):
-    from netmap.gui.reconciledlg import ReconcileDialog
+    from subnetsleuth.gui.reconciledlg import ReconcileDialog
 
     lst = tmp_path / "assets.csv"
     dev = next(iter(win.inv.devices.values()))
@@ -584,7 +584,7 @@ def test_reconcile_dialog_resolves_the_current_inventory_and_applies_on_reject(q
 
 # ------------------------------------------------------------------ helpers
 def test_copy_inventory_matches_inventory_copy(qapp):
-    from netmap.gui.jobs import copy_inventory
+    from subnetsleuth.gui.jobs import copy_inventory
 
     inv = Inventory.load(SAMPLE)
     a = copy_inventory(inv)
@@ -594,7 +594,7 @@ def test_copy_inventory_matches_inventory_copy(qapp):
 
 
 def test_job_registry_describes_and_stops(qapp):
-    from netmap.gui.jobs import JobRegistry
+    from subnetsleuth.gui.jobs import JobRegistry
 
     reg = JobRegistry()
     assert not reg.busy() and reg.describe() == "a background job"

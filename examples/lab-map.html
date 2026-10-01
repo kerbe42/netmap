@@ -103,7 +103,7 @@ function applyFilters(){
 ['f_lldp','f_l3','f_subnet','f_host','f_fdb'].forEach(id=>document.getElementById(id).addEventListener('change',applyFilters));
 document.getElementById('f_physics').addEventListener('change',e=>net.setOptions({physics:{enabled:e.target.checked}}));
 document.getElementById('fit').onclick=()=>net.fit();
-document.getElementById('png').onclick=()=>{const c=document.querySelector('#net canvas');const a=document.createElement('a');a.download='netmap.png';a.href=c.toDataURL('image/png');a.click();};
+document.getElementById('png').onclick=()=>{const c=document.querySelector('#net canvas');const a=document.createElement('a');a.download='subnetsleuth.png';a.href=c.toDataURL('image/png');a.click();};
 const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function showDetail(obj, title){
   const rows = Object.entries(obj).filter(([k,v])=>v!==''&&v!==null&&!(Array.isArray(v)&&!v.length)).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('');

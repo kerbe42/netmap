@@ -1,4 +1,4 @@
-"""Unit tests for the active host-identification probes in netmap.discover.
+"""Unit tests for the active host-identification probes in subnetsleuth.discover.
 
 Every parser is exercised against hand-built, realistic captured bytes; the orchestrator is
 driven through injected `probes=` callables so nothing here touches the real network.
@@ -8,8 +8,8 @@ import struct
 
 import pytest
 
-from netmap import discover
-from netmap.model import Host, Inventory
+from subnetsleuth import discover
+from subnetsleuth.model import Host, Inventory
 
 
 # --------------------------------------------------------------------------- #

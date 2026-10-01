@@ -1,10 +1,28 @@
 # Changelog
 
-All notable changes to NetMap are recorded here. The format follows
+All notable changes to SubnetSleuth (called NetMap up to 0.12) are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/) while the project is pre-1.0 (minor bumps may
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
+
+## [0.13.0] - 2026-10-01
+
+NetMap is now **SubnetSleuth**: the desktop app is `SubnetSleuth.exe`, the command line
+`subnetsleuth`, and the repository github.com/kerbe42/subnetsleuth (the old address redirects).
+
+### Changed
+- New projects are saved as `.sleuth`. `.netmap` projects open and save as they are, and the
+  installer associates both extensions with SubnetSleuth.
+- The installer upgrades a NetMap install in place: it installs into a *SubnetSleuth* folder and
+  removes the old NetMap program folder, Start menu entry and desktop shortcut.
+- On first start SubnetSleuth copies NetMap's settings: preferences, window layout, recent files
+  and saved SNMP credentials, which still decrypt. The SSH host keys NetMap recorded are carried
+  over too. A portable folder with `netmap-portable.ini` keeps working.
+- Environment variables are now `SUBNETSLEUTH_*` (for example `SUBNETSLEUTH_COMMUNITY`); the old
+  `NETMAP_*` names still work.
+- The config example is `subnetsleuth.toml.example`; command-line defaults are `subnetsleuth.json`
+  and `subnetsleuth.html`.
 
 ## [0.12.0] - 2026-10-01
 
@@ -355,6 +373,9 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
+[0.13.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kerbe42/netmap/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kerbe42/netmap/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/kerbe42/netmap/compare/v0.8.0...v0.8.1

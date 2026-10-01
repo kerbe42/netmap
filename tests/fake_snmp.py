@@ -1,8 +1,8 @@
-"""In-memory stand-in for netmap.snmp.SnmpSession / probe."""
+"""In-memory stand-in for subnetsleuth.snmp.SnmpSession / probe."""
 from __future__ import annotations
 
-from netmap import oids as O
-from netmap.snmp import Credential
+from subnetsleuth import oids as O
+from subnetsleuth.snmp import Credential
 
 
 class FakeSession:

@@ -1,18 +1,18 @@
 """Refresh docs/screenshots/*.png (the eight images the README shows) from the app's self-test.
 
     python tools/refresh_screenshots.py                       # run the app from source, offscreen
-    python tools/refresh_screenshots.py --exe dist\\NetMap\\NetMap.exe   # use a frozen build (Windows: real desktop)
+    python tools/refresh_screenshots.py --exe dist\\SubnetSleuth\\SubnetSleuth.exe   # use a frozen build (Windows: real desktop)
     python tools/refresh_screenshots.py --from shots-native   # copy from an existing self-test folder
-                                                              # (e.g. the netmap-desktop-screenshots CI artifact)
+                                                              # (e.g. the subnetsleuth-desktop-screenshots CI artifact)
 
-The self-test (`NetMap --selftest --screenshots DIR project.netmap`) writes one PNG per screen
+The self-test (`SubnetSleuth --selftest --screenshots DIR project.sleuth`) writes one PNG per screen
 with a numbered name; the README references stable names. The mapping below is the single
-place that ties the two together - keep it in step with netmap/gui/selftest.py.
+place that ties the two together - keep it in step with subnetsleuth/gui/selftest.py.
 
 The pictures in the repository are taken on the Windows CI runner (native desktop, dark
 theme, 1920x1080) so they look like the shipped app; a Linux offscreen run is fine for
 checking layout but will not match the Windows widget style. Typical release flow: download
-the `netmap-desktop-screenshots` artifact of the tag build, unzip, then
+the `subnetsleuth-desktop-screenshots` artifact of the tag build, unzip, then
 `python tools/refresh_screenshots.py --from <unzipped>/shots-native` and commit.
 """
 from __future__ import annotations
@@ -26,9 +26,9 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, "docs", "screenshots")
-SAMPLE = os.path.join(ROOT, "netmap", "data", "sample-campus.netmap")
+SAMPLE = os.path.join(ROOT, "subnetsleuth", "data", "sample-campus.sleuth")
 
-# README image  <-  self-test screenshot (see shot(...) calls in netmap/gui/selftest.py)
+# README image  <-  self-test screenshot (see shot(...) calls in subnetsleuth/gui/selftest.py)
 MAPPING = {
     "overview.png": "01-overview.png",  # the Overview page, right after opening the project
     "map-physical.png": "30-map-physical.png",  # Topology map, Physical preset
@@ -45,7 +45,7 @@ def run_selftest(out_dir: str, exe: str | None, theme: str | None) -> None:
     if exe:
         cmd = [exe]
     else:
-        cmd = [sys.executable, "-m", "netmap.gui.app"]
+        cmd = [sys.executable, "-m", "subnetsleuth.gui.app"]
     cmd += ["--selftest", "--screenshots", out_dir]
     if theme:
         cmd += ["--theme", theme]
@@ -79,7 +79,7 @@ def copy_mapped(src_dir: str, check_only: bool) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--exe", help="frozen NetMap.exe / NetMap binary to run instead of the source tree")
+    ap.add_argument("--exe", help="frozen SubnetSleuth.exe / SubnetSleuth binary to run instead of the source tree")
     ap.add_argument("--from", dest="src", help="existing --screenshots folder to copy from (skips running the app)")
     ap.add_argument("--theme", choices=["system", "light", "dark"], default="dark", help="theme for the run (default dark, as in the README)")
     ap.add_argument("--check", action="store_true", help="report which images would change; write nothing")
@@ -91,7 +91,7 @@ def main() -> int:
     if args.src:
         changed = copy_mapped(args.src, args.check)
     else:
-        with tempfile.TemporaryDirectory(prefix="netmap-shots-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="subnetsleuth-shots-") as tmp:
             run_selftest(tmp, args.exe, args.theme)
             changed = copy_mapped(tmp, args.check)
     print(f"{changed} image(s) {'would change' if args.check else 'updated'} in {DOCS}")

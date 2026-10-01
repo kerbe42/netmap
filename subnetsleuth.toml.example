@@ -1,0 +1,54 @@
+# subnetsleuth configuration. Copy to subnetsleuth.toml and run:  subnetsleuth crawl -c subnetsleuth.toml
+# CLI flags override values here. Secrets may be given as "env:VARNAME" (read from the
+# environment when the scan starts, so nothing secret sits in this file).
+#
+# CLI-only (not read from this file): --out, --html/--xlsx/--drawio/--csv/--graphml/--dot,
+# --port (SNMP port), --max-devices, --sweep, --resweep, --fingerprint, --sweep-max-size,
+# --resume, --refresh, --retry-unreachable, --repeat, --no-routes/--no-gateways/--no-arp/--no-fdb.
+
+[crawl]
+# Two ways to point subnetsleuth at a network; use either or both.
+#  1. seeds:   spider outwards from a device you were given (LLDP/CDP/next-hops).
+#  2. targets: inventory the subnets you were told to look at, address by address.
+seeds = ["10.10.0.1", "10.10.0.2"]        # core routers / distribution switches of the network
+targets = ["10.10.20.0/24", "10.10.30.0/24"]  # subnets to inventory directly; also become the scope
+target_files = ["ranges.txt"]              # or read them from a file, one subnet per line
+probe_all = false      # try SNMP on every address in the targets instead of pinging first
+                       # (for networks that drop ICMP but permit SNMP)
+
+scope = ["10.10.0.0/16", "172.20.0.0/14"]  # only addresses inside these ranges are ever probed.
+                       # Omit it and the targets above are the scope, so nothing else is touched.
+exclude = ["10.10.250.0/24"]               # never touch (e.g. OT/ICS, medical, partner links)
+max_depth = 6          # hops from a seed to follow via LLDP/CDP/next-hop
+workers = 12           # devices polled in parallel
+timeout = 2.0          # SNMP timeout (seconds)
+retries = 1
+probe_hosts = false    # also try SNMP on every ARP-learned IP (finds APs, printers, servers; slower)
+cisco_vlan_fdb = false # walk Cisco IOS per-VLAN bridge tables (community@vlan); needed for host->port on older IOS
+
+# Optional steps beyond SNMP. Each one sends packets only to addresses inside the scope
+# (and never to the exclusions); the CLI flag of the same purpose turns it on too.
+# resolve_names = true   # --dns: name devices and hosts from reverse DNS (PTR) lookups
+# identify = true        # --identify: small read-only probes to profile hosts that do not
+#                        #   answer SNMP (NetBIOS, mDNS, SSDP, HTTP/TLS banner, SSH banner,
+#                        #   WS-Discovery, IPMI, Modbus, BACnet, EtherNet/IP; DNS/NTP checks)
+# port_scan = false      # --port-scan: nmap service/version scan of every device and host found
+# os_detect = false      # --os: nmap OS detection (-O); needs root / Administrator
+# ping_first = true      # port-scan only addresses that answer a ping; false = --no-ping-first
+# nmap_timeout = 30      # --nmap-timeout: minutes one nmap run may take (0 = no limit). Sweeps run
+#                        #   one nmap per /24 and port scans one per small batch of addresses
+
+# Credentials are tried in order for every device; the first that answers wins.
+[[credentials]]
+kind = "v3"
+label = "site-ro"
+user = "subnetsleuth-ro"
+auth = "SHA256"                 # MD5 SHA SHA224 SHA256 SHA384 SHA512
+auth_key = "env:SUBNETSLEUTH_AUTH"
+priv = "AES256"                 # DES 3DES AES AES192 AES256
+priv_key = "env:SUBNETSLEUTH_PRIV"
+
+[[credentials]]
+kind = "v2c"
+label = "legacy-ro"
+community = "env:SUBNETSLEUTH_COMMUNITY"

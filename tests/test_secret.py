@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from netmap import secret
+from subnetsleuth import secret
 
 PLAIN = "s3cret-community-éè"  # non-ASCII on purpose: the token path is UTF-8 both ways
 

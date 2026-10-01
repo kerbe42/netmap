@@ -9,13 +9,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from netmap.diagram import export_drawio  # noqa: E402
-from netmap.graph import build_graph, export_csv, export_dot, export_graphml, text_summary  # noqa: E402
-from netmap.model import Inventory  # noqa: E402
-from netmap.render import render_html  # noqa: E402
-from netmap.report import export_xlsx  # noqa: E402
-from netmap.scan import ScanRequest, run_scan  # noqa: E402
-from netmap.snmp import Credential  # noqa: E402
+from subnetsleuth.diagram import export_drawio  # noqa: E402
+from subnetsleuth.graph import build_graph, export_csv, export_dot, export_graphml, text_summary  # noqa: E402
+from subnetsleuth.model import Inventory  # noqa: E402
+from subnetsleuth.render import render_html  # noqa: E402
+from subnetsleuth.report import export_xlsx  # noqa: E402
+from subnetsleuth.scan import ScanRequest, run_scan  # noqa: E402
+from subnetsleuth.snmp import Credential  # noqa: E402
 from tests import labnet  # noqa: E402
 from tests.fake_snmp import make_prober  # noqa: E402
 

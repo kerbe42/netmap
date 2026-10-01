@@ -7,17 +7,17 @@ import re
 
 import pytest
 
-from netmap import diagram, layout
-from netmap.compliance import _default_stp_priority, compliance_checks
-from netmap.diff import compare
-from netmap.graph import _is_uplink_iface, build_graph, export_csv, stub_endpoint_role
-from netmap.model import Device, FdbEntry, Host, Interface, Inventory, Neighbor, Route
-from netmap.paths import host_access, path_to, route_path
-from netmap.query import QueryError, run_query
-from netmap.util import resource_path
-from netmap.views import DEVICE_COLUMNS, Snapshot, device_rows, finding_rows, vlan_rows_view
+from subnetsleuth import diagram, layout
+from subnetsleuth.compliance import _default_stp_priority, compliance_checks
+from subnetsleuth.diff import compare
+from subnetsleuth.graph import _is_uplink_iface, build_graph, export_csv, stub_endpoint_role
+from subnetsleuth.model import Device, FdbEntry, Host, Interface, Inventory, Neighbor, Route
+from subnetsleuth.paths import host_access, path_to, route_path
+from subnetsleuth.query import QueryError, run_query
+from subnetsleuth.util import resource_path
+from subnetsleuth.views import DEVICE_COLUMNS, Snapshot, device_rows, finding_rows, vlan_rows_view
 
-SAMPLE = resource_path("data", "sample-campus.netmap")
+SAMPLE = resource_path("data", "sample-campus.sleuth")
 
 
 @pytest.fixture(scope="module")
@@ -274,7 +274,7 @@ def test_diff_ignores_placeholder_serials():
 
 
 def test_diff_readdressed_hosts_and_uptime_wrap():
-    from netmap.diff import UPTIME_WRAP_S
+    from subnetsleuth.diff import UPTIME_WRAP_S
 
     old, new = Inventory(), Inventory()
     a = Device(id="10.0.0.1", name="a", uptime_s=496 * 86400, collected_at=1_000_000)
@@ -298,7 +298,7 @@ def test_diff_readdressed_hosts_and_uptime_wrap():
 
 # ---------------------------------------------------------------- 13: reconcile
 def test_reconcile_normalises_serial_and_accepts_annotated_name():
-    from netmap.reconcile import reconcile
+    from subnetsleuth.reconcile import reconcile
 
     inv = _small_net()
     inv.devices["10.0.0.1"].serial = "FDO2233ABCD"
@@ -317,7 +317,7 @@ def test_reconcile_normalises_serial_and_accepts_annotated_name():
 def test_spreadsheet_cells_starting_with_formula_characters_are_text(tmp_path):
     from openpyxl import load_workbook
 
-    from netmap.report import export_xlsx
+    from subnetsleuth.report import export_xlsx
 
     inv = _small_net()
     inv.devices["10.0.0.1"].location = "=HYPERLINK(\"http://x\")"
@@ -340,7 +340,7 @@ def test_spreadsheet_cells_starting_with_formula_characters_are_text(tmp_path):
 
 
 def test_render_substitutes_placeholders_once(tmp_path):
-    from netmap.render import render_html
+    from subnetsleuth.render import render_html
 
     inv = _small_net()
     inv.annotate("10.0.0.1", notes="__COLORS__ and __DATA__")
@@ -436,7 +436,7 @@ def test_new_structural_findings_and_free_ports():
 
 
 def test_pvid_only_from_access_ports_and_fdb_vlan_index():
-    from netmap.graph import subnet_vlans
+    from subnetsleuth.graph import subnet_vlans
 
     inv = _small_net()
     core = inv.devices["10.0.0.1"]

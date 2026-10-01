@@ -1,4 +1,4 @@
-"""Write packaging/netmap.ico (and a 256px PNG) from the app's vector icon.
+"""Write packaging/subnetsleuth.ico (and a 256px PNG) from the app's vector icon.
 
 A Windows .ico holds one image per size; modern Windows reads PNG-compressed entries, so
 each size is rendered by Qt and packed here without any imaging library.
@@ -14,7 +14,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication([])
-from netmap.gui.icons import app_pixmap  # noqa: E402
+from subnetsleuth.gui.icons import app_pixmap  # noqa: E402
 
 SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 
@@ -37,11 +37,11 @@ def main():
         dim = 0 if s >= 256 else s
         entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(data), offset)
         offset += len(data)
-    with open(os.path.join(out, "netmap.ico"), "wb") as f:
+    with open(os.path.join(out, "subnetsleuth.ico"), "wb") as f:
         f.write(header + entries + b"".join(images))
-    with open(os.path.join(out, "netmap-256.png"), "wb") as f:
+    with open(os.path.join(out, "subnetsleuth-256.png"), "wb") as f:
         f.write(images[-1])
-    print("wrote", os.path.join(out, "netmap.ico"))
+    print("wrote", os.path.join(out, "subnetsleuth.ico"))
 
 
 if __name__ == "__main__":

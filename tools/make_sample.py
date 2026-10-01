@@ -1,7 +1,7 @@
 """Regenerate the sample project shipped with the desktop app (Help > Explore the sample network).
 
-    python tools/make_sample.py                 # -> netmap/data/sample-campus.netmap
-    python tools/make_sample.py path/to/out.netmap
+    python tools/make_sample.py                 # -> subnetsleuth/data/sample-campus.sleuth
+    python tools/make_sample.py path/to/out.sleuth
 
 The sample is the simulated campus in tests/demonet.py (11 network devices, ~500 endpoints,
 with the untidiness real networks have). It is generated, not hand-edited, so this script is
@@ -20,10 +20,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from netmap.model import FORMAT_VERSION, Inventory  # noqa: E402
+from subnetsleuth.model import FORMAT_VERSION, Inventory  # noqa: E402
 from tests import demonet  # noqa: E402
 
-DEFAULT = os.path.join(ROOT, "netmap", "data", "sample-campus.netmap")
+DEFAULT = os.path.join(ROOT, "subnetsleuth", "data", "sample-campus.sleuth")
 
 
 def main(argv: list[str]) -> int:
@@ -33,7 +33,7 @@ def main(argv: list[str]) -> int:
     if check:
         import tempfile
 
-        fd, tmp = tempfile.mkstemp(suffix=".netmap")
+        fd, tmp = tempfile.mkstemp(suffix=".sleuth")
         os.close(fd)
         try:
             demonet.build_project(tmp)

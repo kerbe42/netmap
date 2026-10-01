@@ -4,8 +4,8 @@ import urllib.request
 
 import pytest
 
-from netmap.api import handle, serve
-from netmap.views import Snapshot
+from subnetsleuth.api import handle, serve
+from subnetsleuth.views import Snapshot
 
 from . import demonet
 

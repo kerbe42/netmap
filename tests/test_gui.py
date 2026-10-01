@@ -11,9 +11,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QSettings  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from netmap import util  # noqa: E402
-from netmap.scan import ScanRequest  # noqa: E402
-from netmap.snmp import Credential  # noqa: E402
+from subnetsleuth import util  # noqa: E402
+from subnetsleuth.scan import ScanRequest  # noqa: E402
+from subnetsleuth.snmp import Credential  # noqa: E402
 
 from . import demonet  # noqa: E402
 from .conftest import PORT  # noqa: E402
@@ -21,8 +21,8 @@ from .conftest import PORT  # noqa: E402
 
 @pytest.fixture(scope="module")
 def qapp(tmp_path_factory):
-    QCoreApplication.setOrganizationName("netmap-tests")
-    QCoreApplication.setApplicationName("NetMapTests")
+    QCoreApplication.setOrganizationName("subnetsleuth-tests")
+    QCoreApplication.setApplicationName("SubnetSleuthTests")
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path_factory.mktemp("settings")))
     app = QApplication.instance() or QApplication([])
@@ -46,15 +46,15 @@ def _wait(app, cond, timeout=90.0):
 
 
 def _window():
-    from netmap.gui.mainwindow import MainWindow
+    from subnetsleuth.gui.mainwindow import MainWindow
 
     return MainWindow()
 
 
 def test_selftest_on_sample_project(qapp, tmp_path):
-    from netmap.gui.selftest import run_selftest
+    from subnetsleuth.gui.selftest import run_selftest
 
-    path = tmp_path / "sample.netmap"
+    path = tmp_path / "sample.sleuth"
     demonet.build_project(str(path))
     win = _window()
     win.open_project(str(path))
@@ -65,7 +65,7 @@ def test_selftest_on_sample_project(qapp, tmp_path):
 
 def test_scan_through_the_worker_thread(qapp, agents, loopback, tmp_path):
     win = _window()
-    win.path = str(tmp_path / "scan.netmap")
+    win.path = str(tmp_path / "scan.sleuth")
     req = ScanRequest(seeds=["127.0.0.1"], scope=["127.0.0.0/8"], credentials=[Credential(kind="v2c", community="lab", label="lab")],
                       port=PORT, timeout=1.0, retries=0, workers=4)
     snapshots = []
@@ -78,7 +78,7 @@ def test_scan_through_the_worker_thread(qapp, agents, loopback, tmp_path):
     assert os.path.exists(win.path)  # a project with a path is saved when a scan finishes
     # notes made while documenting survive a rescan of that device
     win.annotate("127.0.0.2", {"notes": "distribution switch, closet B", "site": "HQ"})
-    from netmap.gui.credentials import SavedCredential
+    from subnetsleuth.gui.credentials import SavedCredential
 
     cred = SavedCredential(label="lab")
     win.store.set_secret(cred, "community", "lab")
@@ -115,7 +115,7 @@ def test_stop_keeps_what_was_found(qapp, agents, loopback):
 
 
 def test_scan_dialog_parses_ranges(qapp):
-    from netmap.gui.scandialog import parse_ranges
+    from subnetsleuth.gui.scandialog import parse_ranges
 
     nets, bad = parse_ranges("10.1.0.0/24\n10.2.0.5  # one host\n10.3.0.10-10.3.0.13, 10.4.0.1-2\nnonsense")
     assert nets == ["10.1.0.0/24", "10.2.0.5/32", "10.3.0.10/31", "10.3.0.12/31", "10.4.0.1/32", "10.4.0.2/32"]

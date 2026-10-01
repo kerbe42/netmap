@@ -1,6 +1,6 @@
 """DHCP lease/scope import parsers and enrichment."""
-from netmap.dhcp import import_leases, parse_isc_leases, parse_leases, parse_windows_csv
-from netmap.model import Inventory
+from subnetsleuth.dhcp import import_leases, parse_isc_leases, parse_leases, parse_windows_csv
+from subnetsleuth.model import Inventory
 
 
 ISC = """
@@ -48,7 +48,7 @@ def test_import_enriches_hosts():
     assert h.probes["dhcp"]["state"] == "active"
     assert inv.dhcp_scopes["10.10.0.0/24"]["leases"] >= 1
     # a lease for a polled device does not overwrite it as a host
-    from netmap.model import Device
+    from subnetsleuth.model import Device
     inv2 = Inventory()
     d = Device(id="10.10.0.50", name="sw1"); d.ips.append("10.10.0.50"); inv2.add_device(d)
     import_leases(inv2, parse_isc_leases(ISC))
@@ -59,6 +59,6 @@ def test_dhcp_scopes_persist(tmp_path):
     inv = Inventory()
     inv.add_subnet("10.10.0.0/24", "test")
     import_leases(inv, parse_isc_leases(ISC))
-    p = tmp_path / "p.netmap"
+    p = tmp_path / "p.sleuth"
     inv.save(str(p))
     assert Inventory.load(str(p)).dhcp_scopes["10.10.0.0/24"]["leases"] >= 1

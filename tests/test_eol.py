@@ -4,8 +4,8 @@ from datetime import date
 
 import pytest
 
-from netmap import eol, util
-from netmap.model import Device
+from subnetsleuth import eol, util
+from subnetsleuth.model import Device
 
 
 def test_data_file_is_a_list_and_dates_parse():

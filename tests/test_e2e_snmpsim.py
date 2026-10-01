@@ -14,8 +14,8 @@ pytestmark = pytest.mark.skipif(not RESPONDER, reason="snmpsim not installed")
 
 
 def _run_cli(args, cwd):
-    env = {**os.environ, "NETMAP_ALLOW_LOOPBACK": "1"}
-    return subprocess.run([sys.executable, "-m", "netmap", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=300)
+    env = {**os.environ, "SUBNETSLEUTH_ALLOW_LOOPBACK": "1"}
+    return subprocess.run([sys.executable, "-m", "subnetsleuth", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=300)
 
 
 def test_cli_crawl_v2c(agents, tmp_path):
@@ -93,7 +93,7 @@ def test_cli_target_subnets_without_seeds(agents, tmp_path):
 
 
 def test_cli_crawl_v3_fallback(agents, tmp_path):
-    cfg = tmp_path / "netmap.toml"
+    cfg = tmp_path / "subnetsleuth.toml"
     cfg.write_text(
         f'''
 [crawl]
@@ -109,18 +109,18 @@ community = "nope"
 
 [[credentials]]
 kind = "v3"
-label = "v3-netmap"
-user = "netmap"
+label = "v3-subnetsleuth"
+user = "subnetsleuth"
 auth = "SHA"
-auth_key = "env:NETMAP_V3_AUTH"
+auth_key = "env:SUBNETSLEUTH_V3_AUTH"
 priv = "AES"
 priv_key = "privpass123"
 context = "lab"
 '''
     )
-    env = {**os.environ, "NETMAP_ALLOW_LOOPBACK": "1", "NETMAP_V3_AUTH": "authpass123"}
-    r = subprocess.run([sys.executable, "-m", "netmap", "crawl", "-c", str(cfg), "--port", str(PORT), "--out", "v3.json", "--no-summary"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=300)
+    env = {**os.environ, "SUBNETSLEUTH_ALLOW_LOOPBACK": "1", "SUBNETSLEUTH_V3_AUTH": "authpass123"}
+    r = subprocess.run([sys.executable, "-m", "subnetsleuth", "crawl", "-c", str(cfg), "--port", str(PORT), "--out", "v3.json", "--no-summary"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr[-2000:]
     inv = json.loads((tmp_path / "v3.json").read_text())
     assert set(inv["devices"]) == {"127.0.0.1", "127.0.0.2"}  # max_depth 1
-    assert all(d["credential"] == "v3-netmap" for d in inv["devices"].values())
+    assert all(d["credential"] == "v3-subnetsleuth" for d in inv["devices"].values())

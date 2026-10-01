@@ -1,9 +1,9 @@
 """The asset-query language."""
 import pytest
 
-from netmap.model import Inventory
-from netmap.query import QueryError, run_query
-from netmap.views import Snapshot
+from subnetsleuth.model import Inventory
+from subnetsleuth.query import QueryError, run_query
+from subnetsleuth.views import Snapshot
 
 from . import demonet
 

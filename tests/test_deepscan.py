@@ -5,11 +5,11 @@ import time
 
 import pytest
 
-import netmap.deepscan as ds
-import netmap.sweep as sw
-from netmap import activity
-from netmap.cli import build_parser
-from netmap.model import Device, Inventory
+import subnetsleuth.deepscan as ds
+import subnetsleuth.sweep as sw
+from subnetsleuth import activity
+from subnetsleuth.cli import build_parser
+from subnetsleuth.model import Device, Inventory
 
 SAMPLE_XML = """<?xml version="1.0"?>
 <nmaprun scanner="nmap" version="7.98">
@@ -130,7 +130,7 @@ def test_an_entered_range_is_swept_whatever_its_size_with_a_warning(monkeypatch,
     monkeypatch.setattr(sw, "find_nmap", lambda: "/usr/bin/nmap")
     monkeypatch.setattr(sw, "_run_nmap", fake_nmap)
     inv = Inventory()
-    with caplog.at_level("WARNING", logger="netmap.sweep"):
+    with caplog.at_level("WARNING", logger="subnetsleuth.sweep"):
         asyncio.run(sw.discover_targets(inv, [ia.ip_network("10.64.0.0/16")], [ia.ip_network("10.0.0.0/8")], []))
     assert len(blocks) == 256 and inv.subnets["10.64.0.0/16"].swept
     assert "10.64.0.0/16 is large (65,536 addresses, 256 /24 blocks)" in caplog.text and "takes roughly" in caplog.text
@@ -149,7 +149,7 @@ def test_sweep_estimate_is_a_rough_range():
 
 
 def test_cli_sweep_of_named_subnets_is_uncapped(monkeypatch, tmp_path):
-    import netmap.cli as cli
+    import subnetsleuth.cli as cli
 
     seen = {}
 
@@ -227,7 +227,7 @@ def test_deep_scan_is_kept_in_the_project_and_folded_onto_the_host(nmap_here, mo
 
 
 def test_cli_deepscan(nmap_here, monkeypatch, tmp_path, capsys):
-    import netmap.cli as cli
+    import subnetsleuth.cli as cli
 
     calls = []
     monkeypatch.setattr(ds, "_run_nmap", fake_nmap_for(lambda ip: SAMPLE_XML, calls))

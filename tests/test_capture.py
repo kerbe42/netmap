@@ -1,8 +1,8 @@
 """Config capture logic, tested with a fake SSH channel (no real device)."""
 import time
 
-from netmap.capture import Capture, capture_config, clean_config, commands_for, diff_configs, store_config
-from netmap.model import Inventory
+from subnetsleuth.capture import Capture, capture_config, clean_config, commands_for, diff_configs, store_config
+from subnetsleuth.model import Inventory
 
 
 class FakeChannel:
@@ -67,7 +67,7 @@ def test_capture_and_store(tmp_path):
     d = diff_configs(inv.configs["10.0.0.2"][0]["text"], inv.configs["10.0.0.2"][1]["text"])
     assert "-hostname core-sw-01" in d and "+hostname core-sw-01-renamed" in d
     # survives a project round-trip
-    p = tmp_path / "p.netmap"
+    p = tmp_path / "p.sleuth"
     inv.save(str(p))
     assert Inventory.load(str(p)).configs["10.0.0.2"][1]["text"] == cap2.text
 

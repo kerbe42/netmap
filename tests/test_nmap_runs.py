@@ -8,11 +8,11 @@ import time
 
 import pytest
 
-import netmap.sweep as sw
-from netmap.cli import build_parser
-from netmap.model import Device, Inventory
-from netmap.scan import ScanRequest, run_scan
-from netmap.snmp import Credential
+import subnetsleuth.sweep as sw
+from subnetsleuth.cli import build_parser
+from subnetsleuth.model import Device, Inventory
+from subnetsleuth.scan import ScanRequest, run_scan
+from subnetsleuth.snmp import Credential
 
 from .fake_snmp import make_prober
 
@@ -76,7 +76,7 @@ def test_a_block_that_times_out_keeps_its_hosts_and_is_retried_with_twice_the_ti
         return sw.NmapRun(doc(host_xml("10.9.0.5"), host_xml("10.9.0.77")), "ok")
 
     monkeypatch.setattr(sw, "_run_nmap", fake_nmap)
-    with caplog.at_level("WARNING", logger="netmap.sweep"):
+    with caplog.at_level("WARNING", logger="subnetsleuth.sweep"):
         hosts, complete = asyncio.run(sw.sweep_subnet("10.9.0.0/24", nmap_timeout=120))
     assert calls == [120, 240]
     assert complete and sorted(h["ip"] for h in hosts) == ["10.9.0.5", "10.9.0.77"]
@@ -112,7 +112,7 @@ def test_port_scan_retries_only_the_unfinished_addresses_in_smaller_batches(nmap
 
     monkeypatch.setattr(sw, "_run_nmap", fake_nmap)
     ips = [f"10.1.0.{i}" for i in range(1, 11)]
-    with caplog.at_level("WARNING", logger="netmap.sweep"):
+    with caplog.at_level("WARNING", logger="subnetsleuth.sweep"):
         out = asyncio.run(sw.nmap_inspect(ips, batch=8, nmap_timeout=300))
     first, *rest = calls
     assert first == (ips[:8], 300)
@@ -177,7 +177,7 @@ def test_port_scan_goes_only_to_addresses_that_answer(monkeypatch):
 
 
 def test_cli_nmap_timeout_and_ping_first(monkeypatch, tmp_path):
-    import netmap.cli as cli
+    import subnetsleuth.cli as cli
 
     seen = {}
 

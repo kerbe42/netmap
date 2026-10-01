@@ -1,4 +1,4 @@
-"""Unit tests for the broad-fingerprinting probes in netmap.probes_extra.
+"""Unit tests for the broad-fingerprinting probes in subnetsleuth.probes_extra.
 
 Every parser is exercised against hand-built, realistic captured bytes; the orchestrator is driven
 through injected `probes=` callables so nothing here touches the real network.
@@ -6,8 +6,8 @@ through injected `probes=` callables so nothing here touches the real network.
 import asyncio
 import struct
 
-from netmap import probes_extra as px
-from netmap.model import Inventory
+from subnetsleuth import probes_extra as px
+from subnetsleuth.model import Inventory
 
 
 # --------------------------------------------------------------------------- #
@@ -259,7 +259,7 @@ def test_probe_extra_fills_probes_and_sources():
 
 
 def test_probe_extra_infra_records_dns_ntp_as_ports():
-    from netmap.profile import profile_host
+    from subnetsleuth.profile import profile_host
     inv = Inventory()
     inv.touch_host("10.0.0.1", "sweep")  # answers DNS
     inv.touch_host("10.0.0.2", "sweep")  # answers NTP

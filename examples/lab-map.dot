@@ -1,4 +1,4 @@
-graph netmap {
+graph subnetsleuth {
   overlap=false; splines=true; node [fontname=Helvetica, fontsize=9];
   "10.0.0.1" [label="core-rtr\n10.0.0.1\nrouter", shape=box];
   "10.0.0.2" [label="dist-sw1\n10.0.0.2\nl3switch", shape=box];

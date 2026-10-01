@@ -19,9 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from netmap import api, capture, dhcp, discover, hostinfo, listen, profile, sshtrust, vmware
-from netmap import probes_extra as px
-from netmap.model import Host, Inventory
+from subnetsleuth import api, capture, dhcp, discover, hostinfo, listen, profile, sshtrust, vmware
+from subnetsleuth import probes_extra as px
+from subnetsleuth.model import Host, Inventory
 
 from tests.test_probes_extra import build_bacnet_iam, build_modbus_id_response
 from tests.test_vmware import FakeSI, fake_host, fake_vm
@@ -276,7 +276,7 @@ class FakeSSHClient:
 
 def test_tofu_policy_adds_first_key_and_rejects_a_changed_one(tmp_path, monkeypatch):
     store = tmp_path / "known_hosts"
-    monkeypatch.setenv("NETMAP_KNOWN_HOSTS", str(store))
+    monkeypatch.setenv("SUBNETSLEUTH_KNOWN_HOSTS", str(store))
     assert sshtrust.known_hosts_path() == str(store)
     k1 = paramiko.RSAKey.generate(1024)
     k2 = paramiko.RSAKey.generate(1024)

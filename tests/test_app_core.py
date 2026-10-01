@@ -6,14 +6,14 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from netmap import diagram, layout
-from netmap.crawl import CrawlConfig, Crawler
-from netmap.diff import compare
-from netmap.graph import build_graph
-from netmap.model import Device, Inventory
-from netmap.scan import ScanRequest, resolve_scope, run_scan
-from netmap.snmp import Credential
-from netmap.views import PAGES, Snapshot, finding_rows, link_rows, short_port
+from subnetsleuth import diagram, layout
+from subnetsleuth.crawl import CrawlConfig, Crawler
+from subnetsleuth.diff import compare
+from subnetsleuth.graph import build_graph
+from subnetsleuth.model import Device, Inventory
+from subnetsleuth.scan import ScanRequest, resolve_scope, run_scan
+from subnetsleuth.snmp import Credential
+from subnetsleuth.views import PAGES, Snapshot, finding_rows, link_rows, short_port
 
 from . import demonet, labnet
 from .fake_snmp import make_prober
@@ -121,7 +121,7 @@ def test_drawio_export(campus, tmp_path):
     pages = root.findall("diagram")
     assert [d.get("name") for d in pages] == ["Physical (cabling)", "Logical (routing & subnets)"]
     objs = pages[0].findall("mxGraphModel/root/UserObject")
-    core = next(o for o in objs if o.get("netmap_id") == "10.99.0.2")
+    core = next(o for o in objs if o.get("subnetsleuth_id") == "10.99.0.2")
     geo = core.find("mxCell/mxGeometry")
     assert float(geo.get("x")) == pytest.approx(5000 - 25)  # the saved hand-placed position was used
     assert '<font style="font-size:9px"' in core.get("label")  # HTML label, escaped once
@@ -161,7 +161,7 @@ def test_rescan_refreshes_known_devices_and_keeps_notes(tmp_path):
     lab = labnet.build("10")
     prober = make_prober({ip: d.values() for ip, d in lab.items()})
     req = ScanRequest(seeds=["10.1.0.1"], scope=["10.0.0.0/8"], credentials=[Credential(kind="v2c", community="lab", label="lab")],
-                      refresh=True, refresh_ids=["10.0.0.2"], max_depth=0, save_path=str(tmp_path / "p.netmap"))
+                      refresh=True, refresh_ids=["10.0.0.2"], max_depth=0, save_path=str(tmp_path / "p.sleuth"))
     rec = asyncio.run(run_scan(inv, req, engine=object(), prober=prober))
     # reached through its SVI address, polled at its management address, replaced in place
     assert prober.probed == ["10.0.0.2"]
@@ -169,7 +169,7 @@ def test_rescan_refreshes_known_devices_and_keeps_notes(tmp_path):
     d = inv.devices["10.0.0.2"]
     assert d.collected_at >= before and d.first_seen == first and d.depth == 1
     assert inv.note("10.0.0.2")["notes"] == "closet B"
-    assert Inventory.load(str(tmp_path / "p.netmap")).history[-1]["request"]["credentials"] == ["lab"]
+    assert Inventory.load(str(tmp_path / "p.sleuth")).history[-1]["request"]["credentials"] == ["lab"]
     # a device that went quiet keeps its data and says so
     prober2 = make_prober({})
     asyncio.run(run_scan(inv, ScanRequest(seeds=["10.0.0.2"], scope=["10.0.0.0/8"], credentials=[Credential(kind="v2c", community="x")],
@@ -205,7 +205,7 @@ def test_project_file_round_trip_and_forward_compat(tmp_path):
     inv.annotate("10.0.0.1", name="Core router", tags=["core", "wan"], status="Verified")
     inv.layout["physical"] = {"10.0.0.1": [1.0, 2.0]}
     inv.project = {"name": "Acme", "scan": {"targets": ["10.0.0.0/8"]}}
-    p = tmp_path / "a.netmap"
+    p = tmp_path / "a.sleuth"
     inv.save(str(p))
     back = Inventory.load(str(p))
     assert back.note("10.0.0.1")["tags"] == ["core", "wan"] and back.layout["physical"]["10.0.0.1"] == [1.0, 2.0]
@@ -244,7 +244,7 @@ def test_resolve_scope():
 
 
 def test_asset_list_check(campus, tmp_path):
-    from netmap.reconcile import guess_columns, read_table, reconcile, write_csv
+    from subnetsleuth.reconcile import guess_columns, read_table, reconcile, write_csv
 
     p = tmp_path / "assets.csv"
     p.write_text(
@@ -284,8 +284,8 @@ def test_asset_list_check(campus, tmp_path):
 
 
 def test_bogus_and_shared_macs_are_dropped():
-    from netmap.util import plausible_mac
-    from netmap.graph import enrich_inventory
+    from subnetsleuth.util import plausible_mac
+    from subnetsleuth.graph import enrich_inventory
 
     assert not plausible_mac("12:34:56:78:9a:bc")   # nmap-on-Windows placeholder
     assert not plausible_mac("ff:ff:ff:ff:ff:ff") and not plausible_mac("00:00:00:00:00:00")
@@ -311,7 +311,7 @@ def test_bogus_and_shared_macs_are_dropped():
 
 
 def test_topology_paths(campus):
-    from netmap import paths
+    from subnetsleuth import paths
     g = build_graph(campus)
     # switched path from the core to a floor access switch, with the port at each end
     p = paths.path_to(campus, g, "10.99.0.13")
@@ -332,8 +332,8 @@ def test_topology_paths(campus):
 
 
 def test_profile_identifies_from_multiple_signals():
-    from netmap.model import Host
-    from netmap.profile import profile_host
+    from subnetsleuth.model import Host
+    from subnetsleuth.profile import profile_host
 
     # a printer known only from its OUI and mDNS advert
     h = Host(ip="10.0.0.5", mac="00:1b:a9:11:22:33")  # Brother OUI
@@ -364,7 +364,7 @@ def test_profile_identifies_from_multiple_signals():
 
 
 def test_device_model_from_sysdescr():
-    from netmap.util import device_model, oui_vendor
+    from subnetsleuth.util import device_model, oui_vendor
     # the vendors that don't populate ENTITY-MIB - model must come from sysDescr
     assert device_model("", "FortiGate-60F v7.2.8,build1639b", "Fortinet") == "FortiGate-60F"
     assert device_model("", "Palo Alto Networks PA-3220 series", "Palo Alto") == "PA-3220"
@@ -372,7 +372,7 @@ def test_device_model_from_sysdescr():
     assert device_model("", "RouterOS RB4011iGS+", "MikroTik") == "RB4011iGS+"
     assert device_model("", "Some generic host", "Linux") == ""  # no false model
     # MA-M/MA-S addresses fall back to the IEEE parent - report unknown, not that
-    import netmap.util as u
+    import subnetsleuth.util as u
     orig = u._load_oui
     u._load_oui = lambda: {"AABBCC": "IEEE Registration Authority", "DDEEFF": "Acme Corp"}
     try:
@@ -383,8 +383,8 @@ def test_device_model_from_sysdescr():
 
 
 def test_ssh_banner_identifies_os():
-    from netmap.model import Host
-    from netmap.profile import profile_host
+    from subnetsleuth.model import Host
+    from subnetsleuth.profile import profile_host
     h = Host(ip="10.0.0.9")
     h.ports = [{"port": 22, "service": "ssh"}]
     h.probes = {"ssh": {"banner": "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5",
@@ -397,8 +397,8 @@ def test_ssh_banner_identifies_os():
 def test_fdb_places_host_on_leaf_not_uplink():
     """A host MAC is learned by every switch on its path. It must land on the access
     port of the leaf switch, never on a LAG/trunk uplink that carries many MACs."""
-    from netmap.model import Inventory, Device, Host, Interface, FdbEntry, Neighbor
-    from netmap.graph import build_graph
+    from subnetsleuth.model import Inventory, Device, Host, Interface, FdbEntry, Neighbor
+    from subnetsleuth.graph import build_graph
 
     inv = Inventory()
     # core switch: the host MAC appears on its port-channel uplink (Po1, ifIndex 100)
@@ -430,8 +430,8 @@ def test_fdb_places_host_on_leaf_not_uplink():
 
 
 def test_fhrp_vip_registered_to_active_router():
-    from netmap.model import Inventory, Device
-    from netmap.graph import enrich_inventory
+    from subnetsleuth.model import Inventory, Device
+    from subnetsleuth.graph import enrich_inventory
 
     inv = Inventory()
     r1 = Device(id="10.0.0.2"); r1.redundancy = [{"proto": "hsrp", "group": "1", "vip": "10.0.0.1", "state": "standby"}]
@@ -443,8 +443,8 @@ def test_fhrp_vip_registered_to_active_router():
 
 
 def test_server_functions_from_ports():
-    from netmap.model import Host
-    from netmap.profile import profile_host, server_functions
+    from subnetsleuth.model import Host
+    from subnetsleuth.profile import profile_host, server_functions
 
     def mk(ports, os="", fam=""):
         h = Host(ip="10.0.0.1", os=os, os_family=fam)
@@ -491,18 +491,18 @@ def test_server_functions_from_ports():
 
 
 def test_device_os_family():
-    from netmap.profile import device_os_family
-    from netmap.model import Device
+    from subnetsleuth.profile import device_os_family
+    from subnetsleuth.model import Device
     assert device_os_family(Device(id="1", vendor="Cisco", sysdescr="Cisco IOS-XE Software, Version 17.9")) == "ios-xe"
     assert device_os_family(Device(id="2", vendor="Fortinet", sysdescr="FortiGate-100F v7.2.8")) == "fortios"
     assert device_os_family(Device(id="3", vendor="", sysdescr="Linux host 5.15.0", role="server")) == "linux"
 
 
 def test_nmap_os_and_ports_parse_and_apply():
-    from netmap.sweep import _parse_nmap_xml
-    from netmap.scan import _apply_nmap
-    from netmap.model import Inventory, Device
-    from netmap.profile import profile_host
+    from subnetsleuth.sweep import _parse_nmap_xml
+    from subnetsleuth.scan import _apply_nmap
+    from subnetsleuth.model import Inventory, Device
+    from subnetsleuth.profile import profile_host
 
     xml = """<nmaprun><host><status state="up"/><address addr="10.0.0.9" addrtype="ipv4"/>
       <ports>

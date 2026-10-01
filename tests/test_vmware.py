@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 from pyVmomi import vim
 
-from netmap import vmware
-from netmap.model import Inventory
+from subnetsleuth import vmware
+from subnetsleuth.model import Inventory
 
 
 # --------------------------------------------------------------------------- #
@@ -93,7 +93,7 @@ def fake_vm(
         ),
         config=SimpleNamespace(
             guestFullName=guest_os,
-            annotation="managed by netmap test",
+            annotation="managed by subnetsleuth test",
             hardware=SimpleNamespace(
                 numCPU=4,
                 memoryMB=8192,
@@ -245,7 +245,7 @@ def test_collect_vms_fields():
     assert v["memory_mb"] == 8192
     assert v["portgroups"] == [{"name": "Servers", "vlan": None}]
     assert v["tools_running"] is True
-    assert v["annotation"] == "managed by netmap test"
+    assert v["annotation"] == "managed by subnetsleuth test"
 
 
 def test_collect_vms_poweredoff_no_guest_ip_still_has_config_mac():

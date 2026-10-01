@@ -18,11 +18,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 FOOTER = """
 ---
-**Downloads:** `NetMap-{v}-setup.exe` (desktop app, per-user install), `NetMap-{v}-portable.zip`
-(the same app as a folder), `netmap-{v}-win-x64.exe` and `netmap-{v}-linux-x64` (command line,
+**Downloads:** `SubnetSleuth-{v}-setup.exe` (desktop app, per-user install), `SubnetSleuth-{v}-portable.zip`
+(the same app as a folder), `subnetsleuth-{v}-win-x64.exe` and `subnetsleuth-{v}-linux-x64` (command line,
 no Python needed; the Linux binary needs glibc 2.35 or newer). Verify a file against
 `SHA256SUMS.txt`. The full list of changes is in
-[CHANGELOG.md](https://github.com/kerbe42/netmap/blob/v{v}/CHANGELOG.md).
+[CHANGELOG.md](https://github.com/kerbe42/subnetsleuth/blob/v{v}/CHANGELOG.md).
 """
 
 

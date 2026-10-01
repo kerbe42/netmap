@@ -1,6 +1,6 @@
 """Dependency mapping from host connections."""
-from netmap.deps import build_dependencies, dependencies_of, service_name
-from netmap.model import Inventory
+from subnetsleuth.deps import build_dependencies, dependencies_of, service_name
+from subnetsleuth.model import Inventory
 
 
 def _host(inv, ip, conns):

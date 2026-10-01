@@ -32,7 +32,7 @@ def _free_udp_port() -> int:
         s.close()
 
 
-PORT = int(os.environ.get("NETMAP_TEST_SNMP_PORT") or _free_udp_port())
+PORT = int(os.environ.get("SUBNETSLEUTH_TEST_SNMP_PORT") or _free_udp_port())
 
 
 def _responder():
@@ -52,8 +52,8 @@ def _probe(ip, cred_args) -> bool:
     """One SNMP GET of sysName against an agent; True when it answered."""
     from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
-    from netmap import oids as O
-    from netmap.snmp import Credential, SnmpSession
+    from subnetsleuth import oids as O
+    from subnetsleuth.snmp import Credential, SnmpSession
 
     async def one():
         eng = SnmpEngine()
@@ -100,7 +100,7 @@ def agents(tmp_path_factory):
             RESPONDER, f"--data-dir={d}", f"--cache-dir={d / 'cache'}", f"--variation-modules-dir={d / 'variation'}",
             f"--agent-udpv4-endpoint={ip}:{PORT}",
             "--logging-method=stderr", "--log-level=error",
-            "--v3-user=netmap", "--v3-auth-key=authpass123", "--v3-auth-proto=SHA", "--v3-priv-key=privpass123", "--v3-priv-proto=AES",
+            "--v3-user=subnetsleuth", "--v3-auth-key=authpass123", "--v3-auth-proto=SHA", "--v3-priv-key=privpass123", "--v3-priv-proto=AES",
         ]
         with open(logs[ip], "wb") as err:
             procs[ip] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, env=env)

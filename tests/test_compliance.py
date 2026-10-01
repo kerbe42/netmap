@@ -8,10 +8,10 @@ from datetime import date
 
 import pytest
 
-from netmap import eol
-from netmap.compliance import Check, compliance_checks, summary
-from netmap.model import Device, Inventory
-from netmap.views import Snapshot
+from subnetsleuth import eol
+from subnetsleuth.compliance import Check, compliance_checks, summary
+from subnetsleuth.model import Device, Inventory
+from subnetsleuth.views import Snapshot
 
 from . import demonet
 

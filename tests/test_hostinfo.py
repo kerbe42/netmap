@@ -2,7 +2,7 @@
 import asyncio
 import json
 
-from netmap.hostinfo import (
+from subnetsleuth.hostinfo import (
     apply_facts,
     inspect_hosts,
     inspect_ssh,
@@ -15,7 +15,7 @@ from netmap.hostinfo import (
     parse_win_software,
     parse_win_system,
 )
-from netmap.model import Host, Inventory
+from subnetsleuth.model import Host, Inventory
 
 # --------------------------------------------------------------------------- #
 # canned Linux command output
@@ -49,7 +49,7 @@ udp        0      0 10.0.0.5:68             10.0.0.1:67             ESTABLISHED 
 
 def linux_run(overrides=None):
     """Build an injectable run(cmd)->stdout from canned output keyed by command."""
-    from netmap.hostinfo import SSH_CMDS
+    from subnetsleuth.hostinfo import SSH_CMDS
 
     table = {
         SSH_CMDS["uname"]: "Linux 5.15.0-91-generic\n",
@@ -136,7 +136,7 @@ def test_inspect_ssh_injected():
 
 def test_inspect_ssh_rpm_and_netstat_fallback():
     # no dpkg, no ss: falls back to rpm and netstat
-    from netmap.hostinfo import SSH_CMDS
+    from subnetsleuth.hostinfo import SSH_CMDS
 
     facts = inspect_ssh("10.0.0.6", "admin", run=linux_run(overrides={
         SSH_CMDS["dpkg"]: "",
@@ -208,7 +208,7 @@ def test_parse_win_software_single_object():
 
 def test_inspect_winrm_injected():
     def run_ps(script):
-        from netmap.hostinfo import PS_CONNECTIONS, PS_SERVICES, PS_SOFTWARE, PS_SYSTEM
+        from subnetsleuth.hostinfo import PS_CONNECTIONS, PS_SERVICES, PS_SOFTWARE, PS_SYSTEM
         return {PS_SYSTEM: WIN_SYSTEM, PS_SOFTWARE: WIN_SOFTWARE,
                 PS_SERVICES: WIN_SERVICES, PS_CONNECTIONS: WIN_CONNS}[script]
 

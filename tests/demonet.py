@@ -18,8 +18,8 @@ import ipaddress
 import os
 import random
 
-from netmap import oids as O
-from netmap.util import resource_path
+from subnetsleuth import oids as O
+from subnetsleuth.util import resource_path
 
 from .labnet import Dev
 
@@ -407,11 +407,11 @@ def build(seed: int = 7) -> tuple[dict[str, Dev], dict[str, str]]:
 
 def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
     """Crawl the simulated campus into an inventory (and save it if `path` is given)."""
-    from netmap.dns import resolve_names
-    from netmap.graph import enrich_inventory
-    from netmap.model import Inventory
-    from netmap.scan import ScanRequest, run_scan
-    from netmap.snmp import Credential
+    from subnetsleuth.dns import resolve_names
+    from subnetsleuth.graph import enrich_inventory
+    from subnetsleuth.model import Inventory
+    from subnetsleuth.scan import ScanRequest, run_scan
+    from subnetsleuth.snmp import Credential
 
     from .fake_snmp import make_prober
 
@@ -422,7 +422,7 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
         seeds=["10.99.0.2"],
         scope=["10.0.0.0/8"],
         exclude=[],
-        credentials=[Credential(kind="v3", user="netmap-ro", auth="SHA", priv="AES", label="hq-snmpv3")],
+        credentials=[Credential(kind="v3", user="subnetsleuth-ro", auth="SHA", priv="AES", label="hq-snmpv3")],
         workers=8,
         timeout=0.1,
         retries=0,
@@ -438,7 +438,7 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
     inv.project = {
         "name": name,
         "description": "A simulated campus: edge firewall, core pair, four floor stacks, warehouse and server switches, a WAN router. "
-                       "Explore it to see what NetMap does before scanning a real network.",
+                       "Explore it to see what SubnetSleuth does before scanning a real network.",
         "scan": {"targets": [], "seeds": ["10.99.0.2"], "scope": ["10.0.0.0/8"], "exclude": [], "max_depth": 6},
     }
     for h in inv.history:  # the sample should not claim to have been scanned at build time
@@ -485,7 +485,7 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
     inv.annotate("10.0.0.1", site="HQ comms room A", owner="Network team", tags=["edge", "internet"],
                  notes="ISP circuit NW-44213, support contract ends 2027-03.")
     inv.annotate("10.99.0.250", status="Unknown owner", notes="Not in the handover list and no community works. Find out who put it there.")
-    from netmap.profile import profile_inventory
+    from subnetsleuth.profile import profile_inventory
     profile_inventory(inv)  # re-profile after the post-enrich probe/OT injections above
     if path:
         inv.save(path)
@@ -495,7 +495,7 @@ def build_project(path: str | None = None, name: str = "Northwind HQ (sample)"):
 def _inject_probes(inv, rng):
     """Give a slice of the hosts realistic active-probe results, as if NetBIOS/mDNS/SSDP/HTTP
     had answered, so the sample shows off identification and its evidence. Shapes match
-    netmap.discover output."""
+    subnetsleuth.discover output."""
     import ipaddress as _ip
 
     hosts = [(ip, h) for ip, h in inv.hosts.items() if ip not in inv.ip_to_device]
@@ -599,6 +599,6 @@ def _inject_probes(inv, rng):
 if __name__ == "__main__":
     import sys
 
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join("netmap", "data", "sample-campus.netmap")
+    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join("subnetsleuth", "data", "sample-campus.sleuth")
     inv = build_project(out)
     print(out, inv.summary())

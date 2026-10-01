@@ -1,6 +1,6 @@
 """Every bundled data file reaches every distribution.
 
-The EoL table (netmap/data/eol.json) once shipped in no wheel, zip or binary because
+The EoL table (subnetsleuth/data/eol.json) once shipped in no wheel, zip or binary because
 pyproject's package-data globs and both PyInstaller specs each listed data files by hand
 and none of the three was updated. These tests pin the three lists to what is on disk.
 """
@@ -12,7 +12,7 @@ import tomllib
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PKG = os.path.join(ROOT, "netmap")
+PKG = os.path.join(ROOT, "subnetsleuth")
 DATA_DIRS = ("data", "vendor")
 
 
@@ -42,7 +42,7 @@ def test_data_files_exist():
 def test_pyproject_package_data_covers_every_data_file():
     with open(os.path.join(ROOT, "pyproject.toml"), "rb") as f:
         py = tomllib.load(f)
-    globs = py["tool"]["setuptools"]["package-data"]["netmap"]
+    globs = py["tool"]["setuptools"]["package-data"]["subnetsleuth"]
     missing = sorted(rel for rel in _files_on_disk() if not any(fnmatch.fnmatch(rel, g) for g in globs))
     assert not missing, f"not covered by [tool.setuptools.package-data]: {missing} (globs: {globs})"
 
@@ -64,11 +64,11 @@ def test_bundle_datas_resolve_to_real_files(with_sample):
     for src, dest in datas:
         assert os.path.isfile(src)
         # destination folder mirrors the package layout, so util.resource_path() finds it when frozen
-        assert dest == "netmap/" + os.path.dirname(os.path.relpath(src, PKG).replace(os.sep, "/"))
+        assert dest == "subnetsleuth/" + os.path.dirname(os.path.relpath(src, PKG).replace(os.sep, "/"))
     assert "data/eol.json" in srcs
 
 
-@pytest.mark.parametrize("spec", ["netmap.spec", os.path.join("packaging", "netmap-gui.spec")])
+@pytest.mark.parametrize("spec", ["subnetsleuth.spec", os.path.join("packaging", "subnetsleuth-gui.spec")])
 def test_specs_take_their_data_from_bundle(spec):
     """Both specs must build their datas from packaging/bundle.py, never a private list."""
     text = open(os.path.join(ROOT, spec), encoding="utf-8").read()
@@ -80,7 +80,7 @@ def test_specs_take_their_data_from_bundle(spec):
 
 def test_eol_table_loads_from_the_installed_package():
     """What the packaging bug actually broke: eol.py silently returns an empty table."""
-    from netmap import eol
+    from subnetsleuth import eol
 
     eol._RECORDS = None
     table = eol._load()

@@ -2,7 +2,7 @@
 import socket
 import time
 
-from netmap.listen import EventCollector, parse_syslog, parse_trap
+from subnetsleuth.listen import EventCollector, parse_syslog, parse_trap
 
 
 def test_parse_syslog_rfc3164():

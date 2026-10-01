@@ -8,9 +8,9 @@ import sys
 import pytest
 from pysnmp.proto import errind
 
-from netmap import oids as O
-from netmap.cli import build_parser, parse_target_item, read_target_file
-from netmap.collect import (
+from subnetsleuth import oids as O
+from subnetsleuth.cli import build_parser, parse_target_item, read_target_file
+from subnetsleuth.collect import (
     CollectOptions,
     apply_counter_deltas,
     collect_arp,
@@ -23,12 +23,12 @@ from netmap.collect import (
     fdb_id_to_vlan,
     record_truncations,
 )
-from netmap.crawl import CrawlConfig, Crawler, same_device, shared_real_addresses
-from netmap.dns import resolve_names
-from netmap.model import Device, Interface, Inventory
-from netmap.snmp import Credential, SnmpError, SnmpSession
-from netmap.sweep import discover_targets, sweep_addresses, sweep_subnet
-from netmap.util import scope_devices, scope_hosts, scoped_networks, split_scope
+from subnetsleuth.crawl import CrawlConfig, Crawler, same_device, shared_real_addresses
+from subnetsleuth.dns import resolve_names
+from subnetsleuth.model import Device, Interface, Inventory
+from subnetsleuth.snmp import Credential, SnmpError, SnmpSession
+from subnetsleuth.sweep import discover_targets, sweep_addresses, sweep_subnet
+from subnetsleuth.util import scope_devices, scope_hosts, scoped_networks, split_scope
 
 from . import labnet
 from .fake_snmp import FakeSession, make_prober
@@ -66,7 +66,7 @@ def test_sweep_addresses_for_small_prefixes():
 
 
 def test_sweep_subnet_hands_nmap_only_the_in_scope_pieces(monkeypatch):
-    import netmap.sweep as sw
+    import subnetsleuth.sweep as sw
 
     calls = []
 
@@ -90,7 +90,7 @@ def test_sweep_subnet_hands_nmap_only_the_in_scope_pieces(monkeypatch):
 
 
 def test_ping_fallback_skips_excluded_addresses(monkeypatch):
-    import netmap.sweep as sw
+    import subnetsleuth.sweep as sw
 
     pinged = []
 
@@ -398,7 +398,7 @@ def test_snmpv1_credential_uses_mp_model_zero():
     assert c.kind == "v1" and c.label.startswith("v1")
     assert int(c.auth_data().message_processing_model) == 0 and int(Credential(kind="v2c", community="x").auth_data().message_processing_model) == 1
     args = build_parser().parse_args(["crawl", "--seed", "10.0.0.1", "--v1-community", "old"])
-    from netmap.cli import build_credentials
+    from subnetsleuth.cli import build_credentials
 
     assert [k.kind for k in build_credentials(args, {})] == ["v1"]
 
@@ -408,7 +408,7 @@ def test_snmpv1_credential_uses_mp_model_zero():
 
 @pytest.mark.skipif(sys.platform == "win32", reason="keyring path only")
 def test_keyring_identifier_is_not_derived_from_the_secret(monkeypatch):
-    from netmap import secret
+    from subnetsleuth import secret
 
     class FakeBackend:
         pass
@@ -460,7 +460,7 @@ def test_target_file_accepts_ranges(tmp_path):
 
 
 def test_cli_explicit_zero_values_and_exit_codes(monkeypatch, tmp_path):
-    import netmap.cli as cli
+    import subnetsleuth.cli as cli
 
     seen = {}
 
@@ -483,10 +483,10 @@ def test_cli_explicit_zero_values_and_exit_codes(monkeypatch, tmp_path):
 
 
 def test_cli_warns_when_priv_key_has_no_auth_key(caplog):
-    from netmap.cli import build_credentials
+    from subnetsleuth.cli import build_credentials
 
     args = build_parser().parse_args(["crawl", "--seed", "10.0.0.1", "--v3-user", "ro", "--v3-priv-key", "p"])
-    with caplog.at_level("WARNING", logger="netmap"):
+    with caplog.at_level("WARNING", logger="subnetsleuth"):
         build_credentials(args, {})
     assert any("--v3-priv-key" in r.message and "--v3-auth-key" in r.message for r in caplog.records)
     for flag in ("--community", "--v3-auth-key", "--v3-priv-key"):
@@ -646,7 +646,7 @@ def test_wrap_recovery_applies_to_32_bit_counters_only():
 
 
 def test_lldp_local_port_mac_subtype_and_bridge_port_mapping():
-    from netmap.collect import collect_lldp
+    from subnetsleuth.collect import collect_lldp
 
     d = labnet.Dev()
     d.iface(1001, "ge-0/0/1", mac="00:11:22:33:44:01")
@@ -658,7 +658,7 @@ def test_lldp_local_port_mac_subtype_and_bridge_port_mapping():
     d.lldp_rem(5, 1, labnet.MAC_A, "p1", "", "peer-a", "x", 0x04)
     d.lldp_rem(6, 2, labnet.MAC_B, "p2", "", "peer-b", "x", 0x04)
     dev = Device(id="10.0.0.1")
-    asyncio.run(__import__("netmap.collect", fromlist=["collect_interfaces"]).collect_interfaces(FakeSession(dev.id, d.values()), dev))
+    asyncio.run(__import__("subnetsleuth.collect", fromlist=["collect_interfaces"]).collect_interfaces(FakeSession(dev.id, d.values()), dev))
     asyncio.run(collect_lldp(FakeSession(dev.id, d.values()), dev, bp={"6": 1002}))
     by = {n.remote_name: n for n in dev.neighbors}
     assert by["peer-a"].local_if_index == 1001 and by["peer-a"].local_port == "ge-0/0/1"

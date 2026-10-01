@@ -7,15 +7,15 @@ import tempfile
 
 import pytest
 
-from netmap import oids as O
-from netmap.collect import MAX_COMPONENTS, CollectOptions, collect_device, collect_entity, collect_system
-from netmap.crawl import CrawlConfig, Crawler
-from netmap.graph import build_graph, enrich_inventory, export_csv, export_dot, export_graphml, ipam_rows, text_summary, vlan_rows
-from netmap.model import Device, Interface, Inventory
-from netmap.render import render_html
-from netmap.report import export_xlsx
-from netmap.snmp import Credential
-from netmap.util import in_scope, mask_to_prefix, oid_suffix, oui_vendor, parse_os_version, portlist_ports, short_name
+from subnetsleuth import oids as O
+from subnetsleuth.collect import MAX_COMPONENTS, CollectOptions, collect_device, collect_entity, collect_system
+from subnetsleuth.crawl import CrawlConfig, Crawler
+from subnetsleuth.graph import build_graph, enrich_inventory, export_csv, export_dot, export_graphml, ipam_rows, text_summary, vlan_rows
+from subnetsleuth.model import Device, Interface, Inventory
+from subnetsleuth.render import render_html
+from subnetsleuth.report import export_xlsx
+from subnetsleuth.snmp import Credential
+from subnetsleuth.util import in_scope, mask_to_prefix, oid_suffix, oui_vendor, parse_os_version, portlist_ports, short_name
 
 from . import labnet
 from .fake_snmp import FakeSession, make_prober
@@ -319,7 +319,7 @@ def test_xlsx_report(tmp_path):
 def test_target_file_and_scope():
     import tempfile
 
-    from netmap.cli import build_parser, read_target_file, scope_from, targets_from
+    from subnetsleuth.cli import build_parser, read_target_file, scope_from, targets_from
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
         f.write("# ranges handed over by the target\n10.20.0.0/24\n10.21.0.0/24, 10.22.0.0/24\n\n192.168.5.10\nnot-a-subnet\n")
@@ -347,7 +347,7 @@ def test_target_file_and_scope():
 def test_probe_all_expands_targets_without_pinging():
     import ipaddress as ia
 
-    from netmap.sweep import discover_targets
+    from subnetsleuth.sweep import discover_targets
 
     inv = Inventory()
     scope = [ia.ip_network("10.50.0.0/24")]
@@ -404,7 +404,7 @@ def test_no_text_write_relies_on_the_platform_encoding():
     import pathlib
 
     offenders = []
-    for src in sorted(pathlib.Path(__file__).resolve().parent.parent.joinpath("netmap").glob("*.py")):
+    for src in sorted(pathlib.Path(__file__).resolve().parent.parent.joinpath("subnetsleuth").glob("*.py")):
         for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1):
             if re.search(r"\bopen\(", line) and '"rb"' not in line and "encoding=" not in line:
                 offenders.append(f"{src.name}:{n}: {line.strip()}")
@@ -439,8 +439,8 @@ def test_collects_fhrp_routing_peers_and_stp():
 
 
 def test_interface_counters_poe_and_utilisation():
-    from netmap.collect import apply_counter_deltas
-    from netmap.model import Device, Interface
+    from subnetsleuth.collect import apply_counter_deltas
+    from subnetsleuth.model import Device, Interface
 
     inv, _, _ = crawl()
     sw1 = inv.devices["10.0.0.2"]

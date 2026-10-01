@@ -1,4 +1,4 @@
-"""What goes into a frozen NetMap build - shared by netmap.spec and packaging/netmap-gui.spec.
+"""What goes into a frozen SubnetSleuth build - shared by subnetsleuth.spec and packaging/subnetsleuth-gui.spec.
 
 Both PyInstaller specs used to carry their own copies of these lists and drifted apart
 (the EoL table shipped in neither). Keep every bundled data file, wholesale-collected
@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import os
 
-# Data files inside the netmap package, as paths relative to netmap/. Every file under
-# netmap/data and netmap/vendor must be listed here (test_packaging enforces it).
-SAMPLE_PROJECT = "data/sample-campus.netmap"
+# Data files inside the subnetsleuth package, as paths relative to subnetsleuth/. Every file under
+# subnetsleuth/data and subnetsleuth/vendor must be listed here (test_packaging enforces it).
+SAMPLE_PROJECT = "data/sample-campus.sleuth"
 DATA_FILES = [
     "vendor/vis-network.min.js",  # the interactive HTML map
     "data/oui.tsv",  # offline MAC -> vendor, so typing works with no internet
@@ -35,7 +35,7 @@ COLLECT_PACKAGES = [
 # cryptography backs SNMPv3 auth/priv and paramiko; its provider modules load dynamically.
 SUBMODULE_PACKAGES = ["cryptography"]
 
-HIDDEN_IMPORTS = ["netmap"]
+HIDDEN_IMPORTS = ["subnetsleuth"]
 
 # Never wanted in a frozen build: test tooling, notebooks, and heavy libraries nothing imports.
 EXCLUDES = ["tkinter", "matplotlib", "pytest", "snmpsim", "pysmi", "IPython", "numpy", "scipy", "pandas"]
@@ -54,10 +54,10 @@ def data_files(root: str, *, with_sample: bool) -> list[tuple[str, str]]:
     for rel in DATA_FILES:
         if rel == SAMPLE_PROJECT and not with_sample:
             continue
-        src = os.path.join(root, "netmap", *rel.split("/"))
+        src = os.path.join(root, "subnetsleuth", *rel.split("/"))
         if not os.path.exists(src):
             raise FileNotFoundError(f"bundled data file missing: {src}")
-        out.append((src, "netmap/" + os.path.dirname(rel)))
+        out.append((src, "subnetsleuth/" + os.path.dirname(rel)))
     return out
 
 
