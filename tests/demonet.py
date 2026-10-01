@@ -576,6 +576,8 @@ def _inject_probes(inv, rng):
             inv.hosts[db].software = [{"name": "postgresql-14", "version": "14.10"}]
             inv.hosts[db].inspect_source = "ssh"
             inv.hosts[db].sources.append("ssh")
+        # the web server was deep-scanned too (Tools > Deep scan), so its Deep scan and Scripts tabs have data
+        _deep_scan_sample(inv, web, _t.time() - 1800)
         # clients -> web on https
         for c in clients:
             inv.hosts[c].connections = [{"proto": "tcp", "laddr": c, "lport": 50000 + (int(c.split(".")[-1]) % 5000), "raddr": web, "rport": 443, "state": "ESTAB", "process": "chrome.exe"}]
@@ -594,6 +596,42 @@ def _inject_probes(inv, rng):
             if "nmap" not in h.sources:
                 h.sources.append("nmap")
             break
+
+
+def _deep_scan_sample(inv, ip: str, when: float) -> None:
+    from subnetsleuth.deepscan import apply_deep_scan
+
+    def port(n, service, product="", version="", extra="", state="open", tunnel="", scripts=None, cpe=()):
+        return {"port": n, "proto": "tcp", "state": state, "reason": "syn-ack" if state == "open" else "reset", "service": service,
+                "product": product, "version": version, "extrainfo": extra, "tunnel": tunnel, "devicetype": "", "ostype": "Linux" if product else "",
+                "cpe": list(cpe), "scripts": scripts or {}}
+
+    name = inv.hosts[ip].hostname or "web01.northwind.example"
+    rec = {
+        "ip": ip, "when": when, "seconds": 384.6, "status": "ok", "admin": True,
+        "options": {"udp": False, "scripts": True, "os_detect": True, "traceroute": True, "timeout": None},
+        "args": "-v -Pn -T4 -sV --version-all -sS -p- -O --osscan-guess --traceroute --script default and safe",
+        "hostname": name, "mac": inv.hosts[ip].mac or "", "vendor": inv.hosts[ip].vendor or "",
+        "ports": [
+            port(22, "ssh", "OpenSSH", "8.9p1 Ubuntu 3ubuntu0.6", "Ubuntu Linux; protocol 2.0", cpe=["cpe:/a:openbsd:openssh:8.9p1"],
+                 scripts={"ssh-hostkey": "\n  256 3c:5e:91:0a:7f:22:c4:8e:1b:6d:90:aa:13:f2:44:01 (ECDSA)\n  256 a1:09:7e:55:d3:b8:2f:6c:40:e9:12:7b:cc:58:3a:9d (ED25519)"}),
+            port(80, "http", "nginx", "1.18.0", "Ubuntu", scripts={"http-title": "Did not follow redirect to https://" + name + "/",
+                                                                     "http-server-header": "nginx/1.18.0 (Ubuntu)"}),
+            port(443, "http", "nginx", "1.18.0", "Ubuntu", tunnel="ssl", scripts={
+                "ssl-cert": f"Subject: commonName={name}\nSubject Alternative Name: DNS:{name}, DNS:intranet.northwind.example\n"
+                            "Issuer: commonName=Northwind Issuing CA 01/organizationName=Northwind\nPublic Key type: rsa\nPublic Key bits: 2048\n"
+                            "Not valid before: 2026-02-03T00:00:00\nNot valid after:  2027-02-03T23:59:59",
+                "http-title": "Northwind Intranet", "tls-alpn": "\n  h2\n  http/1.1"}),
+            port(5666, "nrpe", state="closed"),
+            port(9100, "jetdirect", state="closed"),
+        ],
+        "not_shown": ["65,530 filtered"],
+        "os": [{"name": "Linux 5.0 - 5.14", "accuracy": 97, "family": "Linux", "vendor": "Linux", "gen": "5.X", "type": "general purpose"},
+               {"name": "Linux 4.15 - 5.8", "accuracy": 93, "family": "Linux", "vendor": "Linux", "gen": "4.X", "type": "general purpose"}],
+        "host_scripts": {}, "uptime": {"seconds": 86400 * 63, "lastboot": "Sun Jul 26 06:12:40 2026"}, "distance": 2,
+        "trace": [{"ttl": 1, "ip": "10.10.0.1", "rtt": "0.41", "host": "core-sw1"}, {"ttl": 2, "ip": ip, "rtt": "0.88", "host": name}],
+    }
+    apply_deep_scan(inv, rec)
 
 
 if __name__ == "__main__":

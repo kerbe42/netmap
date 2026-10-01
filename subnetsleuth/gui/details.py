@@ -643,7 +643,9 @@ class DetailsPanel(QWidget):
         lay = QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._facts(pairs), 2)
-        lay.addWidget(_table(cols, rows), 3)
+        ports = _table(cols, rows)
+        ports.sortByColumn(0, Qt.AscendingOrder)  # by port number, low to high
+        lay.addWidget(ports, 3)
         n_open = sum(1 for p in rec.get("ports") or [] if p.get("state") == "open")
         self.tabs.addTab(box, f"Deep scan ({n_open} open)")
         text = []

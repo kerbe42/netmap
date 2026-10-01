@@ -97,6 +97,18 @@ def run_selftest(win, shots: str | None, strict: bool) -> int:
             tabs = [win.details.tabs.tabText(i) for i in range(win.details.tabs.count())]
             (ok if "System" in tabs else fail)(f"inspection tabs: {[t for t in tabs if t in ('System','Software','Connections','Dependencies')]}")
             shot("24-host-inspected")
+        deep = next(iter(getattr(inv, "deep_scans", {}) or {}), None)
+        if deep:
+            win.open_node(inv.ip_to_device.get(deep, deep))
+            _pump(200)
+            tabs = [win.details.tabs.tabText(i) for i in range(win.details.tabs.count())]
+            has = any(t.startswith("Deep scan") for t in tabs)
+            (ok if has else fail)(f"deep scan tab present: {has}")
+            for i, t in enumerate(tabs):
+                if t.startswith("Deep scan"):
+                    win.details.tabs.setCurrentIndex(i)
+            _pump(150)
+            shot("26-host-deep-scan")
         cfg_dev = next((d for d in inv.configs), None)
         if cfg_dev:
             win.open_node(cfg_dev)
