@@ -18,6 +18,8 @@ import sys
 import xml.etree.ElementTree as ET
 from typing import NamedTuple, Optional
 
+from . import activity
+from .activity import span
 from .model import Inventory
 from .util import in_scope, norm_mac, plausible_mac, scoped_networks
 
@@ -31,6 +33,32 @@ DEFAULT_NMAP_TIMEOUT = 30 * 60.0  # seconds one nmap run may take before it is s
 SWEEP_BLOCK = 24  # a sweep runs one nmap per block of this prefix length
 NMAP_PARALLEL = 8  # nmap sweep runs at once, across every subnet of a sweep
 PING_PARALLEL = 256  # ping processes at once when nmap is not installed
+LARGE_PREFIX = 20  # ranges wider than this get a "this will take a while" warning
+
+
+def rough_duration(seconds: float) -> str:
+    if seconds < 90:
+        return "a minute"
+    if seconds < 90 * 60:
+        return f"{round(seconds / 60)} min"
+    if seconds < 48 * 3600:
+        return f"{seconds / 3600:.0f} h"
+    return f"{seconds / 86400:.0f} days"
+
+
+def sweep_estimate(num_addresses: int, parallel: int = NMAP_PARALLEL) -> str:
+    """A rough wall-clock range for an nmap sweep: 5-30 s per /24 block (busy LAN to
+    filtered WAN, privileged or not), `parallel` blocks at a time."""
+    blocks = max(1, -(-num_addresses // 256))
+    lo, hi = rough_duration(blocks * 5 / parallel), rough_duration(blocks * 30 / parallel)
+    return lo if lo == hi else f"{lo} to {hi}"
+
+
+def warn_if_large(net, what: str = "sweep") -> None:
+    """Large ranges are scanned in full, with a warning that says roughly how long it takes."""
+    if net.version == 4 and net.prefixlen < LARGE_PREFIX:
+        log.warning("%s is large (%s addresses, %s /24 blocks): the %s takes roughly %s",
+                    net, f"{net.num_addresses:,}", f"{max(1, net.num_addresses // 256):,}", what, sweep_estimate(net.num_addresses))
 
 
 def is_admin() -> bool:
@@ -211,23 +239,37 @@ def fmt_limit(seconds: Optional[float]) -> str:
     return f"{m:g} min" if m >= 1 else f"{seconds:g} s"
 
 
-async def _run_nmap(args: list[str], timeout: Optional[float]) -> NmapRun:
+_TASK_RE = re.compile(rb'<taskbegin task="([^"]+)"')
+
+
+async def _run_nmap(args: list[str], timeout: Optional[float], kind: str = "nmap", target: str = "") -> NmapRun:
     """Run nmap with XML on stdout, for at most `timeout` seconds (None or 0: no limit).
 
     Output is read as it comes, so a run stopped at its limit still returns every host nmap
-    had finished; the caller decides what to try again."""
+    had finished; the caller decides what to try again. While it runs it is listed in the
+    scan's activity as `kind` `target`, with nmap's current stage when run with -v."""
     cmd = [find_nmap() or "nmap", "-oX", "-", *args]
     log.debug("running: %s", " ".join(cmd))
+    with activity.working(kind, target or " ".join(a for a in args if a[:1].isdigit())[:80]) as item:
+        return await _nmap_process(cmd, timeout, item)
+
+
+async def _nmap_process(cmd: list[str], timeout: Optional[float], item) -> NmapRun:
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **no_window())
     chunks: list[bytes] = []
 
     async def drain() -> bytes:
         async def out():
+            tail = b""
             while True:
                 b = await proc.stdout.read(65536)
                 if not b:
                     return
                 chunks.append(b)
+                tail = (tail + b)[-4096:]
+                stages = _TASK_RE.findall(tail)
+                if stages:
+                    item.detail = stages[-1].decode(errors="replace")
 
         _, err = await asyncio.gather(out(), proc.stderr.read())
         await proc.wait()
@@ -283,13 +325,17 @@ async def _ping(ip: str, sem: asyncio.Semaphore) -> Optional[str]:
         return ip if ok else None
 
 
-def sweep_addresses(net) -> list:
+def iter_sweep_addresses(net):
     """Every address a sweep may try in `net`: the usable hosts of a normal subnet, both
     addresses of a /31 and the single address of a /32 (the network address itself)."""
     net = ipaddress.ip_network(str(net), strict=False)
     if net.prefixlen >= net.max_prefixlen - 1:
-        return list(net)
-    return list(net.hosts())
+        return iter(net)
+    return net.hosts()
+
+
+def sweep_addresses(net) -> list:
+    return list(iter_sweep_addresses(net))
 
 
 def sweep_blocks(pieces: list) -> list:
@@ -303,7 +349,8 @@ def sweep_blocks(pieces: list) -> list:
     return out
 
 
-async def _ping_targets(targets: list[str], label: str, timeout: Optional[float], sem: asyncio.Semaphore) -> tuple[list[dict], str]:
+async def _ping_targets(targets: list[str], label: str, timeout: Optional[float], sem: asyncio.Semaphore,
+                        kind: str = "ping sweep") -> tuple[list[dict], str]:
     """nmap host discovery on `targets`. Returns (live host records, status of the last run).
 
     A sweep lists only the hosts that answered, so a run stopped at its limit cannot say which
@@ -311,14 +358,14 @@ async def _ping_targets(targets: list[str], label: str, timeout: Optional[float]
     runs found is kept."""
     args = [*nmap_ping_opts(), *targets]
     async with sem:
-        run = await _run_nmap(args, timeout)
+        run = await _run_nmap(args, timeout, kind, label)
     hosts = {h["ip"]: h for h in _parse_nmap_xml(run.xml)}
     if run.status != "timeout":
         return list(hosts.values()), run.status
     log.warning("nmap reached its %s limit pinging %s; kept the %d live address(es) it had reported, trying again with %s",
                 fmt_limit(timeout), label, len(hosts), fmt_limit(timeout * 2))
     async with sem:
-        run = await _run_nmap(args, timeout * 2)
+        run = await _run_nmap(args, timeout * 2, kind, f"{label} (retry)")
     for h in _parse_nmap_xml(run.xml):
         hosts.setdefault(h["ip"], h)
     if run.status == "timeout":
@@ -353,20 +400,32 @@ async def sweep_subnet(cidr: str, nmap_timeout: Optional[float] = DEFAULT_NMAP_T
         sem = nmap_sem or asyncio.Semaphore(NMAP_PARALLEL)
         progress = _Progress(str(net), len(blocks), "blocks")
         found: list[dict] = []
+        todo = iter(blocks)  # a few workers share it, so a /8 is not 65,536 tasks at once
 
-        async def block(b):
-            hosts, status = await _ping_targets([str(b)], str(b), nmap_timeout, sem)
-            found.extend(hosts)
-            progress.step(extra=f", {len(found)} live so far")
-            return status != "timeout"
+        async def worker() -> bool:
+            ok = True
+            for b in todo:
+                hosts, status = await _ping_targets([str(b)], str(b), nmap_timeout, sem)
+                found.extend(hosts)
+                progress.step(extra=f", {len(found)} live so far")
+                ok = ok and status != "timeout"
+            return ok
 
-        finished = await asyncio.gather(*[block(b) for b in blocks])
+        finished = await asyncio.gather(*[worker() for _ in range(min(NMAP_PARALLEL, len(blocks)))])
         return found, all(finished)
     log.warning("nmap not found; falling back to ICMP ping only (no MAC/vendor data)")
     sem = ping_sem or asyncio.Semaphore(PING_PARALLEL)
-    addrs = [str(ip) for ip in sweep_addresses(net) if any(ip in p for p in pieces)]
-    results = await asyncio.gather(*[_ping(ip, sem) for ip in addrs])
-    return [{"ip": ip, "mac": None, "vendor": "", "hostname": "", "ports": []} for ip in results if ip], True
+    addrs = (str(ip) for ip in iter_sweep_addresses(net) if any(ip in p for p in pieces))
+    live: list[str] = []
+
+    async def pinger():
+        for ip in addrs:
+            if await _ping(ip, sem):
+                live.append(ip)
+
+    with activity.working("ping", f"{net} ({sum(p.num_addresses for p in pieces):,} addresses)"):
+        await asyncio.gather(*[pinger() for _ in range(PING_PARALLEL)])
+    return [{"ip": ip, "mac": None, "vendor": "", "hostname": "", "ports": []} for ip in live], True
 
 
 async def live_addresses(ips: list[str], nmap_timeout: Optional[float] = DEFAULT_NMAP_TIMEOUT,
@@ -383,7 +442,7 @@ async def live_addresses(ips: list[str], nmap_timeout: Optional[float] = DEFAULT
     up: set[str] = set()
 
     async def one(chunk: list[str]):
-        hosts, status = await _ping_targets(chunk, f"{len(chunk)} address(es) from {chunk[0]}", nmap_timeout, sem)
+        hosts, status = await _ping_targets(chunk, span(chunk), nmap_timeout, sem, kind="ping check")
         up.update(h["ip"] for h in hosts)
         if status != "ok":
             up.update(chunk)
@@ -427,7 +486,7 @@ async def nmap_inspect(ips: list[str], fingerprint: bool = True, os_detect: bool
 
     async def one(chunk: list[str], limit) -> list[str]:
         async with sem:
-            run = await _run_nmap(args + chunk, limit)
+            run = await _run_nmap(args + chunk, limit, "port scan", span(chunk))
         for rec in _parse_nmap_xml(run.xml):
             ip = rec.get("ip")
             if ip:
@@ -482,7 +541,6 @@ async def discover_targets(
     exclude: list,
     fingerprint: bool = False,
     probe_all: bool = False,
-    max_prefix: int = 22,
     parallel: int = NMAP_PARALLEL,
     nmap_timeout: Optional[float] = DEFAULT_NMAP_TIMEOUT,
     live: Optional[set] = None,
@@ -494,6 +552,9 @@ async def discover_targets(
     ICMP but permit SNMP; otherwise a ping sweep decides, and whatever answers is also
     recorded as a host (MAC, vendor, open ports) so non-SNMP kit still shows up, and
     added to `live` when given. Every target is pinged before any is fingerprinted.
+
+    Every range entered is scanned in full, however large; large ones are announced with a
+    rough duration so a long sweep is expected, not mistaken for a hang.
     """
     nets = []
     for t in targets:
@@ -511,11 +572,10 @@ async def discover_targets(
         ips = []
         for net in nets:
             # /31 (RFC 3021) has two usable p2p addresses; a /32 is the single address.
-            hosts = sweep_addresses(net)
-            if net.prefixlen < max_prefix:
-                log.warning("target %s is larger than /%d; --probe-all would send %d probes, skipping", net, max_prefix, len(hosts))
-                continue
-            ips += [str(ip) for ip in hosts if in_scope(str(ip), scope, exclude)]
+            if net.version == 4 and net.prefixlen < LARGE_PREFIX:
+                log.warning("target %s is large: SNMP will be tried on each of its %s addresses without a ping first, which takes a long time",
+                            net, f"{net.num_addresses:,}")
+            ips += [str(ip) for ip in sweep_addresses(net) if in_scope(str(ip), scope, exclude)]
         log.info("targets: %d addresses queued for SNMP (no ping first)", len(ips))
         return ips
 
@@ -523,10 +583,10 @@ async def discover_targets(
     nmap_sem, ping_sem = asyncio.Semaphore(parallel), asyncio.Semaphore(PING_PARALLEL)
     found: list[str] = []
 
+    for net in nets:
+        warn_if_large(net)
+
     async def one(net):
-        if net.prefixlen < max_prefix:
-            log.warning("skipping target %s: larger than /%d (raise the largest subnet to sweep, --sweep-max-size, to include it)", net, max_prefix)
-            return
         hosts, complete = await sweep_subnet(str(net), nmap_timeout=nmap_timeout, scope=scope, exclude=exclude, nmap_sem=nmap_sem, ping_sem=ping_sem)
         n = 0
         for rec in hosts:
@@ -547,17 +607,21 @@ async def discover_targets(
     return found
 
 
-async def sweep(inv: Inventory, subnets: list[str], scope: list, exclude: list, fingerprint: bool = False, max_prefix: int = 22,
+async def sweep(inv: Inventory, subnets: list[str], scope: list, exclude: list, fingerprint: bool = False, max_prefix: Optional[int] = 22,
                 parallel: int = NMAP_PARALLEL, resweep: bool = False, nmap_timeout: Optional[float] = DEFAULT_NMAP_TIMEOUT,
                 live: Optional[set] = None) -> int:
     """Ping-sweep `subnets` (those not swept yet, unless `resweep`) and add what answers as
     hosts; with `fingerprint`, then service-scan them. A subnet is marked swept only when
-    every block of it finished, so the next sweep picks up one that ran out of time."""
+    every block of it finished, so the next sweep picks up one that ran out of time.
+
+    `max_prefix` skips subnets wider than it: meant for subnets learned from devices, where
+    a routing table can name 10.0.0.0/8. Pass None for subnets someone typed in."""
     todo = []
     for cidr in subnets:
         net = ipaddress.ip_network(cidr, strict=False)
-        if net.prefixlen < max_prefix:
-            log.info("skipping %s: larger than /%d (raise --sweep-max-size to include)", cidr, max_prefix)
+        if max_prefix is not None and net.prefixlen < max_prefix:
+            log.info("skipping %s: a discovered subnet larger than /%d (raise 'Largest discovered subnet to sweep' / --sweep-max-size, "
+                     "or sweep it by name, to include it)", cidr, max_prefix)
             continue
         if not scoped_networks(net, scope, exclude):
             log.info("skipping %s: out of scope", cidr)
@@ -566,6 +630,7 @@ async def sweep(inv: Inventory, subnets: list[str], scope: list, exclude: list, 
         if s.swept and not resweep:
             continue
         todo.append(str(net))
+        warn_if_large(net)
     if not todo:
         return 0
     log.info("sweeping %d subnets%s", len(todo), " with fingerprinting" if fingerprint else "")

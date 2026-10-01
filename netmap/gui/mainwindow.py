@@ -253,6 +253,14 @@ class MainWindow(QMainWindow):
         row.addWidget(self.scan_stats, 1)
         row.addWidget(self.stop_btn)
         al.addLayout(row)
+        # what the scan has in flight right now: the /24 blocks being swept, the batch being
+        # port-scanned, the devices being polled (hover for the full list)
+        self.scan_now = QLabel("")
+        self.scan_now.setObjectName("muted")
+        self.scan_now.setTextFormat(Qt.PlainText)
+        self.scan_now.setMinimumWidth(1)
+        self.scan_now.hide()
+        al.addWidget(self.scan_now)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(20000)
@@ -401,6 +409,8 @@ class MainWindow(QMainWindow):
                                         tip="Diff this project against the backup made the last time it was saved (name.netmap.bak1)")
         self._act(tm, "Check against an &asset list…", self.reconcile, tip="Compare what was found with a CSV/.xlsx list of devices you were given")
         self._act(tm, "&Inspect servers (SSH / WinRM)…", self.inspect_servers, tip="Collect OS, hardware, software, services and connections from hosts you have login for")
+        self._act(tm, "&Deep scan an address with Nmap…", lambda: self.deep_scan(), "Ctrl+Shift+D",
+                  "Every TCP port, full service-version detection, OS and safe information scripts for one or more addresses")
         self._act(tm, "Capture device &configs (SSH)…", self.capture_configs, tip="Log in read-only and save each device's running-config, to read and diff over time")
         self._act(tm, "&Listen for syslog / SNMP traps…", self.listen_events, tip="Watch messages devices send while you are on site")
 
@@ -998,6 +1008,7 @@ class MainWindow(QMainWindow):
             om.addAction("SSH session", lambda: self.node_action("ssh", node_id))
             m.addAction("Ping", lambda: self.node_action("ping", node_id))
             m.addAction("Traceroute", lambda: self.node_action("traceroute", node_id))
+            m.addAction("Deep scan with Nmap…", lambda: self.node_action("deepscan", node_id))
         if node_id in self.inv.devices:
             m.addAction("Rescan this device", lambda: self.node_action("rescan", node_id))
             m.addAction("Capture config (SSH)…", lambda: self.capture_configs(node_id))
@@ -1031,6 +1042,8 @@ class MainWindow(QMainWindow):
             (self.tools.ping if action == "ping" else self.tools.traceroute)()
         elif action == "rescan":
             self.rescan_device(node_id)
+        elif action == "deepscan" and ip:
+            self.deep_scan([ip])
 
     def _ssh(self, ip: str):
         try:
@@ -1286,6 +1299,18 @@ class MainWindow(QMainWindow):
             bits.append(f"{st['probed']} probed")
         bits.append(fmt_duration(st.get("elapsed", 0)) or "0s")
         self.scan_stats.setText(" · ".join(bits))
+        self.show_now(st.get("now", ""), st.get("now_all") or [])
+
+    def show_now(self, summary: str, items: list) -> None:
+        """The "Now:" line: elided to the panel's width, every item in the tooltip."""
+        if not summary:
+            self.scan_now.setText("Now: waiting for the next step…" if self._jobs.busy() else "")
+            self.scan_now.setToolTip("")
+            return
+        text = f"Now: {summary}"
+        self.scan_now.setText(self.scan_now.fontMetrics().elidedText(text, Qt.ElideRight, max(200, self.scan_now.width())))
+        self.scan_now.setToolTip("\n".join(items[:60]) + (f"\n… and {len(items) - 60} more" if len(items) > 60 else ""))
+        self.scan_now.show()
 
     def _on_snapshot(self, d: dict):
         """A live tick from the scan. The heavy part (rebuilding the inventory, the graph and
@@ -1373,6 +1398,9 @@ class MainWindow(QMainWindow):
         """Progress bar, Stop button and scan actions follow whether any job is running."""
         busy = self._jobs.busy()
         self.scan_bar.setVisible(busy)
+        self.scan_now.setVisible(busy)
+        if not busy:
+            self.scan_now.setText("")
         self.stop_btn.setVisible(busy)
         self.a_stop.setEnabled(busy)
         self.a_scan.setEnabled(not busy)
@@ -1683,6 +1711,71 @@ class MainWindow(QMainWindow):
             msg = f"Inspected {result.get('ok', 0)} host(s): {result.get('linux', 0)} Linux, {result.get('windows', 0)} Windows, {result.get('failed', 0)} failed."
             self.scan_phase.setText(msg)
             self.statusBar().showMessage(msg, 12000)
+            self._autosave()
+
+        w.done.connect(finished)
+        w.start()
+
+    def deep_scan(self, ips: Optional[list] = None):
+        """Thorough nmap scan of chosen addresses (deepscan.py), in the background; the
+        results are kept in the project and shown on each one's Deep scan tab."""
+        if self._busy_guard("Deep scan"):
+            return
+        from .deepscandlg import DeepScanDialog, DeepScanWorker
+
+        dlg = DeepScanDialog(list(ips or []), self)
+        if not dlg.exec():
+            return
+        ips, opts = dlg.chosen()
+        refused = [ip for ip in ips if not self.scope_check(ip)[0]]
+        if refused:
+            QMessageBox.warning(self, "Never touch", self.scope_check(refused[0])[1] + "\nIt is left out of the deep scan.")
+            ips = [ip for ip in ips if ip not in refused]
+        scan = self.inv.project.get("scan", {})
+        ranges = nets(list(scan.get("scope", [])) + list(scan.get("targets", [])))
+        outside = [ip for ip in ips if ranges and not any(ipaddress.ip_address(ip) in n for n in ranges if n.version == ipaddress.ip_address(ip).version)]
+        if outside and QMessageBox.question(self, "Outside the saved ranges",
+                                            f"{', '.join(outside[:5])} {'is' if len(outside) == 1 else 'are'} not inside the ranges saved for this project. Deep-scan anyway?") != QMessageBox.Yes:
+            ips = [ip for ip in ips if ip not in outside]
+        if not ips:
+            return
+        self.activity_dock.show()
+        self.activity_dock.raise_()
+        self.log_view.appendPlainText(f"\n=== Deep scan of {', '.join(ips)} — {time.strftime('%H:%M:%S')} ===")
+        self._scan_title = "Deep scan"
+        self.scan_phase.setText(f"<b>Deep scan</b>: {html.escape(', '.join(ips[:4]))}{' …' if len(ips) > 4 else ''}")
+        work = self._copy_inventory("Preparing the deep scan")
+        if work is None:
+            return
+        self.logbridge.attach()
+        w = DeepScanWorker(work, ips, opts, exclude=nets(list(scan.get("exclude", []))), parent=self)
+        self._deep_worker = w
+        self._jobs.add(w, "the deep scan")
+        self._update_job_chrome()
+        started = time.time()
+        w.progress.connect(lambda summary, items: (self.show_now(summary, items),
+                                                   self.scan_stats.setText(fmt_duration(time.time() - started) or "0s")))
+
+        def finished(result):
+            self._deep_worker = None
+            self.logbridge.detach()
+            if self._closing:
+                return
+            if result.get("error"):
+                self.scan_phase.setText(f"Deep scan failed: {result['error']}")
+                return
+            self._merge(w.inv)  # results were written onto the worker's copy; it becomes the project
+            self.set_dirty(True)
+            self.refresh(keep_details=True)
+            if result.get("cancelled"):
+                self.scan_phase.setText("Deep scan stopped - addresses already finished are kept.")
+            else:
+                done = [r for r in result.get("results", []) if r.get("status") == "ok"]
+                msg = f"Deep scan finished: {len(done)} of {len(ips)} address(es)."
+                self.scan_phase.setText(msg)
+                self.statusBar().showMessage(msg + " See each one's Deep scan tab.", 12000)
+                if len(ips) == 1 and done:
+                    self.open_node(self.inv.ip_to_device.get(ips[0], ips[0]))
             self._autosave()
 
         w.done.connect(finished)

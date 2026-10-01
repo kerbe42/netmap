@@ -31,6 +31,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from . import activity
 from .model import Inventory
 from .util import is_usable_ip, norm_mac, plausible_mac
 
@@ -905,7 +906,8 @@ async def identify_hosts(
         call = _call_for(name, ip, host)
         async with sem:
             try:
-                return await asyncio.wait_for(loop.run_in_executor(pool, call), ceiling)
+                with activity.working("identify", f"{ip} {name}"):
+                    return await asyncio.wait_for(loop.run_in_executor(pool, call), ceiling)
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
                 return None
 
@@ -978,8 +980,9 @@ async def probe_management(inv, device_ids=None, timeout: float = 1.5, workers: 
             return
         result = {}
         async with sem:
-            for name, port in MGMT_PORTS.items():
-                result[name] = await _tcp_open(did, port, timeout)
+            with activity.working("management check", did):
+                for name, port in MGMT_PORTS.items():
+                    result[name] = await _tcp_open(did, port, timeout)
         dev.mgmt = result
         if any(result.values()):
             found += 1

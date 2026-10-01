@@ -51,7 +51,8 @@ device and the one that worked is recorded against it. Secrets are encrypted wit
 
 * **Address ranges to inventory** — the subnets you are responsible for, pasted as they come: CIDR,
   single addresses, or ranges like `10.20.0.10-60`, one per line or comma separated. Every live address in
-  them is checked.
+  them is checked, however large the range: a /16 or bigger is scanned in full, and the dialog says
+  roughly how long it will take.
 * **Start from devices** (optional) — a core switch or router. NetMap follows LLDP/CDP neighbours, routing
   next-hops and subnet gateways outwards from it.
 * **Never touch** — ranges that must not be sent anything (OT, medical, partner links).
@@ -60,8 +61,20 @@ Nothing outside the ranges you gave is ever contacted; the dialog shows exactly 
 start. If ping is blocked, choose *Query every address with SNMP*. Tick *Ping-sweep every subnet* for exact
 address counts, and *Name devices and hosts from reverse DNS* to pick up PTR names.
 
-Results appear while the scan runs. **Stop** keeps everything found so far. When the project has been
-saved, it is saved again automatically at the end of every scan.
+Results appear while the scan runs. The Activity panel's **Now:** line names what is in flight at that
+moment: the /24 blocks being swept, the batch of addresses being port-scanned (with Nmap's current stage),
+the devices being polled over SNMP, the hosts being identified; hover it for the full list. Anything that
+has been running for over a minute shows how long. **Stop** keeps everything found so far. When the project
+has been saved, it is saved again automatically at the end of every scan.
+
+**Deep scan.** Right-click a device or host (or use **Tools ▸ Deep scan an address with Nmap…**, Ctrl+Shift+D,
+for any address) to look at one address as thoroughly as Nmap can: all 65,535 TCP ports, every
+service-version probe, OS detection and a traceroute (both need Administrator), the common UDP services
+if you ask, and Nmap's information scripts that are both *default* and *safe*. Those read TLS
+certificates, web page titles, SSH host keys and SMB/RDP names, and nothing intrusive runs. The result is
+kept in the project: a **Deep scan** tab with every port Nmap listed (product, version, detail), the OS
+guesses, uptime, hop count and path, and a **Scripts** tab with what each script reported. It takes a few
+minutes per address, longer when most ports are filtered.
 
 ### 3. Understand it
 
@@ -364,10 +377,11 @@ exclusion, is never contacted, whichever step found it. This is what each step s
 | Step | Sends | To | Runs |
 |---|---|---|---|
 | SNMP polling | GET / GETBULK (read-only; NetMap never issues SET) | seeds, live addresses in the targets, and LLDP/CDP neighbours, next-hop routers and subnet gateways learned from them | always |
-| Ping sweep | ICMP echo, or TCP connect to a few common ports where ICMP is blocked | every address in a target or swept subnet, capped at `--sweep-max-size` (default /22) | with *Ping-sweep every subnet* / `--sweep`, or before probing a target |
+| Ping sweep | ICMP echo, or TCP connect to a few common ports where ICMP is blocked | every address in a target range (no size limit), and in the subnets devices report up to `--sweep-max-size` (default /22) | with *Ping-sweep every subnet* / `--sweep`, or before probing a target |
 | Reverse DNS | PTR queries to **your** resolver, not to the hosts | your configured DNS server | with *Name from reverse DNS* / `--dns` |
 | Host identification | one small request each: NetBIOS name query, mDNS, SSDP, WS-Discovery, HTTP/TLS handshake, SSH banner read, IPMI, Modbus, BACnet, EtherNet/IP, DNS and NTP checks | hosts and devices already found | with *Identify hosts* / `--identify` |
 | Service scan | `nmap -sV` on the top ports (`--os` adds `-O`, which needs Administrator/root) | hosts and devices already found that answer a ping (a quick `nmap -sn` check first, unless `--no-ping-first`) | only with `--port-scan` / *Port scan* |
+| Deep scan | `nmap -sV --version-all` on all TCP ports, `-O` and `--traceroute` (Administrator/root), optional common UDP ports, `--script "default and safe"` | the address(es) you choose | only when you start one |
 | Config capture, server inspection, VMware | SSH `show` commands, WinRM `Get-*` queries, vCenter API reads | the devices/hosts you selected, with credentials you supply | only when you start them |
 | Syslog / trap listener | nothing — it only receives | — | only when you open it |
 
@@ -375,8 +389,10 @@ exclusion, is never contacted, whichever step found it. This is what each step s
   a scan is limited to RFC1918 space and says so. *Never touch* always wins, including inside a target.
   Loopback, link-local, multicast and 0/8 are never probed. The scan dialog lists what will be contacted
   before you start.
-* Probing every address is capped (default: nothing larger than a /22 per range, `--sweep-max-size`) so a
-  mistyped prefix cannot turn into tens of thousands of probes; the range is refused and it says so.
+* Ranges you enter are scanned in full whatever their size; anything larger than a /20 is announced with a
+  rough duration (a /16 sweep takes minutes, a /8 a day or more). The *Ping-sweep every subnet* step is
+  different: it covers subnets learned from routing tables, which can include summaries such as 10.0.0.0/8,
+  so it skips those larger than *Largest discovered subnet to sweep* (`--sweep-max-size`, default /22).
   `--max-devices` (default 5000) stops a crawl that keeps finding new devices.
 * Everything is read-only. Nothing NetMap sends changes state on a device or host.
 * Large networks: a sweep runs one `nmap` per /24 of each range (eight at a time), and the port scan only
@@ -438,6 +454,10 @@ netmap sweep  -m site.netmap --subnet 10.10.50.0/24               # ping-sweep o
 netmap diff   last-month.netmap site.netmap --csv changes.csv     # what changed
 netmap check  -m site.netmap assets.xlsx --csv differences.csv    # reconcile with the asset list you were given
 netmap gui    site.netmap                                         # open it in the desktop app
+
+# Look at one or more addresses as thoroughly as nmap can (all TCP ports, versions, OS, safe scripts);
+# --udp adds the common UDP services. Results are stored in the project.
+sudo netmap deepscan 10.20.0.15 10.20.0.16 -m site.netmap --udp
 ```
 
 For anything repeatable, keep scope, exclusions and SNMPv3 credentials in a config file (see

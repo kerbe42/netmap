@@ -235,12 +235,49 @@ async def cmd_sweep(args) -> int:
         log.error("nothing to sweep: give --subnet CIDR or a map with discovered subnets")
         return 2
     minutes = _nmap_timeout(args, cfg.get("crawl", {}))
-    n = await sweep(inv, subnets, scope, exclude, fingerprint=args.fingerprint, max_prefix=args.sweep_max_size, resweep=True,
+    # subnets named with --subnet are swept whatever their size; the cap is for the map's discovered ones
+    n = await sweep(inv, subnets, scope, exclude, fingerprint=args.fingerprint, max_prefix=None if args.subnet else args.sweep_max_size, resweep=True,
                     nmap_timeout=minutes * 60 if minutes > 0 else None)
     log.info("sweep found %d hosts", n)
     inv.save(args.map)
     _outputs(inv, args)
     return 0
+
+
+async def cmd_deepscan(args) -> int:
+    from .deepscan import DeepScanOptions, deep_scan_into, standard_ports
+
+    cfg = load_config(args.config)
+    bad = [a for a in args.address if not _is_address(a)]
+    if bad:
+        log.error("not an IP address: %s", ", ".join(bad))
+        return 2
+    inv = Inventory.load(args.map) if os.path.exists(args.map) else Inventory()
+    minutes = args.nmap_timeout or 0
+    opts = DeepScanOptions(udp=args.udp, scripts=not args.no_scripts, os_detect=not args.no_os, traceroute=not args.no_traceroute,
+                           timeout=minutes * 60 if minutes > 0 else None)
+    # the addresses named are the scope; the exclusions still win
+    exclude = _nets((args.exclude or []) + cfg.get("crawl", {}).get("exclude", []))
+    result = await deep_scan_into(inv, args.address, opts, exclude=exclude)
+    inv.save(args.map)
+    log.info("saved %s", args.map)
+    ok = True
+    for rec in result["results"]:
+        ports = standard_ports(rec)
+        os_guess = f"; OS {rec['os'][0]['name']} ({rec['os'][0]['accuracy']}%)" if rec.get("os") else ""
+        print(f"{rec['ip']}: {rec['status']}, {len(ports)} open port(s){os_guess}")
+        for p in ports:
+            print(f"    {p['port']}/{p['proto']:<4} {p['service']:<16} {p['product']}")
+        ok = ok and rec["status"] == "ok"
+    return 0 if ok and not result["refused"] else 1
+
+
+def _is_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
 
 
 def cmd_render(args) -> int:
@@ -408,7 +445,9 @@ def _add_target_args(p):
 
 def _add_sweep_args(p):
     p.add_argument("--fingerprint", action="store_true", help="after the ping sweep, scan top ports on live hosts with nmap -sV to classify them")
-    p.add_argument("--sweep-max-size", type=int, default=22, help="skip subnets larger than this prefix length (default /22)")
+    p.add_argument("--sweep-max-size", type=int, default=22,
+                   help="skip DISCOVERED subnets larger than this prefix length when sweeping them (default /22). "
+                        "Ranges you name (--target, --subnet) are always scanned in full, with a warning when large")
     p.add_argument(
         "--nmap-timeout", type=float, metavar="MINUTES",
         help="time one nmap run may take before it is stopped (default 30; 0 = no limit). Sweeps run one nmap per /24 and port scans "
@@ -462,6 +501,17 @@ def build_parser():
     sw.add_argument("--map", "-m", default="netmap.json")
     sw.add_argument("--subnet", action="append", metavar="CIDR")
     _add_scope_args(sw), _add_sweep_args(sw), _add_output_args(sw)
+
+    ds = sub.add_parser("deepscan", help="thorough nmap scan of the addresses named: every TCP port, full version detection, OS, safe scripts")
+    ds.add_argument("address", nargs="+", help="IP address(es) to deep-scan")
+    ds.add_argument("--map", "-m", default="netmap.json", help="project to store the results in (created if missing)")
+    ds.add_argument("--udp", action="store_true", help="also the common UDP services: DNS, DHCP, NTP, NetBIOS, SNMP, IKE, syslog, IPMI, SSDP, mDNS, BACnet (needs root/Administrator)")
+    ds.add_argument("--no-scripts", action="store_true", help="skip nmap's 'default and safe' scripts (certificates, page titles, SSH keys, SMB/RDP names)")
+    ds.add_argument("--no-os", action="store_true", help="skip OS detection")
+    ds.add_argument("--no-traceroute", action="store_true", help="skip the traceroute")
+    ds.add_argument("--nmap-timeout", type=float, metavar="MINUTES", help="stop a deep scan of one address after this long (default: no limit)")
+    ds.add_argument("--exclude", action="append", metavar="CIDR", help="never scan these networks (repeatable); the config's exclusions apply too")
+    ds.add_argument("--config", "-c", help="TOML config file; its [crawl] exclude list is honoured")
 
     rd = sub.add_parser("render", help="build outputs (HTML/GraphML/DOT/CSV) from a saved map")
     rd.add_argument("--map", "-m", default="netmap.json")
@@ -527,6 +577,8 @@ def main(argv=None) -> None:
         rc = asyncio.run(cmd_crawl(args))
     elif args.cmd == "sweep":
         rc = asyncio.run(cmd_sweep(args))
+    elif args.cmd == "deepscan":
+        rc = asyncio.run(cmd_deepscan(args))
     elif args.cmd == "render":
         rc = cmd_render(args)
     elif args.cmd == "show":

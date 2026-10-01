@@ -247,6 +247,7 @@ class Inventory:
         self.history: list[dict] = []  # one entry per scan: when, what was asked, what was found
         self.configs: dict[str, list[dict]] = {}  # device id -> [{captured_at, text, sha}] newest last
         self.dhcp_scopes: dict[str, dict] = {}  # subnet cidr -> {leases, imported_at} from an imported DHCP export
+        self.deep_scans: dict[str, dict] = {}  # ip -> the latest deep scan of it (see deepscan.py)
         # bumped whenever the inventory's structure or annotations change; lets build_graph
         # cache its (expensive) result and skip rebuilding on refreshes that changed nothing.
         self.rev: int = 0
@@ -294,6 +295,7 @@ class Inventory:
         hand-placed positions are kept so they apply again if a later scan finds it.
         Returns True if there was such a device."""
         dev = self.devices.pop(did, None)
+        self.deep_scans.pop(did, None)
         self.reindex()  # rebuilds ip_to_device/mac_to_device and bumps rev
         return dev is not None
 
@@ -373,6 +375,7 @@ class Inventory:
         Returns True if there was such a host."""
         h = self.hosts.pop(ip, None)
         self.unreachable.pop(ip, None)
+        self.deep_scans.pop(ip, None)
         # a VIP or alias registered against a device stays; only a mapping to the host itself goes
         if self.ip_to_device.get(ip) == ip:
             self.ip_to_device.pop(ip, None)
@@ -446,6 +449,7 @@ class Inventory:
             "history": self.history,
             "configs": self.configs,
             "dhcp_scopes": self.dhcp_scopes,
+            "deep_scans": self.deep_scans,
         }
 
     @classmethod
@@ -478,6 +482,7 @@ class Inventory:
         inv.history = list(d.get("history") or [])
         inv.configs = {k: list(v) for k, v in (d.get("configs") or {}).items()}
         inv.dhcp_scopes = {k: dict(v) for k, v in (d.get("dhcp_scopes") or {}).items()}
+        inv.deep_scans = {k: dict(v) for k, v in (d.get("deep_scans") or {}).items()}
         return inv
 
     def copy(self) -> "Inventory":

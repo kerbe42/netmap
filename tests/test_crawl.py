@@ -351,13 +351,13 @@ def test_probe_all_expands_targets_without_pinging():
 
     inv = Inventory()
     scope = [ia.ip_network("10.50.0.0/24")]
-    ips = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [], probe_all=True, max_prefix=30))
+    ips = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [], probe_all=True))
     assert ips == ["10.50.0.1", "10.50.0.2"]  # network and broadcast excluded
     assert "10.50.0.0/30" in inv.subnets and "target" in inv.subnets["10.50.0.0/30"].sources
-    # a subnet wider than the guard is refused rather than turning into 65k probes
-    assert asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/24")], scope, [], probe_all=True, max_prefix=30)) == []
+    # an entered range is probed in full whatever its size
+    assert len(asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/24")], scope, [], probe_all=True))) == 254
     # exclusions win inside a target
-    ips2 = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [ia.ip_network("10.50.0.2/32")], probe_all=True, max_prefix=30))
+    ips2 = asyncio.run(discover_targets(inv, [ia.ip_network("10.50.0.0/30")], scope, [ia.ip_network("10.50.0.2/32")], probe_all=True))
     assert ips2 == ["10.50.0.1"]
 
 

@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
+from . import activity
 from .collect import CollectOptions, collect_device
 from .model import Device, Inventory
 from .snmp import Credential, probe
@@ -283,7 +284,8 @@ class Crawler:
         while True:
             ip, depth, via = await self.queue.get()
             try:
-                await self._process(ip, depth, via)
+                with activity.working("SNMP", ip):
+                    await self._process(ip, depth, via)
             except Exception:  # noqa: BLE001
                 log.exception("worker %d: unhandled error on %s", wid, ip)
                 self.inv.unreachable[ip] = f"error:{via}"

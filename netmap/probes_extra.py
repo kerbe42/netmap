@@ -31,6 +31,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from . import activity
 from .model import Inventory
 from .util import is_usable_ip
 
@@ -829,7 +830,8 @@ async def probe_extra(
         call = _call_for(name, ip)
         async with sem:
             try:
-                return await asyncio.wait_for(loop.run_in_executor(pool, call), ceiling)
+                with activity.working("protocol probes", f"{ip} {name}"):
+                    return await asyncio.wait_for(loop.run_in_executor(pool, call), ceiling)
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - a probe never sinks the run
                 return None
 

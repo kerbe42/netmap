@@ -12,6 +12,7 @@ import socket
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from . import activity
 from .model import Inventory
 
 log = logging.getLogger("netmap.dns")
@@ -51,7 +52,8 @@ async def resolve_names(inv: Inventory, workers: int = 32, timeout: float = 4.0,
         nonlocal found
         async with sem:
             try:
-                name = await asyncio.wait_for(loop.run_in_executor(pool, lookup, ip), timeout)
+                with activity.working("reverse DNS", ip):
+                    name = await asyncio.wait_for(loop.run_in_executor(pool, lookup, ip), timeout)
             except (asyncio.TimeoutError, OSError):
                 return
         if not name:

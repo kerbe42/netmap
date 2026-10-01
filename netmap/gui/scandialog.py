@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from ..scan import ScanRequest, resolve_scope
 from ..snmp import Credential
-from ..sweep import find_nmap
+from ..sweep import LARGE_PREFIX, find_nmap, sweep_estimate
 from .credentials import CredentialsDialog, CredentialStore
 from .prefs import nmap_timeout_spin
 
@@ -214,12 +214,11 @@ class ScanDialog(QDialog):
         self.maxpfx.setRange(8, 32)
         self.maxpfx.setPrefix("/")
         self.maxpfx.setValue(d.get("sweep_max_prefix", 22))
-        self.maxpfx.setToolTip("Subnets larger than this are skipped when sweeping/probing, to stop a mistyped prefix\n"
-                               "becoming a huge scan. Lower the number to allow bigger ranges: /16 = 65,536 addresses.")
+        self.maxpfx.setToolTip("Applies only to subnets NetMap learns from devices when 'Ping-sweep every subnet' is on:\n"
+                               "routing tables can list summaries such as 10.0.0.0/8. Ranges you enter are always scanned in full.")
         self.maxpfx_hint = QLabel()
         self.maxpfx_hint.setObjectName("muted")
         self.maxpfx.valueChanged.connect(self._maxpfx_hint)
-        self.maxpfx.valueChanged.connect(self._update_summary)
         self.nmap_timeout = nmap_timeout_spin(d.get("nmap_timeout", 30))
         self.top_ports = int(d.get("top_ports", 200))
         mp = QHBoxLayout()
@@ -229,7 +228,7 @@ class ScanDialog(QDialog):
         g4l.addRow("SNMP timeout (seconds)", self.timeout)
         g4l.addRow("SNMP retries", self.retries)
         g4l.addRow("SNMP port", self.port)
-        g4l.addRow("Largest subnet to sweep/probe", mp)
+        g4l.addRow("Largest discovered subnet to sweep", mp)
         g4l.addRow("Nmap time limit per run", self.nmap_timeout)
         self._maxpfx_hint()
         ol.addWidget(g4)
@@ -315,11 +314,13 @@ class ScanDialog(QDialog):
         if targets:
             n = sum(ipaddress.ip_network(t).num_addresses for t in targets)
             lines.append(f"{len(targets)} range(s), {n:,} addresses to check.")
-            big = [t for t in targets if ipaddress.ip_network(t).prefixlen < self.maxpfx.value()]
+            big = [ipaddress.ip_network(t) for t in targets]
+            big = [b for b in big if b.version == 4 and b.prefixlen < LARGE_PREFIX]
             if big:
-                shown = ", ".join(big[:4]) + (" …" if len(big) > 4 else "")
-                lines.append(f"<span style='color:#d97706'>{len(big)} range(s) are larger than /{self.maxpfx.value()} and will be skipped: {shown}. "
-                             "Lower <i>Largest subnet to sweep/probe</i> (Options) to include them.</span>")
+                shown = ", ".join(f"{b} ({b.num_addresses:,})" for b in big[:4]) + (" …" if len(big) > 4 else "")
+                total = sum(b.num_addresses for b in big)
+                lines.append(f"<span style='color:#d97706'>Large: {shown}. Every address is checked, so the ping sweep takes roughly "
+                             f"{sweep_estimate(total)}; the Activity panel shows which blocks it is on.</span>")
         if seeds:
             lines.append(f"Starting from {len(seeds)} device(s).")
         if ok:
@@ -340,8 +341,7 @@ class ScanDialog(QDialog):
 
     def _maxpfx_hint(self):
         n = 2 ** (32 - self.maxpfx.value())
-        warn = "  — large!" if self.maxpfx.value() < 20 else ""
-        self.maxpfx_hint.setText(f"allows up to {n:,} addresses per range{warn}")
+        self.maxpfx_hint.setText(f"up to {n:,} addresses (ranges you enter: no limit)")
 
     def _accept(self):
         creds, _ = self.selected_credentials()

@@ -85,7 +85,7 @@ class PreferencesDialog(QDialog):
         pf.addRow("Follow neighbours up to (hops)", self.fields["max_depth"])
         pf.addRow("Nmap ports per host", self.fields["top_ports"])
         pf.addRow("Nmap time limit per run", self.fields["nmap_timeout"])
-        pf.addRow("Largest subnet to sweep/probe", self.maxpfx)
+        pf.addRow("Largest discovered subnet to sweep", self.maxpfx)
         pf.addRow("", self.maxpfx_hint)
 
         steps = QGroupBox("Scan defaults — what runs")
@@ -110,7 +110,8 @@ class PreferencesDialog(QDialog):
         af.addRow("Theme", self.theme)
 
         note = QLabel("These are the starting values for every New Scan; you can still change them per scan. "
-                      "Raising the sweep limit (a lower /prefix) lets you scan bigger ranges like a /16.")
+                      "Ranges you enter are always scanned in full; the discovered-subnet limit only stops a sweep of every "
+                      "subnet the devices report from walking into a summary route such as 10.0.0.0/8.")
         note.setWordWrap(True)
         note.setObjectName("muted")
         bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -140,7 +141,7 @@ class PreferencesDialog(QDialog):
 
     def _hint(self):
         n = 2 ** (32 - self.maxpfx.value())
-        self.maxpfx_hint.setText(f"allows up to {n:,} addresses per range" + ("  — large!" if self.maxpfx.value() < 20 else ""))
+        self.maxpfx_hint.setText(f"discovered subnets up to {n:,} addresses; entered ranges: no limit")
         self.maxpfx_hint.setObjectName("muted")
 
     def chosen_theme(self) -> str:

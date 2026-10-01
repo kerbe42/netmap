@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from . import activity
 from .collect import CollectOptions
 from .crawl import CrawlConfig, Crawler
 from .dns import resolve_names
@@ -26,6 +27,8 @@ from .sweep import discover_targets, sweep
 from .util import RFC1918, in_scope, scope_devices, scope_hosts
 
 log = logging.getLogger("netmap.scan")
+
+NOW_LOG_EVERY = 60.0  # seconds between "working on: ..." log lines
 
 
 def nets(items) -> list:
@@ -88,7 +91,7 @@ class ScanRequest:
     retries: int = 1
     port: int = 161
     max_devices: int = 5000
-    sweep_max_prefix: int = 22
+    sweep_max_prefix: int = 22  # largest *discovered* subnet the sweep step covers; entered ranges have no cap
     save_path: Optional[str] = None
 
     def describe(self) -> dict:
@@ -105,7 +108,9 @@ class ScanEvents:
         pass
 
     def tick(self, inv: Inventory, stats: dict) -> None:
-        """About once a second while a scan runs; `inv` is safe to read (or copy) here."""
+        """About once a second while a scan runs; `inv` is safe to read (or copy) here.
+        stats["now"] is a one-line summary of what is in flight (subnets, batches, devices);
+        stats["now_all"] lists every item."""
 
     def device(self, dev) -> None:
         pass
@@ -126,14 +131,22 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
     state = {"crawler": None, "cancelled": False, "error": ""}
     nmap_limit = req.nmap_timeout * 60 if req.nmap_timeout and req.nmap_timeout > 0 else None
     live: set[str] = set()  # addresses that answered a ping during this scan
+    act = activity.Activity()  # what this scan has in flight; the tasks it starts report into it
+    activity.use(act)
 
     async def ticker():
+        last_log = time.time()
         while True:
             await asyncio.sleep(1.0)
             c = state["crawler"]
             if c is not None:
                 stats.update(c.progress())
-            stats.update(devices=len(inv.devices), hosts=len(inv.hosts), subnets=len(inv.subnets), elapsed=time.time() - started)
+            items = act.now()
+            stats.update(devices=len(inv.devices), hosts=len(inv.hosts), subnets=len(inv.subnets), elapsed=time.time() - started,
+                         now=act.summary(), now_all=[f"{i.kind} {i.describe()}" for i in items[:200]])
+            if items and time.time() - last_log >= NOW_LOG_EVERY:
+                last_log = time.time()
+                log.info("working on: %s", act.summary(limit=4))
             try:
                 ev.tick(inv, dict(stats))
             except Exception:  # noqa: BLE001
@@ -151,8 +164,7 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
             phase("Finding live addresses", f"{len(targets)} target subnet(s)")
             found = await discover_targets(
                 inv, targets, scope, exclude,
-                fingerprint=req.fingerprint, probe_all=req.probe_all, max_prefix=req.sweep_max_prefix,
-                nmap_timeout=nmap_limit, live=live,
+                fingerprint=req.fingerprint, probe_all=req.probe_all, nmap_timeout=nmap_limit, live=live,
             )
             seeds += [ip for ip in found if ip not in seeds]
             if req.save_path:

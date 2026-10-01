@@ -70,7 +70,7 @@ def test_sweep_subnet_hands_nmap_only_the_in_scope_pieces(monkeypatch):
 
     calls = []
 
-    async def fake_nmap(args, timeout):
+    async def fake_nmap(args, timeout, kind="", target=""):
         calls.append(args)
         return sw.NmapRun("<nmaprun></nmaprun>", "ok")
 
@@ -109,13 +109,13 @@ def test_discover_targets_refuses_excluded_single_addresses(caplog):
     inv = Inventory()
     scope = nets("10.50.0.0/24")
     # an excluded /32 target used to slip through because only wider prefixes were gated
-    ips = asyncio.run(discover_targets(inv, nets("10.50.0.9/32"), scope, nets("10.50.0.9/32"), probe_all=True, max_prefix=30))
+    ips = asyncio.run(discover_targets(inv, nets("10.50.0.9/32"), scope, nets("10.50.0.9/32"), probe_all=True))
     assert ips == [] and "10.50.0.9/32" not in inv.subnets
     # an in-scope /32 and /31 are probed on the network address itself
-    ips = asyncio.run(discover_targets(inv, nets("10.50.0.9/32", "10.50.0.10/31"), scope, [], probe_all=True, max_prefix=30))
+    ips = asyncio.run(discover_targets(inv, nets("10.50.0.9/32", "10.50.0.10/31"), scope, [], probe_all=True))
     assert ips == ["10.50.0.9", "10.50.0.10", "10.50.0.11"]
     # a target outside the scope is refused
-    assert asyncio.run(discover_targets(inv, nets("10.60.0.0/30"), scope, [], probe_all=True, max_prefix=30)) == []
+    assert asyncio.run(discover_targets(inv, nets("10.60.0.0/30"), scope, [], probe_all=True)) == []
 
 
 # ---------------------------------------------------------------- 1: scan-pipeline scope filtering

@@ -48,7 +48,7 @@ def test_truncated_output_keeps_every_finished_host():
 def test_large_subnet_is_swept_as_24_blocks_side_by_side(nmap_present, monkeypatch):
     calls, running, peak = [], [0], [0]
 
-    async def fake_nmap(args, timeout):
+    async def fake_nmap(args, timeout, kind="", target=""):
         calls.append((args, timeout))
         running[0] += 1
         peak[0] = max(peak[0], running[0])
@@ -69,7 +69,7 @@ def test_large_subnet_is_swept_as_24_blocks_side_by_side(nmap_present, monkeypat
 def test_a_block_that_times_out_keeps_its_hosts_and_is_retried_with_twice_the_time(nmap_present, monkeypatch, caplog):
     calls = []
 
-    async def fake_nmap(args, timeout):
+    async def fake_nmap(args, timeout, kind="", target=""):
         calls.append(timeout)
         if len(calls) == 1:  # first run: stopped at its limit after reporting one host
             return sw.NmapRun(doc(host_xml("10.9.0.5"), complete=False), "timeout")
@@ -84,7 +84,7 @@ def test_a_block_that_times_out_keeps_its_hosts_and_is_retried_with_twice_the_ti
 
 
 def test_a_subnet_that_never_finishes_is_not_marked_swept(nmap_present, monkeypatch):
-    async def fake_nmap(args, timeout):
+    async def fake_nmap(args, timeout, kind="", target=""):
         return sw.NmapRun(doc(host_xml("10.9.0.5"), complete=False), "timeout")
 
     monkeypatch.setattr(sw, "_run_nmap", fake_nmap)
@@ -100,7 +100,7 @@ def test_port_scan_retries_only_the_unfinished_addresses_in_smaller_batches(nmap
     calls = []
     slow = {"10.1.0.7"}  # never finishes in time
 
-    async def fake_nmap(args, timeout):
+    async def fake_nmap(args, timeout, kind="", target=""):
         targets = [a for a in args if a.startswith("10.")]
         calls.append((targets, timeout))
         assert "--open" not in args and "-Pn" in args
@@ -126,7 +126,7 @@ def test_port_scan_retries_only_the_unfinished_addresses_in_smaller_batches(nmap
 
 
 def test_live_addresses_counts_unfinished_batches_as_up(nmap_present, monkeypatch):
-    async def fake_nmap(args, timeout):
+    async def fake_nmap(args, timeout, kind="", target=""):
         targets = [a for a in args if a.startswith("10.")]
         if "10.2.0.9" in targets:  # this batch never finishes, even on the retry
             return sw.NmapRun(doc(host_xml("10.2.0.8"), complete=False), "timeout")

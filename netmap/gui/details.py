@@ -7,7 +7,7 @@ import ipaddress
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -267,6 +267,8 @@ class DetailsPanel(QWidget):
         m.addAction("SSH session", lambda: self.actionRequested.emit("ssh", self.node_id))
         m.addAction("Ping", lambda: self.actionRequested.emit("ping", self.node_id))
         m.addAction("Traceroute", lambda: self.actionRequested.emit("traceroute", self.node_id))
+        m.addSeparator()
+        m.addAction("Deep scan with Nmap…", lambda: self.actionRequested.emit("deepscan", self.node_id))
         self.btn_web.setMenu(m)
         self.btn_rescan = QPushButton("Rescan")
         self.btn_rescan.setToolTip("Poll this device again now")
@@ -513,6 +515,7 @@ class DetailsPanel(QWidget):
             pp = PortPanel(s, d.id)
             pp.openNode.connect(self.openNode)
             self.tabs.addTab(self._scroll(pp), "Ports panel")
+        self._add_deep_scan_tabs(s, d.id)
         self._add_deps_tab(s, d.id)
         self._add_path_tab(s, d.id)
 
@@ -593,9 +596,67 @@ class DetailsPanel(QWidget):
         if h.evidence:
             ecols = _cols(("source", "Signal", "text", 90), ("observed", "What was seen", "text", 220), ("implies", "Suggests", "text", 150))
             self.tabs.addTab(_table(ecols, [{"_id": "", "_role": "", **e} for e in h.evidence]), "Why")
+        self._add_deep_scan_tabs(s, ip)
         self._add_inspection_tabs(s, ip, h)
         self._add_deps_tab(s, ip)
         self._add_path_tab(s, ip)
+
+    def _add_deep_scan_tabs(self, s, ip: str):
+        """The latest deep scan of this address: what was covered, OS guesses, every port nmap
+        listed with its full service detail, and the information scripts' output."""
+        rec = (getattr(s.inv, "deep_scans", None) or {}).get(ip)
+        if not rec:
+            return
+        status = {"ok": "finished", "timeout": "stopped at its time limit (partial)", "error": "nmap reported an error",
+                  "no-nmap": "Nmap was not installed"}.get(rec.get("status", ""), rec.get("status", ""))
+        trace = " → ".join(h.get("host") or h.get("ip") or "?" for h in rec.get("trace") or [])
+        up = rec.get("uptime") or {}
+        pairs = [
+            ("Scanned", f"{fmt_time(rec.get('when', 0))} in {fmt_duration(rec.get('seconds', 0)) or '0s'}"),
+            ("Result", status),
+            ("Covered", ", ".join(x for x in ("all TCP ports", "full version detection",
+                                              "common UDP" if "-sU" in rec.get("args", "") else "",
+                                              "OS" if "-O" in rec.get("args", "") else "",
+                                              "traceroute" if "--traceroute" in rec.get("args", "") else "",
+                                              "safe scripts" if "--script" in rec.get("args", "") else "") if x)),
+            ("Name", rec.get("hostname", "")),
+            ("MAC", " ".join(x for x in (rec.get("mac", ""), f"({rec['vendor']})" if rec.get("vendor") else "") if x)),
+            ("OS guesses", "; ".join(f"{o['name']} ({o['accuracy']}%)" for o in (rec.get("os") or [])[:3])),
+            ("Up since", up.get("lastboot", "")),
+            ("Hops away", rec.get("distance") or ""),
+            ("Path", trace),
+            ("Not listed", ", ".join(rec.get("not_shown") or [])),
+            ("Not run as admin", "OS detection, traceroute and UDP were skipped" if rec.get("status") == "ok" and not rec.get("admin") else ""),
+            ("nmap arguments", rec.get("args", "")),
+        ]
+        rows = []
+        for p in rec.get("ports") or []:
+            scripts = p.get("scripts") or {}
+            rows.append({"_id": "", "_role": "", "port": p["port"], "proto": p.get("proto", ""), "state": p.get("state", ""),
+                         "service": (p.get("service", "") + ("/ssl" if p.get("tunnel") == "ssl" else "")),
+                         "product": p.get("product", ""), "version": p.get("version", ""), "extra": p.get("extrainfo", ""),
+                         "scripts": ", ".join(scripts)})
+        cols = _cols(("port", "Port", "int", 60), ("proto", "Proto", "text", 50), ("state", "State", "text", 80),
+                     ("service", "Service", "text", 110), ("product", "Product", "text", 160), ("version", "Version", "text", 100),
+                     ("extra", "Detail", "text", 160), ("scripts", "Scripts", "text", 160))
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._facts(pairs), 2)
+        lay.addWidget(_table(cols, rows), 3)
+        n_open = sum(1 for p in rec.get("ports") or [] if p.get("state") == "open")
+        self.tabs.addTab(box, f"Deep scan ({n_open} open)")
+        text = []
+        for p in rec.get("ports") or []:
+            for sid, out in (p.get("scripts") or {}).items():
+                text.append(f"{p['port']}/{p.get('proto', '')}  {sid}\n" + "\n".join("    " + ln for ln in out.splitlines()))
+        for sid, out in (rec.get("host_scripts") or {}).items():
+            text.append(f"host  {sid}\n" + "\n".join("    " + ln for ln in out.splitlines()))
+        if text:
+            view = QPlainTextEdit("\n\n".join(text))
+            view.setReadOnly(True)
+            view.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+            self.tabs.addTab(view, f"Scripts ({len(text)})")
 
     def _add_inspection_tabs(self, s, ip, h):
         """System / Software / Connections tabs when a host has been inspected over SSH/WinRM."""

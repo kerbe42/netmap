@@ -6,6 +6,27 @@ All notable changes to NetMap are recorded here. The format follows
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.12.0] - 2026-10-01
+
+### Added
+- **Now:** line in the Activity panel: the subnets, /24 blocks, address batches, devices and hosts the
+  scan is working on at that moment, with Nmap's current stage and how long anything slow has been
+  running (hover for the full list). Scans also log a "working on: …" line once a minute, so the
+  command line shows progress too.
+- **Deep scan** of chosen addresses: right-click a device or host, *Tools ▸ Deep scan an address
+  with Nmap…* (Ctrl+Shift+D), or `netmap deepscan IP… -m project`. All 65,535 TCP ports, full
+  service-version detection, OS detection and traceroute (Administrator/root), optional common UDP
+  services, and Nmap's `default and safe` information scripts. Results are kept in the project and
+  shown on new *Deep scan* and *Scripts* tabs; ports and the OS guess also update the host.
+
+### Changed
+- Ranges you enter are scanned in full, whatever their size. Ranges larger than a /20 get a warning
+  with a rough duration instead of being skipped. The size limit now applies only to subnets learned
+  from devices (*Largest discovered subnet to sweep*, `--sweep-max-size`), and `netmap sweep
+  --subnet` no longer applies it.
+- Sweeps hand out /24 blocks from a shared queue, so a very large range does not create a task per
+  block up front.
+
 ## [0.11.0] - 2026-10-01
 
 Large networks (dozens of ranges, /16s) no longer lose results to `nmap timed out`.
