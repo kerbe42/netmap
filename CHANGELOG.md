@@ -6,6 +6,16 @@ All notable changes to SubnetSleuth (called NetMap up to 0.12) are recorded here
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.13.1] - 2026-10-01
+
+### Changed
+- The sample network (*Help > Explore the sample network*) includes a deep scan of its intranet
+  web server, so the *Deep scan* and *Scripts* tabs can be seen without running one.
+- A deep scan lists its ports from low to high.
+
+### Added
+- `tools/make_demo_video.py` renders the demo video from the app itself.
+
 ## [0.13.0] - 2026-10-01
 
 NetMap is now **SubnetSleuth**: the desktop app is `SubnetSleuth.exe`, the command line
@@ -373,6 +383,7 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
+[0.13.1]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.10.0...v0.11.0
