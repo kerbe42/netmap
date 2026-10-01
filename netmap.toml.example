@@ -34,6 +34,9 @@ cisco_vlan_fdb = false # walk Cisco IOS per-VLAN bridge tables (community@vlan);
 #                        #   WS-Discovery, IPMI, Modbus, BACnet, EtherNet/IP; DNS/NTP checks)
 # port_scan = false      # --port-scan: nmap service/version scan of every device and host found
 # os_detect = false      # --os: nmap OS detection (-O); needs root / Administrator
+# ping_first = true      # port-scan only addresses that answer a ping; false = --no-ping-first
+# nmap_timeout = 30      # --nmap-timeout: minutes one nmap run may take (0 = no limit). Sweeps run
+#                        #   one nmap per /24 and port scans one per small batch of addresses
 
 # Credentials are tried in order for every device; the first that answers wins.
 [[credentials]]

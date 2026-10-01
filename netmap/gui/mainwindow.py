@@ -1135,7 +1135,7 @@ class MainWindow(QMainWindow):
             credentials=creds, scope=scope, exclude=list(d.get("exclude", [])), probe_all=False,
             probe_hosts=d.get("probe_hosts", False), resolve_names=d.get("resolve_names", True), cisco_vlan_fdb=d.get("cisco_vlan_fdb", False),
             max_depth=d.get("max_depth", 6), workers=d.get("workers", 12), timeout=d.get("timeout", 2.0), retries=d.get("retries", 1),
-            port=d.get("port", 161), sweep_max_prefix=d.get("sweep_max_prefix", 22),
+            port=d.get("port", 161), sweep_max_prefix=d.get("sweep_max_prefix", 22), nmap_timeout=d.get("nmap_timeout", 30),
         )
         for k, v in over.items():
             setattr(req, k, v)

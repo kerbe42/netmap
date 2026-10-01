@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
 # key -> (default, kind) where kind is int/float/bool
 SCAN_KEYS = {
     "workers": (12, int), "timeout": (2.0, float), "retries": (1, int), "port": (161, int),
-    "sweep_max_prefix": (22, int), "top_ports": (200, int), "max_depth": (6, int),
-    "dns": (True, bool), "identify": (True, bool), "port_scan": (True, bool), "os_detect": (False, bool),
+    "sweep_max_prefix": (22, int), "top_ports": (200, int), "max_depth": (6, int), "nmap_timeout": (30, int),
+    "dns": (True, bool), "identify": (True, bool), "port_scan": (True, bool), "ping_first": (True, bool), "os_detect": (False, bool),
     "sweep": (False, bool), "probe_all": (False, bool), "probe_hosts": (False, bool), "cisco_vlan_fdb": (False, bool),
 }
 
@@ -34,6 +34,18 @@ def _coerce(v, kind):
         return kind(v)
     except (TypeError, ValueError):
         return v
+
+
+def nmap_timeout_spin(minutes) -> QSpinBox:
+    """Minutes one nmap run may take; 0 shows as "No limit"."""
+    w = QSpinBox()
+    w.setRange(0, 1440)
+    w.setSuffix(" min")
+    w.setSpecialValueText("No limit")
+    w.setValue(int(minutes))
+    w.setToolTip("How long one nmap run may take before it is stopped. Sweeps run one nmap per /24 and port scans one per\n"
+                 "small batch of addresses. A run that reaches the limit keeps what it finished; the rest is tried again with twice the time.")
+    return w
 
 
 def scan_defaults() -> dict:
@@ -60,6 +72,7 @@ class PreferencesDialog(QDialog):
         self.fields["port"] = self._spin(1, 65535, d["port"])
         self.fields["max_depth"] = self._spin(0, 30, d["max_depth"])
         self.fields["top_ports"] = self._spin(10, 65535, d["top_ports"])
+        self.fields["nmap_timeout"] = nmap_timeout_spin(d["nmap_timeout"])
         self.maxpfx = self._spin(8, 32, d["sweep_max_prefix"])
         self.maxpfx.setPrefix("/")
         self.maxpfx_hint = QLabel()
@@ -71,13 +84,15 @@ class PreferencesDialog(QDialog):
         pf.addRow("SNMP port", self.fields["port"])
         pf.addRow("Follow neighbours up to (hops)", self.fields["max_depth"])
         pf.addRow("Nmap ports per host", self.fields["top_ports"])
+        pf.addRow("Nmap time limit per run", self.fields["nmap_timeout"])
         pf.addRow("Largest subnet to sweep/probe", self.maxpfx)
         pf.addRow("", self.maxpfx_hint)
 
         steps = QGroupBox("Scan defaults — what runs")
         sf = QVBoxLayout(steps)
         for key, label in (("dns", "Resolve names from reverse DNS"), ("identify", "Actively identify hosts (NetBIOS/mDNS/SSDP/HTTP)"),
-                           ("port_scan", "Scan ports & services with Nmap"), ("os_detect", "Detect OS with Nmap (needs admin)"),
+                           ("port_scan", "Scan ports && services with Nmap"), ("ping_first", "Port-scan only addresses that answer a ping"),
+                           ("os_detect", "Detect OS with Nmap (needs admin)"),
                            ("sweep", "Ping-sweep every discovered subnet"), ("probe_all", "Query every address (skip ping)"),
                            ("probe_hosts", "Try SNMP on ARP-learned hosts"), ("cisco_vlan_fdb", "Read Cisco per-VLAN MAC tables")):
             cb = QCheckBox(label)

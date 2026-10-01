@@ -6,6 +6,37 @@ All notable changes to NetMap are recorded here. The format follows
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.11.0] - 2026-10-01
+
+Large networks (dozens of ranges, /16s) no longer lose results to `nmap timed out`.
+
+### Changed
+- Ping sweeps run one `nmap` per /24 of each range, eight at a time across all ranges, instead of
+  one `nmap` for a whole subnet. A /16 is 256 short runs, not one run that has to finish in time.
+- The port scan (*Scan ports & service versions*, `--port-scan`) only goes to addresses that answer
+  a ping. Addresses already seen answering in the same scan (sweep results, devices that answered
+  SNMP) are not pinged again; the rest get a quick `nmap -sn` check first. Addresses that answer
+  nothing stay in the inventory but are not port-scanned, which is where `nmap -Pn` used to spend
+  its whole time limit. Untick *Only port-scan addresses that answer a ping* or pass
+  `--no-ping-first` (config: `ping_first = false`) to scan every address found.
+- Every target ping sweep finishes before any fingerprinting starts.
+- A target range larger than *Largest subnet to sweep/probe* is skipped with a warning (it was an
+  info line), and the scan dialog lists such ranges before you start.
+
+### Added
+- *Nmap time limit per run* (Preferences and the scan dialog), `--nmap-timeout MINUTES` and
+  `nmap_timeout` in the config file: how long one `nmap` run may take, default 30 minutes, 0 for no
+  limit.
+- A run that reaches its limit keeps every host `nmap` had already reported. For a sweep, the block
+  is pinged again with twice the time. For a port scan, only the addresses it had not finished are
+  scanned again, in smaller batches with twice the time. Anything still unfinished is named in the
+  log, and a subnet whose sweep did not finish is not marked swept, so the next sweep retries it.
+- Progress lines for long sweeps and port scans (blocks or addresses done so far).
+
+### Fixed
+- *Nmap ports per host* in Preferences now reaches the scan; scans always used 200.
+- The *Scan ports & services* checkbox showed "ports _services".
+
 ## [0.10.0] - 2026-09-30
 
 Fixes from a review of the whole codebase, grouped by what they mean for someone using the tool.

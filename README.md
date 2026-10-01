@@ -367,7 +367,7 @@ exclusion, is never contacted, whichever step found it. This is what each step s
 | Ping sweep | ICMP echo, or TCP connect to a few common ports where ICMP is blocked | every address in a target or swept subnet, capped at `--sweep-max-size` (default /22) | with *Ping-sweep every subnet* / `--sweep`, or before probing a target |
 | Reverse DNS | PTR queries to **your** resolver, not to the hosts | your configured DNS server | with *Name from reverse DNS* / `--dns` |
 | Host identification | one small request each: NetBIOS name query, mDNS, SSDP, WS-Discovery, HTTP/TLS handshake, SSH banner read, IPMI, Modbus, BACnet, EtherNet/IP, DNS and NTP checks | hosts and devices already found | with *Identify hosts* / `--identify` |
-| Service scan | `nmap -sV` on the top ports (`--os` adds `-O`, which needs Administrator/root) | hosts and devices already found | only with `--port-scan` / *Port scan* |
+| Service scan | `nmap -sV` on the top ports (`--os` adds `-O`, which needs Administrator/root) | hosts and devices already found that answer a ping (a quick `nmap -sn` check first, unless `--no-ping-first`) | only with `--port-scan` / *Port scan* |
 | Config capture, server inspection, VMware | SSH `show` commands, WinRM `Get-*` queries, vCenter API reads | the devices/hosts you selected, with credentials you supply | only when you start them |
 | Syslog / trap listener | nothing — it only receives | — | only when you open it |
 
@@ -379,6 +379,12 @@ exclusion, is never contacted, whichever step found it. This is what each step s
   mistyped prefix cannot turn into tens of thousands of probes; the range is refused and it says so.
   `--max-devices` (default 5000) stops a crawl that keeps finding new devices.
 * Everything is read-only. Nothing NetMap sends changes state on a device or host.
+* Large networks: a sweep runs one `nmap` per /24 of each range (eight at a time), and the port scan only
+  goes to addresses that answered a ping, in batches of 24. Each `nmap` run has a time limit (*Nmap time
+  limit per run*, `--nmap-timeout`, default 30 minutes, 0 for none). A run that reaches it keeps every host it
+  had finished, and the rest is tried once more with twice the time. A subnet whose sweep still did not
+  finish is not marked swept, so the next sweep tries it again, and the log names any addresses the port
+  scan could not finish.
 * Pace: *Devices polled at once* (default 12, `--workers`), one SNMP walk at a time per device, GETBULK with
   25 repetitions. Lower it for fragile gear.
 
@@ -422,6 +428,9 @@ netmap crawl --target 10.20.0.0/24 -C "$NETMAP_COMMUNITY" --dns --identify --por
 
 # Guard rails: refuse to sweep anything larger than a /24, stop after 500 devices.
 netmap crawl --target 10.0.0.0/16 -C "$NETMAP_COMMUNITY" --sweep-max-size 24 --max-devices 500 --out site.netmap
+
+# A big estate (/16s across a WAN): allow /16 targets and give each nmap run up to an hour.
+netmap crawl --target-file ranges.txt -C "$NETMAP_COMMUNITY" --sweep-max-size 16 --port-scan --nmap-timeout 60 --out site.netmap
 
 netmap show   -m site.netmap                                      # text summary
 netmap render -m site.netmap --xlsx site.xlsx --drawio site.drawio --csv out/site-   # outputs, no network

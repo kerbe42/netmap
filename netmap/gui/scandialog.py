@@ -31,6 +31,7 @@ from ..scan import ScanRequest, resolve_scope
 from ..snmp import Credential
 from ..sweep import find_nmap
 from .credentials import CredentialsDialog, CredentialStore
+from .prefs import nmap_timeout_spin
 
 
 def parse_ranges(text: str) -> tuple[list[str], list[str]]:
@@ -161,10 +162,16 @@ class ScanDialog(QDialog):
         self.identify.setToolTip("Sends a few small read-only probes to each host to work out what it is, its OS and its name.\nWorks without Nmap or admin rights.")
         nmap = find_nmap()
         suffix = "" if nmap else "  (Nmap not found — install it from nmap.org)"
-        self.port_scan = QCheckBox("Scan ports & service versions with Nmap — every device and host" + suffix)
+        self.port_scan = QCheckBox("Scan ports && service versions with Nmap — every device and host" + suffix)
         self.port_scan.setChecked(bool(nmap) and d.get("port_scan", True))
         self.port_scan.setEnabled(bool(nmap))
         self.port_scan.setToolTip((f"Using {nmap}" if nmap else "Install Nmap from nmap.org") + "\nRuns nmap -sV against everything found (not just swept subnets) to list open ports and identify services.")
+        self.ping_first = QCheckBox("Only port-scan addresses that answer a ping (skips switched-off and stale addresses; much faster)")
+        self.ping_first.setChecked(d.get("ping_first", True))
+        self.ping_first.setEnabled(bool(nmap) and self.port_scan.isChecked())
+        self.ping_first.setToolTip("Before the port scan, Nmap pings every address not already seen answering in this scan and scans only those that reply.\n"
+                                   "Untick to port-scan every address found, including ones that answer nothing: Nmap then waits out every port of each.")
+        self.port_scan.toggled.connect(lambda on: self.ping_first.setEnabled(on and bool(nmap)))
         self.os_detect = QCheckBox("Also detect the operating system with Nmap (needs Administrator / root)")
         self.os_detect.setChecked(bool(nmap) and d.get("os_detect", False))
         self.os_detect.setEnabled(bool(nmap))
@@ -175,7 +182,7 @@ class ScanDialog(QDialog):
         self.fingerprint.setVisible(False)  # folded into "Scan ports" above; kept for saved settings
         self.cisco_vlan = QCheckBox("Read per-VLAN MAC tables on older Cisco IOS switches (community@vlan)")
         self.cisco_vlan.setChecked(d.get("cisco_vlan_fdb", False))
-        for w in (self.sweep, self.dns, self.identify, self.port_scan, self.os_detect, self.fingerprint, self.cisco_vlan):
+        for w in (self.sweep, self.dns, self.identify, self.port_scan, self.ping_first, self.os_detect, self.fingerprint, self.cisco_vlan):
             g2l.addWidget(w)
         ol.addWidget(g2)
         g3 = QGroupBox("This project already has data")
@@ -212,6 +219,9 @@ class ScanDialog(QDialog):
         self.maxpfx_hint = QLabel()
         self.maxpfx_hint.setObjectName("muted")
         self.maxpfx.valueChanged.connect(self._maxpfx_hint)
+        self.maxpfx.valueChanged.connect(self._update_summary)
+        self.nmap_timeout = nmap_timeout_spin(d.get("nmap_timeout", 30))
+        self.top_ports = int(d.get("top_ports", 200))
         mp = QHBoxLayout()
         mp.addWidget(self.maxpfx)
         mp.addWidget(self.maxpfx_hint, 1)
@@ -220,6 +230,7 @@ class ScanDialog(QDialog):
         g4l.addRow("SNMP retries", self.retries)
         g4l.addRow("SNMP port", self.port)
         g4l.addRow("Largest subnet to sweep/probe", mp)
+        g4l.addRow("Nmap time limit per run", self.nmap_timeout)
         self._maxpfx_hint()
         ol.addWidget(g4)
         ol.addStretch(1)
@@ -304,6 +315,11 @@ class ScanDialog(QDialog):
         if targets:
             n = sum(ipaddress.ip_network(t).num_addresses for t in targets)
             lines.append(f"{len(targets)} range(s), {n:,} addresses to check.")
+            big = [t for t in targets if ipaddress.ip_network(t).prefixlen < self.maxpfx.value()]
+            if big:
+                shown = ", ".join(big[:4]) + (" …" if len(big) > 4 else "")
+                lines.append(f"<span style='color:#d97706'>{len(big)} range(s) are larger than /{self.maxpfx.value()} and will be skipped: {shown}. "
+                             "Lower <i>Largest subnet to sweep/probe</i> (Options) to include them.</span>")
         if seeds:
             lines.append(f"Starting from {len(seeds)} device(s).")
         if ok:
@@ -353,6 +369,9 @@ class ScanDialog(QDialog):
             fingerprint=self.fingerprint.isChecked(),
             port_scan=self.port_scan.isChecked(),
             os_detect=self.os_detect.isChecked(),
+            ping_first=self.ping_first.isChecked(),
+            top_ports=self.top_ports,
+            nmap_timeout=self.nmap_timeout.value(),
             probe_hosts=self.probe_hosts.isChecked(),
             resolve_names=self.dns.isChecked(),
             identify=self.identify.isChecked(),
@@ -373,6 +392,7 @@ class ScanDialog(QDialog):
             "probe_all": req.probe_all, "sweep": req.sweep, "fingerprint": req.fingerprint, "port_scan": req.port_scan, "os_detect": req.os_detect, "probe_hosts": req.probe_hosts,
             "resolve_names": req.resolve_names, "identify": req.identify, "cisco_vlan_fdb": req.cisco_vlan_fdb, "max_depth": req.max_depth,
             "workers": req.workers, "timeout": req.timeout, "retries": req.retries, "port": req.port, "sweep_max_prefix": req.sweep_max_prefix,
+            "ping_first": req.ping_first, "nmap_timeout": req.nmap_timeout, "top_ports": req.top_ports,
         }
         return req, remember
 

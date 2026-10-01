@@ -2,9 +2,10 @@
 
 A scan is: work out the scope, find live addresses in the named target subnets, spider
 SNMP devices outwards from those and from any seeds, optionally sweep the subnets the
-devices revealed, optionally name everything from reverse DNS, and record what happened
-in the inventory's history. Callers get progress through a `ScanEvents` object and can
-stop a scan by cancelling the task running it; whatever was found up to then is kept.
+devices revealed, optionally name everything from reverse DNS, identify hosts and
+port-scan the ones that answer a ping, and record what happened in the inventory's
+history. Callers get progress through a `ScanEvents` object and can stop a scan by
+cancelling the task running it; whatever was found up to then is kept.
 """
 from __future__ import annotations
 
@@ -69,6 +70,8 @@ class ScanRequest:
     port_scan: bool = False  # nmap service detection on every device and host found
     os_detect: bool = False  # nmap OS detection (-O; needs admin/root)
     top_ports: int = 200  # how many ports nmap checks per address
+    ping_first: bool = True  # port-scan only addresses that answer a ping (or SNMP) in this scan
+    nmap_timeout: float = 30.0  # minutes one nmap run may take before it is stopped; 0 = no limit
     follow_routes: bool = True
     follow_gateways: bool = True
     arp: bool = True
@@ -121,6 +124,8 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
     before = {"devices": set(inv.devices), "hosts": set(inv.hosts), "subnets": set(inv.subnets)}
     stats: dict = {"phase": "starting", "devices": len(inv.devices), "hosts": len(inv.hosts), "elapsed": 0.0}
     state = {"crawler": None, "cancelled": False, "error": ""}
+    nmap_limit = req.nmap_timeout * 60 if req.nmap_timeout and req.nmap_timeout > 0 else None
+    live: set[str] = set()  # addresses that answered a ping during this scan
 
     async def ticker():
         while True:
@@ -147,6 +152,7 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
             found = await discover_targets(
                 inv, targets, scope, exclude,
                 fingerprint=req.fingerprint, probe_all=req.probe_all, max_prefix=req.sweep_max_prefix,
+                nmap_timeout=nmap_limit, live=live,
             )
             seeds += [ip for ip in found if ip not in seeds]
             if req.save_path:
@@ -182,7 +188,8 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
         stats.update(crawler.progress())
         if req.sweep:
             phase("Sweeping subnets")
-            n = await sweep(inv, list(inv.subnets), scope, exclude, fingerprint=req.fingerprint, max_prefix=req.sweep_max_prefix, resweep=req.resweep)
+            n = await sweep(inv, list(inv.subnets), scope, exclude, fingerprint=req.fingerprint, max_prefix=req.sweep_max_prefix,
+                            resweep=req.resweep, nmap_timeout=nmap_limit, live=live)
             log.info("sweep found %d hosts", n)
         # Everything after the crawl works from the inventory, which may hold addresses this
         # scan is not allowed to touch (a DHCP or hypervisor import, an earlier wider scan):
@@ -212,11 +219,26 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
             except ImportError:
                 pass
         if req.port_scan:
-            from .sweep import nmap_inspect
+            from .sweep import live_addresses, nmap_inspect
 
-            phase("Scanning ports", "nmap service" + (" and OS" if req.os_detect else "") + " detection")
             ips = devices_in + hosts_in
-            results = await nmap_inspect(ips, fingerprint=True, os_detect=req.os_detect, top_ports=req.top_ports)
+            if req.ping_first and ips:
+                # nmap -Pn spends its whole timeout on every port of an address nobody answers
+                # at (a stale ARP entry, a powered-off PC), so only scan what is up. Devices
+                # that answered SNMP and hosts this scan's sweeps found are known to be.
+                live |= {d for d in devices_in if inv.devices[d].collected_at >= started}
+                unknown = [ip for ip in ips if ip not in live]
+                if unknown:
+                    phase("Checking which addresses are up", f"{len(unknown)} address(es) not yet seen answering in this scan")
+                    up = await live_addresses(unknown, nmap_timeout=nmap_limit)
+                    live |= up if up is not None else set(unknown)
+                silent = [ip for ip in ips if ip not in live]
+                if silent:
+                    log.info("%d of %d address(es) did not answer a ping and are not port-scanned (they stay in the inventory); "
+                             "turn off 'ping first' (--no-ping-first) to scan them anyway", len(silent), len(ips))
+                ips = [ip for ip in ips if ip in live]
+            phase("Scanning ports", f"nmap service{' and OS' if req.os_detect else ''} detection on {len(ips)} address(es)")
+            results = await nmap_inspect(ips, fingerprint=True, os_detect=req.os_detect, top_ports=req.top_ports, nmap_timeout=nmap_limit)
             for ip, rec in results.items():
                 _apply_nmap(inv, ip, rec)
             log.info("nmap enriched %d address(es) with ports/OS", len(results))

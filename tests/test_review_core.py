@@ -72,20 +72,20 @@ def test_sweep_subnet_hands_nmap_only_the_in_scope_pieces(monkeypatch):
 
     async def fake_nmap(args, timeout):
         calls.append(args)
-        return "<nmaprun></nmaprun>"
+        return sw.NmapRun("<nmaprun></nmaprun>", "ok")
 
     monkeypatch.setattr(sw, "find_nmap", lambda: "/usr/bin/nmap")
     monkeypatch.setattr(sw, "_run_nmap", fake_nmap)
     scope, excl = nets("10.0.0.0/8"), nets("10.0.0.128/26", "10.0.0.7/32")
     asyncio.run(sweep_subnet("10.0.0.0/24", scope=scope, exclude=excl))
-    targets = [a for a in calls[0] if "/" in a]
+    targets = [a for call in calls for a in call if "/" in a]
     assert "10.0.0.0/24" not in targets
     covered = {a for t in targets for a in ia.ip_network(t)}
     assert ia.ip_address("10.0.0.7") not in covered and ia.ip_address("10.0.0.130") not in covered
     assert ia.ip_address("10.0.0.6") in covered and ia.ip_address("10.0.0.200") in covered
     # a subnet entirely outside the rules is refused without running nmap
     calls.clear()
-    assert asyncio.run(sweep_subnet("10.0.0.7/32", scope=scope, exclude=excl)) == []
+    assert asyncio.run(sweep_subnet("10.0.0.7/32", scope=scope, exclude=excl)) == ([], True)
     assert calls == []
 
 

@@ -176,6 +176,8 @@ async def cmd_crawl(args) -> int:
         identify=args.identify or c.get("identify", False),
         port_scan=args.port_scan or c.get("port_scan", False),
         os_detect=args.os_detect or c.get("os_detect", False),
+        ping_first=not args.no_ping_first and c.get("ping_first", True),
+        nmap_timeout=_nmap_timeout(args, c),
         follow_routes=not args.no_routes,
         follow_gateways=not args.no_gateways,
         arp=not args.no_arp,
@@ -218,6 +220,11 @@ async def cmd_crawl(args) -> int:
     return 0
 
 
+def _nmap_timeout(args, c: dict) -> float:
+    """Minutes one nmap run may take: --nmap-timeout, else the config file, else 30 (0 = no limit)."""
+    return args.nmap_timeout if args.nmap_timeout is not None else float(c.get("nmap_timeout", 30))
+
+
 async def cmd_sweep(args) -> int:
     cfg = load_config(args.config)
     named = _nets(args.subnet)
@@ -227,7 +234,9 @@ async def cmd_sweep(args) -> int:
     if not subnets:
         log.error("nothing to sweep: give --subnet CIDR or a map with discovered subnets")
         return 2
-    n = await sweep(inv, subnets, scope, exclude, fingerprint=args.fingerprint, max_prefix=args.sweep_max_size, resweep=True)
+    minutes = _nmap_timeout(args, cfg.get("crawl", {}))
+    n = await sweep(inv, subnets, scope, exclude, fingerprint=args.fingerprint, max_prefix=args.sweep_max_size, resweep=True,
+                    nmap_timeout=minutes * 60 if minutes > 0 else None)
     log.info("sweep found %d hosts", n)
     inv.save(args.map)
     _outputs(inv, args)
@@ -400,6 +409,11 @@ def _add_target_args(p):
 def _add_sweep_args(p):
     p.add_argument("--fingerprint", action="store_true", help="after the ping sweep, scan top ports on live hosts with nmap -sV to classify them")
     p.add_argument("--sweep-max-size", type=int, default=22, help="skip subnets larger than this prefix length (default /22)")
+    p.add_argument(
+        "--nmap-timeout", type=float, metavar="MINUTES",
+        help="time one nmap run may take before it is stopped (default 30; 0 = no limit). Sweeps run one nmap per /24 and port scans "
+             "one per small batch; a run that reaches the limit keeps what it finished and the rest is tried again with twice the time",
+    )
 
 
 def build_parser():
@@ -439,6 +453,8 @@ def build_parser():
     cr.add_argument("--identify", action="store_true", help="actively identify hosts by profiling them (NetBIOS, mDNS, SSDP, HTTP/TLS probes)")
     cr.add_argument("--port-scan", action="store_true", help="nmap service-version scan of every device and host found (open ports, service detail)")
     cr.add_argument("--os", dest="os_detect", action="store_true", help="nmap OS detection (-O; needs root/Administrator)")
+    cr.add_argument("--no-ping-first", action="store_true",
+                    help="with --port-scan, also scan addresses that do not answer a ping (slow: nmap waits out every port of a silent address)")
     cr.add_argument("--out", "-o", default="netmap.json", help="inventory JSON (written after every device)")
     _add_target_args(cr), _add_scope_args(cr), _add_sweep_args(cr), _add_output_args(cr, html_default="netmap.html")
 
