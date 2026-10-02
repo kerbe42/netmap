@@ -10,6 +10,13 @@ def test_discovery_uses_aggressive_timing():
     assert "-sn" in opts
 
 
+def test_scan_defaults_to_a_rate_floor():
+    # the discovery rate floor is on by default (the module global is only the per-process value,
+    # set from the request at scan time) — without it a dropped /24 takes minutes
+    from subnetsleuth.scan import ScanRequest
+    assert ScanRequest().nmap_min_rate == 500
+
+
 def test_min_rate_is_off_by_default_and_settable():
     set_discovery_rate(0)
     try:

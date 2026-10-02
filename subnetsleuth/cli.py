@@ -183,7 +183,7 @@ async def cmd_crawl(args) -> int:
         os_detect=args.os_detect or c.get("os_detect", False),
         ping_first=not args.no_ping_first and c.get("ping_first", True),
         nmap_timeout=_nmap_timeout(args, c),
-        nmap_min_rate=args.min_rate if args.min_rate is not None else int(c.get("min_rate", 0)),
+        nmap_min_rate=args.min_rate if args.min_rate is not None else int(c.get("min_rate", 500)),
         follow_routes=not args.no_routes,
         follow_gateways=not args.no_gateways,
         arp=not args.no_arp,
@@ -242,7 +242,7 @@ async def cmd_sweep(args) -> int:
         return 2
     minutes = _nmap_timeout(args, cfg.get("crawl", {}))
     from .sweep import set_discovery_rate
-    set_discovery_rate(args.min_rate if args.min_rate is not None else int(cfg.get("crawl", {}).get("min_rate", 0)))
+    set_discovery_rate(args.min_rate if args.min_rate is not None else int(cfg.get("crawl", {}).get("min_rate", 500)))
     # subnets named with --subnet are swept whatever their size; the cap is for the map's discovered ones
     n = await sweep(inv, subnets, scope, exclude, fingerprint=args.fingerprint, max_prefix=None if args.subnet else args.sweep_max_size, resweep=True,
                     nmap_timeout=minutes * 60 if minutes > 0 else None)
@@ -463,8 +463,9 @@ def _add_sweep_args(p):
     )
     p.add_argument(
         "--min-rate", type=int, metavar="PPS",
-        help="minimum nmap discovery packet rate (packets/sec; 0 = automatic, the default). Raising it bounds how long a large, mostly-"
-             "empty range takes by throughput rather than nmap's timeouts; too high a value on a slow link can drop live hosts",
+        help="minimum nmap discovery packet rate (packets/sec; default 500, 0 = let nmap decide). A floor keeps an empty /24 to about "
+             "ten seconds instead of minutes, by bounding discovery on throughput rather than nmap's timeouts; raise it on a fast LAN, "
+             "lower it on a slow or fragile link where too high a rate can drop live hosts",
     )
 
 

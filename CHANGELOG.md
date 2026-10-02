@@ -6,6 +6,17 @@ All notable changes to SubnetSleuth (called NetMap up to 0.12) are recorded here
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.16.1] - 2026-10-02
+
+### Changed
+- **Host discovery sets a packet-rate floor by default** (`--min-rate 500`). The `-T4` timing in
+  0.16.0 was not enough on its own: against a range of firewall-dropped addresses, nmap's
+  congestion control still backs off until it is sending only a handful of packets a second, so an
+  empty /24 took minutes. Giving discovery a rate floor bypasses that — a silent /24 now finishes
+  in around ten seconds (measured ~4m40s → ~13s for a /24 of dropped addresses). The rate is still
+  the **Minimum discovery rate** setting (New scan ▸ Options) / `crawl --min-rate`; lower it to 0 or
+  a small value on a slow or fragile link, where too high a rate can drop live hosts.
+
 ## [0.16.0] - 2026-10-02
 
 Much faster host discovery on large, mostly-empty networks.
@@ -449,6 +460,7 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
+[0.16.1]: https://github.com/kerbe42/subnetsleuth/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.1...v0.14.0

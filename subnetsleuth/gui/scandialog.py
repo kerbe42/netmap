@@ -230,13 +230,14 @@ class ScanDialog(QDialog):
         self.min_rate = QSpinBox()
         self.min_rate.setRange(0, 20000)
         self.min_rate.setSingleStep(100)
-        self.min_rate.setSpecialValueText("automatic")  # shown at 0
-        self.min_rate.setValue(int(d.get("nmap_min_rate", 0)))
+        self.min_rate.setSpecialValueText("automatic (slow)")  # shown at 0
+        self.min_rate.setValue(int(d.get("nmap_min_rate", 500)))
         self.min_rate.setToolTip(
             "Minimum nmap discovery packet rate, in packets per second (0 = let nmap decide).\n"
-            "Large, mostly-empty ranges are bounded by this rate instead of nmap's timeouts, which\n"
-            "makes sweeping multiple /16s far faster. Too high a value on a slow link can drop live\n"
-            "hosts; on a fast internal network 500–2000 is usually safe.")
+            "A floor is important: without it nmap slows to a crawl on a range of firewall-dropped\n"
+            "addresses, so an empty /24 can take minutes. 500 (the default) keeps an empty /24 to about\n"
+            "ten seconds and is safe on an internal network; raise it (1000–2000) to go faster on a fast\n"
+            "LAN, or lower it on a slow or fragile link, where too high a rate can drop live hosts.")
         self.top_ports = int(d.get("top_ports", 200))
         mp = QHBoxLayout()
         mp.addWidget(self.maxpfx)

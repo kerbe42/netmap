@@ -75,7 +75,10 @@ class ScanRequest:
     top_ports: int = 200  # how many ports nmap checks per address
     ping_first: bool = True  # port-scan only addresses that answer a ping (or SNMP) in this scan
     nmap_timeout: float = 30.0  # minutes one nmap run may take before it is stopped; 0 = no limit
-    nmap_min_rate: int = 0  # discovery packets/sec floor; 0 = let nmap decide (raise for big flat ranges)
+    nmap_min_rate: int = 500  # discovery packets/sec floor; 0 = let nmap decide. A floor is essential:
+    # without it nmap's congestion control collapses to a crawl when every probe is dropped (a /24 of
+    # firewall-dropped addresses then takes minutes). 500 is safe on an internal network; lower it for a
+    # slow or fragile link, where too high a rate can drop live hosts.
     follow_routes: bool = True
     follow_gateways: bool = True
     arp: bool = True
