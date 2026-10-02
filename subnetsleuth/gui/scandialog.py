@@ -227,6 +227,16 @@ class ScanDialog(QDialog):
         self.maxpfx_hint.setObjectName("muted")
         self.maxpfx.valueChanged.connect(self._maxpfx_hint)
         self.nmap_timeout = nmap_timeout_spin(d.get("nmap_timeout", 30))
+        self.min_rate = QSpinBox()
+        self.min_rate.setRange(0, 20000)
+        self.min_rate.setSingleStep(100)
+        self.min_rate.setSpecialValueText("automatic")  # shown at 0
+        self.min_rate.setValue(int(d.get("nmap_min_rate", 0)))
+        self.min_rate.setToolTip(
+            "Minimum nmap discovery packet rate, in packets per second (0 = let nmap decide).\n"
+            "Large, mostly-empty ranges are bounded by this rate instead of nmap's timeouts, which\n"
+            "makes sweeping multiple /16s far faster. Too high a value on a slow link can drop live\n"
+            "hosts; on a fast internal network 500–2000 is usually safe.")
         self.top_ports = int(d.get("top_ports", 200))
         mp = QHBoxLayout()
         mp.addWidget(self.maxpfx)
@@ -237,6 +247,7 @@ class ScanDialog(QDialog):
         g4l.addRow("SNMP port", self.port)
         g4l.addRow("Largest discovered subnet to sweep", mp)
         g4l.addRow("Nmap time limit per run", self.nmap_timeout)
+        g4l.addRow("Minimum discovery rate (pkts/sec)", self.min_rate)
         self._maxpfx_hint()
         ol.addWidget(g4)
         ol.addStretch(1)
@@ -383,6 +394,7 @@ class ScanDialog(QDialog):
             ping_first=self.ping_first.isChecked(),
             top_ports=self.top_ports,
             nmap_timeout=self.nmap_timeout.value(),
+            nmap_min_rate=self.min_rate.value(),
             probe_hosts=self.probe_hosts.isChecked(),
             resolve_names=self.dns.isChecked(),
             identify=self.identify.isChecked(),
@@ -403,7 +415,7 @@ class ScanDialog(QDialog):
             "probe_all": req.probe_all, "sweep": req.sweep, "fingerprint": req.fingerprint, "port_scan": req.port_scan, "os_detect": req.os_detect, "probe_hosts": req.probe_hosts,
             "resolve_names": req.resolve_names, "identify": req.identify, "cisco_vlan_fdb": req.cisco_vlan_fdb, "max_depth": req.max_depth,
             "workers": req.workers, "timeout": req.timeout, "retries": req.retries, "port": req.port, "sweep_max_prefix": req.sweep_max_prefix,
-            "ping_first": req.ping_first, "nmap_timeout": req.nmap_timeout, "top_ports": req.top_ports,
+            "ping_first": req.ping_first, "nmap_timeout": req.nmap_timeout, "nmap_min_rate": req.nmap_min_rate, "top_ports": req.top_ports,
             "try_default_communities": self.try_defaults.isChecked(),
         }
         return req, remember

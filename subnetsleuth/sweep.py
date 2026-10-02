@@ -25,9 +25,21 @@ from .util import in_scope, norm_mac, plausible_mac, scoped_networks
 
 log = logging.getLogger("subnetsleuth.sweep")
 
+# Discovery timing. `-T4` caps the per-probe round-trip wait at ~1.25 s instead of the default
+# `-T3`'s 10 s, and `--min-hostgroup 256` probes the whole /24 at once instead of in small
+# chunks. Without these, a /24 of silent (firewall-dropped) addresses spends ten-plus minutes
+# waiting out timeouts; with them a dead /24 finishes in tens of seconds. `--min-rate`, when set,
+# puts a floor on the packet rate so a very large flat range is bounded by throughput, not by
+# nmap's cautious ramp-up; it is left to nmap by default because too high a floor can swamp a
+# slow link and *lose* live hosts.
+_NMAP_TIMING = ["-T4", "--min-hostgroup", "256", "--max-retries", "2"]
 # Root: ARP on-link plus ICMP/TCP/UDP probes. Unprivileged: nmap can only do TCP connect pings.
-NMAP_PING_OPTS_ROOT = ["-sn", "-PE", "-PP", "-PS22,80,443,445,3389", "-PA80,443", "-PU53,161", "--max-retries", "2"]
-NMAP_PING_OPTS_USER = ["-sn", "-PS22,80,443,445,3389,161,8080", "-PA80,443", "--max-retries", "2"]
+NMAP_PING_OPTS_ROOT = ["-sn", "-PE", "-PP", "-PS22,80,443,445,3389", "-PA80,443", "-PU53,161", *_NMAP_TIMING]
+NMAP_PING_OPTS_USER = ["-sn", "-PS22,80,443,445,3389,161,8080", "-PA80,443", *_NMAP_TIMING]
+
+# Packets/sec floor for host discovery; 0 lets nmap decide. The scan runner sets it per scan
+# from the request, so a user can push a big flat network harder without changing the default.
+NMAP_MIN_RATE = 0
 
 DEFAULT_NMAP_TIMEOUT = 30 * 60.0  # seconds one nmap run may take before it is stopped
 SWEEP_BLOCK = 24  # a sweep runs one nmap per block of this prefix length
@@ -47,8 +59,9 @@ def rough_duration(seconds: float) -> str:
 
 
 def sweep_estimate(num_addresses: int, parallel: int = NMAP_PARALLEL) -> str:
-    """A rough wall-clock range for an nmap sweep: 5-30 s per /24 block (busy LAN to
-    filtered WAN, privileged or not), `parallel` blocks at a time."""
+    """A rough wall-clock range for an nmap sweep: ~5-30 s per /24 block (a busy LAN to a /24 of
+    silent, firewall-dropped addresses, with the aggressive `-T4` discovery timing), `parallel`
+    blocks at a time."""
     blocks = max(1, -(-num_addresses // 256))
     lo, hi = rough_duration(blocks * 5 / parallel), rough_duration(blocks * 30 / parallel)
     return lo if lo == hi else f"{lo} to {hi}"
@@ -74,7 +87,16 @@ def is_admin() -> bool:
 
 
 def nmap_ping_opts() -> list[str]:
-    return NMAP_PING_OPTS_ROOT if is_admin() else NMAP_PING_OPTS_USER
+    opts = list(NMAP_PING_OPTS_ROOT if is_admin() else NMAP_PING_OPTS_USER)
+    if NMAP_MIN_RATE and NMAP_MIN_RATE > 0:
+        opts += ["--min-rate", str(int(NMAP_MIN_RATE))]
+    return opts
+
+
+def set_discovery_rate(packets_per_sec: int) -> None:
+    """Set the minimum discovery packet rate for this process (0 = let nmap decide)."""
+    global NMAP_MIN_RATE
+    NMAP_MIN_RATE = max(0, int(packets_per_sec or 0))
 
 
 def find_nmap() -> Optional[str]:

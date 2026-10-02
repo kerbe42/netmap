@@ -6,6 +6,23 @@ All notable changes to SubnetSleuth (called NetMap up to 0.12) are recorded here
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.16.0] - 2026-10-02
+
+Much faster host discovery on large, mostly-empty networks.
+
+### Changed
+- **Host discovery no longer crawls on dead address space.** The ping sweep now runs nmap with
+  aggressive timing (`-T4`, so a silent address is given up on after about a second instead of
+  ten) and probes a whole /24 at once (`--min-hostgroup`). A /24 of firewall-dropped addresses
+  that used to take ten to fifteen minutes now finishes in tens of seconds, so sweeping several
+  /16s is minutes rather than hours. The estimate shown before a large sweep is updated to match.
+
+### Added
+- A **Minimum discovery rate** setting (New scan ▸ Options, or `crawl --min-rate PPS`). Left at
+  *automatic* by default; raising it puts a floor on nmap's discovery packet rate so a very large
+  flat range is bounded by throughput rather than nmap's timeouts. On a fast internal network
+  500–2000 packets/sec is usually safe; too high a value on a slow link can drop live hosts.
+
 ## [0.15.0] - 2026-10-02
 
 Better at telling network devices apart, and able to draw a topology even when the switches
@@ -432,6 +449,7 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
+[0.16.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.0...v0.13.1

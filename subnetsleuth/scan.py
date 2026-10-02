@@ -75,6 +75,7 @@ class ScanRequest:
     top_ports: int = 200  # how many ports nmap checks per address
     ping_first: bool = True  # port-scan only addresses that answer a ping (or SNMP) in this scan
     nmap_timeout: float = 30.0  # minutes one nmap run may take before it is stopped; 0 = no limit
+    nmap_min_rate: int = 0  # discovery packets/sec floor; 0 = let nmap decide (raise for big flat ranges)
     follow_routes: bool = True
     follow_gateways: bool = True
     arp: bool = True
@@ -130,6 +131,8 @@ async def run_scan(inv: Inventory, req: ScanRequest, events: Optional[ScanEvents
     stats: dict = {"phase": "starting", "devices": len(inv.devices), "hosts": len(inv.hosts), "elapsed": 0.0}
     state = {"crawler": None, "cancelled": False, "error": ""}
     nmap_limit = req.nmap_timeout * 60 if req.nmap_timeout and req.nmap_timeout > 0 else None
+    from . import sweep as _sweep
+    _sweep.set_discovery_rate(getattr(req, "nmap_min_rate", 0))  # one knob for the whole scan's nmap discovery
     live: set[str] = set()  # addresses that answered a ping during this scan
     act = activity.Activity()  # what this scan has in flight; the tasks it starts report into it
     activity.use(act)
