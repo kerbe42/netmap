@@ -48,6 +48,11 @@ the devices, and use *Test against a device* to check one. Credentials are tried
 device and the one that worked is recorded against it. Secrets are encrypted with your Windows account
 (DPAPI) and are never written into project files, so a project can be handed to someone else safely.
 
+If a network arrives without its SNMP credentials, tick **Also try well-known default communities** (or
+`crawl --try-default-communities`): after anything you supplied, SubnetSleuth tries the handful of factory
+defaults (`public`, `private`, …) read-only, inside the same scope, and lists any device that still answers
+one under *Needs attention* so you can change it.
+
 ### 2. Scan
 
 **Scan ▸ New scan** (Ctrl+R):
@@ -329,9 +334,11 @@ you can see exactly what changed. SubnetSleuth only ever runs `show` commands; i
 
 Beyond the network gear, SubnetSleuth can go deeper where you have credentials:
 
-* **Agentless server inspection** (**Tools ▸ Inspect servers**, or `subnetsleuth inspect`): read-only SSH (Linux/Unix)
+* **Agentless host inspection** (**Tools ▸ Inspect hosts**, or `subnetsleuth inspect`): read-only SSH (Linux/Unix)
   and WinRM (Windows) collection of OS, hardware, installed software, running services and active connections.
-  A host's details gain **System**, **Software** and **Connections** tabs.
+  A host's details gain **System**, **Software** and **Connections** tabs. On Windows the operating system's
+  product type is read too, so a server, a domain controller and a workstation are told apart (setting the
+  host's type with high confidence).
   WinRM prerequisites on the Windows targets: the WinRM service listening (`winrm quickconfig` or the *Allow
   remote server management through WinRM* policy), TCP **5985** (HTTP) — or **5986** with a certificate for
   HTTPS — allowed through the host firewall from the machine running SubnetSleuth, and an account that is a local
