@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .graph import build_graph, edge_ports, ipam_rows, norm_port, vlan_rows
+from .roles import group_key
 from .model import Inventory
 
 STATUSES = ["", "Verified", "Needs review", "Unknown owner", "To be replaced", "To decommission"]
@@ -255,6 +256,7 @@ DEVICE_COLUMNS = [
     Column("credential", "Credential", width=100, visible=False),
     Column("contact", "Contact", width=120, visible=False),
     Column("errors", "Collection errors", width=160, visible=False),
+    Column("group", "Kind", width=90, visible=False, tip="broad kind for grouping: network, servers, pcs, printers… (filter with group:servers)"),
 ]
 
 
@@ -288,6 +290,7 @@ def device_rows(s: Snapshot) -> list[dict]:
                 "status": note.get("status", ""), "tags": ", ".join(note.get("tags", [])), "notes": note.get("notes", ""),
                 "dns": d.dns_name, "first_seen": d.first_seen, "polled": d.collected_at, "via": d.discovered_via,
                 "credential": d.credential, "contact": d.contact, "errors": "; ".join(d.errors),
+                "group": group_key(note.get("role") or d.role),
             }
         )
     # neighbours seen but never polled belong in the device list too: they are devices
@@ -302,6 +305,7 @@ def device_rows(s: Snapshot) -> list[dict]:
                 "status": note.get("status", ""), "tags": ", ".join(note.get("tags", [])), "notes": note.get("notes", ""),
                 "dns": "", "first_seen": "", "polled": "", "via": "announced by a neighbour", "credential": "", "contact": "",
                 "errors": "not polled: no credentials answered, or outside the scope",
+                "group": group_key(note.get("role") or "unpolled"),
             }
         )
     return rows
@@ -331,6 +335,7 @@ HOST_COLUMNS = [
     Column("first_seen", "First seen", "time", 120, visible=False),
     Column("last_seen", "Last seen", "time", 120),
     Column("snmp", "SNMP", width=80, visible=False),
+    Column("group", "Kind", width=90, visible=False, tip="broad kind for grouping: servers, pcs, printers… (filter with group:servers)"),
 ]
 
 
@@ -356,6 +361,7 @@ def host_rows(s: Snapshot) -> list[dict]:
                 "status": note.get("status", ""), "tags": ", ".join(note.get("tags", [])), "notes": note.get("notes", ""),
                 "sources": " ".join(h.sources), "first_seen": h.first_seen, "last_seen": h.last_seen,
                 "snmp": "no answer" if h.snmp_failed else "",
+                "group": group_key(role),
             }
         )
     return rows

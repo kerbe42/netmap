@@ -14,6 +14,8 @@ import re
 import time
 from dataclasses import dataclass
 
+from .communities import is_default_community
+
 
 @dataclass
 class Check:
@@ -65,9 +67,9 @@ def compliance_checks(snapshot) -> list[Check]:
         if _is_community_snmp(d):
             add("medium", "SNMPv2c in use", d.id, name, f"answered SNMP {getattr(d, 'snmp_version', '') or d.credential}",
                 "Use SNMPv3 with authentication and privacy; v1/v2c sends the community in clear and has no integrity")
-        if (d.credential or "") in ("public", "private"):
-            add("high", "Default SNMP community", d.id, name, f"community '{d.credential}'",
-                "Replace default communities; 'public'/'private' are world-known and often writable")
+        if is_default_community(d.credential):
+            add("high", "Default SNMP community", d.id, name, f"answered on {d.credential or 'a default community'}",
+                "Replace factory-default communities; they are world-known and often writable")
         # --- management planes (from the TCP check and any nmap ports) ---
         mgmt = dict(getattr(d, "mgmt", {}) or {})
         open_ports = {p.get("port") for p in getattr(d, "ports", [])}

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..roles import GROUP_ICON, GROUP_LABEL, GROUP_ORDER, endpoint_group, is_network_role
 from ..views import Snapshot, finding_rows, fmt_time
 from .icons import ROLE_LABELS, role_color, role_pixmap
 
@@ -61,7 +62,11 @@ class Card(QFrame):
 
 
 class BarList(QWidget):
-    """Label, bar and count per row; optional role icon. Rows: (key, label, value, color, icon_role, kind, suffix)."""
+    """Label, bar and count per row; optional role icon.
+
+    Rows: ``(key, label, value, color, icon_role, kind, suffix)``, with an optional 8th element
+    ``sub`` — a portion of ``value`` (e.g. the not-polled share of a total) drawn as a lighter
+    band at the end of the bar so the split reads at a glance."""
 
     rowClicked = Signal(str)
 
@@ -93,7 +98,9 @@ class BarList(QWidget):
         label_w = min(260, int(self.width() * self.label_ratio))
         count_w = 60
         bar_w = max(self.width() - label_w - count_w - 30, 40)
-        for i, (key, label, value, color, icon_role, kind, suffix) in enumerate(self.rows):
+        for i, row in enumerate(self.rows):
+            key, label, value, color, icon_role, kind, suffix = row[:7]
+            sub = row[7] if len(row) > 7 else 0
             y = i * self.row_h + 2
             x = 0
             if icon_role:
@@ -109,6 +116,12 @@ class BarList(QWidget):
             w = bar_w * (value / top) if top else 0
             p.setBrush(QColor(color))
             p.drawRoundedRect(QRectF(label_w, y + 5, max(w, 2), self.row_h - 10), 3, 3)
+            if sub and value:  # a lighter band at the end of the bar = the "sub" share (not polled)
+                sw = w * (min(sub, value) / value)
+                faint = QColor(color)
+                faint.setAlpha(80)
+                p.setBrush(faint)
+                p.drawRoundedRect(QRectF(label_w + w - sw, y + 5, max(sw, 1), self.row_h - 10), 3, 3)
             p.setPen(pal.color(QPalette.Text))
             p.drawText(QRectF(label_w + bar_w + 6, y, count_w + 20, self.row_h), Qt.AlignVCenter | Qt.AlignLeft, f"{value:,}{suffix}" if isinstance(value, int) else f"{value}{suffix}")
         p.end()
@@ -223,8 +236,8 @@ class Dashboard(QWidget):
         cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(12)
         self.cards_grid = cards
-        self.c_dev = Card("Network devices")
-        self.c_host = Card("Hosts / endpoints")
+        self.c_dev = Card("Network infrastructure")
+        self.c_host = Card("Endpoints")
         self.c_sub = Card("Subnets")
         self.c_vlan = Card("VLANs")
         self.c_link = Card("Links")
@@ -243,7 +256,7 @@ class Dashboard(QWidget):
         self.b_vendors = BarList()
         self.b_vendors.rowClicked.connect(lambda k: self.navigate.emit("devices", f'vendor:"{k}"'))
         self.b_hosts = BarList()
-        self.b_hosts.rowClicked.connect(lambda k: self.navigate.emit("hosts", f"type:{k}"))
+        self.b_hosts.rowClicked.connect(lambda k: self.navigate.emit("hosts", f"group:{k}"))
         self.b_subnets = BarList(0.5)
         self.b_subnets.rowClicked.connect(self.openNode)
         self.b_find = BarList(0.6)
@@ -254,9 +267,9 @@ class Dashboard(QWidget):
         self.b_funcs.rowClicked.connect(lambda k: self.navigate.emit("hosts", f'functions:"{k}"'))
         self.grid = grid
         self.boxes = [
-            _box("Devices by role", self.b_roles),
-            _box("Devices by vendor", self.b_vendors),
-            _box("Endpoints by type", self.b_hosts, "From MAC vendor, open ports and LLDP; correct any in the Hosts list."),
+            _box("Network infrastructure", self.b_roles, "Firewalls, routers, switches and access points — found over SNMP or seen as a neighbour. The lighter part of each bar is gear not yet polled."),
+            _box("Network gear by vendor", self.b_vendors),
+            _box("Endpoints by type", self.b_hosts, "Everything attached to the network, by kind. Servers are grouped here; what each one does is under Server functions."),
             _box("Busiest subnets", self.b_subnets, "Addresses seen in use. Unswept subnets can only undercount."),
             _box("Server functions", self.b_funcs, "What servers actually do, inferred from their open ports (web, database, file, mail, DNS…). A host can fill several."),
             _box("Needs attention", self.b_find, "Things to check before you rely on this inventory."),
@@ -319,21 +332,50 @@ class Dashboard(QWidget):
         hosts = [h for ip, h in inv.hosts.items() if ip not in inv.ip_to_device]
         findings = finding_rows(s)
         attention = [f for f in findings if f["severity"].lower() in ("attention", "check")]
-        self.c_dev.set(len(devices), f"+ {len(s.stubs)} seen but not polled" if s.stubs else "all polled")
+
+        # One identity per node (device, host or seen-but-not-polled stub): its role, whether we
+        # polled it over SNMP, and its vendor. Everything is then split by *what it is* — network
+        # fabric vs endpoint — not by how it was found, so the two panels no longer overlap.
+        items: list[tuple[str, bool, str]] = []
+        for d in devices:
+            items.append((inv.note(d.id).get("role") or d.role, True, d.vendor or "unknown"))
+        for h in hosts:
+            items.append((inv.note(h.ip).get("role") or s.role(h.ip) or h.role, False, h.vendor or "unknown"))
+        for sid in s.stubs:
+            node = s.g.nodes.get(sid, {}) if sid in s.g else {}
+            items.append((node.get("role") or "unpolled", False, node.get("vendor") or "unknown"))
+
+        net_total, net_polled, net_vendors = Counter(), Counter(), Counter()
+        ep_by_group, ep_total_n, ep_polled_n = Counter(), 0, 0
+        for role, polled, vendor in items:
+            if is_network_role(role):
+                net_total[role] += 1
+                net_vendors[vendor] += 1
+                if polled:
+                    net_polled[role] += 1
+            else:
+                ep_by_group[endpoint_group(role)[0]] += 1
+                ep_total_n += 1
+                ep_polled_n += 1 if polled else 0
+
+        n_net, n_net_polled = sum(net_total.values()), sum(net_polled.values())
         swept = sum(1 for sub in inv.subnets.values() if sub.swept)
-        self.c_host.set(len(hosts), f"{sum(1 for h in hosts if h.mac)} with a MAC address")
+        self.c_dev.set(n_net, f"{n_net_polled} polled · {n_net - n_net_polled} not polled" if n_net else "none yet")
+        self.c_host.set(ep_total_n, f"{ep_polled_n} answered SNMP · {ep_total_n - ep_polled_n} found other ways" if ep_total_n else "none yet")
         self.c_sub.set(len(inv.subnets), f"{swept} swept")
         self.c_vlan.set(len(s.vlans), f"{sum(1 for n, _ in s.vlans.values() if len(n) > 1)} named inconsistently" if any(len(n) > 1 for n, _ in s.vlans.values()) else "")
         kinds = Counter(a.get("kind") for _, _, a in s.links)
         self.c_link.set(len(s.links), f"{kinds.get('lldp', 0) + kinds.get('cdp', 0)} cabled · {kinds.get('l3', 0)} routed only")
         self.c_find.set(len(attention), f"{len(findings)} findings in total")
 
-        roles = Counter((inv.note(d.id).get("role") or d.role) for d in devices)
-        self.b_roles.set_rows([(r, ROLE_LABELS.get(r, r), n, role_color(r).name(), r, "device", "") for r, n in roles.most_common(10)])
-        vendors = Counter(d.vendor or "unknown" for d in devices)
-        self.b_vendors.set_rows([(v, v, n, "#3b82f6", "", "", "") for v, n in vendors.most_common(8)])
-        hroles = Counter((inv.note(h.ip).get("role") or s.role(h.ip) or h.role) for h in hosts)
-        self.b_hosts.set_rows([(r, ROLE_LABELS.get(r, r), n, role_color(r).name(), r, "host", "") for r, n in hroles.most_common(10)])
+        # Network infrastructure: total per role, with the not-polled share as a lighter band.
+        self.b_roles.set_rows([(r, ROLE_LABELS.get(r, r), n, role_color(r).name(), r, "device", "",
+                                n - net_polled.get(r, 0)) for r, n in net_total.most_common(10)])
+        self.b_vendors.set_rows([(v, v, n, "#3b82f6", "", "", "") for v, n in net_vendors.most_common(8)])
+        # Endpoints by broad kind, biggest first; servers are one row (functions break them down).
+        ep_rows = sorted(ep_by_group.items(), key=lambda kv: (-kv[1], GROUP_ORDER.get(kv[0], 99)))
+        self.b_hosts.set_rows([(key, GROUP_LABEL.get(key, key), n, role_color(GROUP_ICON.get(key, "host")).name(),
+                                GROUP_ICON.get(key, "host"), "host", "") for key, n in ep_rows])
         busiest = sorted(s.ipam.values(), key=lambda r: (-r["utilisation_pct"], -r["used"]))[:8]
         self.b_subnets.set_rows([(r["cidr"], r["cidr"] + (f"  VLAN {r['vlan']}" if r["vlan"] else ""), r["utilisation_pct"],
                                   "#16a34a" if r["utilisation_pct"] < 60 else "#d97706" if r["utilisation_pct"] < 85 else "#dc2626", "subnet", "subnet", "%") for r in busiest])

@@ -68,6 +68,24 @@ def test_end_of_sale_and_default_community_checks():
     assert all(c.node == "10.9.9.1" for c in checks)
 
 
+def test_default_community_finding_on_auto_tried_default():
+    """A device that answered one of the auto-tried default communities carries the
+    "default community '…'" credential label and must be flagged; a custom-named
+    credential must not."""
+    from subnetsleuth.communities import default_label
+
+    inv = Inventory()
+    hit = Device(id="10.9.9.3", name="left-on-default", vendor="Cisco", credential=default_label("cisco"), role="switch")
+    custom = Device(id="10.9.9.4", name="named-ro", vendor="Cisco", credential="corp-monitoring", role="switch")
+    inv.devices[hit.id] = hit
+    inv.devices[custom.id] = custom
+    inv.reindex() if hasattr(inv, "reindex") else None
+    checks = compliance_checks(Snapshot(inv))
+    flagged = {c.node for c in checks if c.category == "Default SNMP community"}
+    assert "10.9.9.3" in flagged
+    assert "10.9.9.4" not in flagged
+
+
 def test_unknown_hardware_raises_no_eol_finding():
     inv = Inventory()
     dev = Device(id="10.9.9.2", name="mystery", vendor="Acme", model="ZX-9000", credential="v3:ro", role="switch")

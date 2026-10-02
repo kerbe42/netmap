@@ -123,6 +123,13 @@ class ScanDialog(QDialog):
         self.quick.setPlaceholderText("try this v2c community too, for this scan only")
         qf.addRow("Extra community", self.quick)
         cl.addLayout(qf)
+        self.try_defaults = QCheckBox("Also try well-known default communities (public, private, …)")
+        self.try_defaults.setChecked(d.get("try_default_communities", False))
+        self.try_defaults.setToolTip(
+            "After your own credentials, try the handful of factory-default community strings\n"
+            "read-only. A device that answers one is reported under Needs attention so you can\n"
+            "change it. Useful on a network you are taking over and have no documentation for.")
+        cl.addWidget(self.try_defaults)
         tabs.addTab(cw, "Credentials")
 
         # ---- options
@@ -288,6 +295,10 @@ class ScanDialog(QDialog):
                 ids.append(cid)
         if self.quick.text():
             out.append(Credential.from_dict({"kind": "v2c", "community": self.quick.text(), "label": "typed in"}))
+        if self.try_defaults.isChecked():
+            from ..communities import default_community_creds
+
+            out += default_community_creds()
         return out, ids
 
     # ---- where
@@ -393,6 +404,7 @@ class ScanDialog(QDialog):
             "resolve_names": req.resolve_names, "identify": req.identify, "cisco_vlan_fdb": req.cisco_vlan_fdb, "max_depth": req.max_depth,
             "workers": req.workers, "timeout": req.timeout, "retries": req.retries, "port": req.port, "sweep_max_prefix": req.sweep_max_prefix,
             "ping_first": req.ping_first, "nmap_timeout": req.nmap_timeout, "top_ports": req.top_ports,
+            "try_default_communities": self.try_defaults.isChecked(),
         }
         return req, remember
 

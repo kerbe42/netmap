@@ -12,6 +12,7 @@ from typing import Optional
 import networkx as nx
 
 from .model import Inventory
+from .roles import endpoint_group, is_network_role
 from .sweep import classify_host
 from .util import device_model, oui_vendor, parse_os_version, plausible_mac, short_name
 
@@ -725,10 +726,22 @@ def export_csv(inv: Inventory, g: nx.MultiGraph, prefix: str) -> list[str]:
 
 def text_summary(inv: Inventory, g: nx.MultiGraph) -> str:
     lines = [f"== {inv.summary()} ==", ""]
-    roles = Counter(d.role for d in inv.devices.values())
-    vendors = Counter(d.vendor or "?" for d in inv.devices.values())
-    lines.append("Devices by role:   " + ", ".join(f"{r}={n}" for r, n in roles.most_common()))
-    lines.append("Devices by vendor: " + ", ".join(f"{v}={n}" for v, n in vendors.most_common()))
+    # split every node by what it is, across all sources, so this matches the overview and the
+    # spreadsheet: network fabric (wherever found) vs endpoints (never the fabric).
+    infra, vendors, endpoints = Counter(), Counter(), Counter()
+    _items = [(d.role, d.vendor or "?") for d in inv.devices.values()]
+    _items += [(h.role, h.vendor or "?") for ip, h in inv.hosts.items() if ip not in inv.ip_to_device]
+    _items += [(a.get("role") or "unpolled", a.get("vendor") or "?")
+               for n, a in g.nodes(data=True) if a.get("kind") == "device" and n not in inv.devices]
+    for role, vendor in _items:
+        if is_network_role(role):
+            infra[role] += 1
+            vendors[vendor] += 1
+        else:
+            endpoints[endpoint_group(role)[1]] += 1
+    lines.append("Network infrastructure: " + (", ".join(f"{r}={n}" for r, n in infra.most_common()) or "none"))
+    lines.append("Infra by vendor:        " + (", ".join(f"{v}={n}" for v, n in vendors.most_common()) or "none"))
+    lines.append("Endpoints by type:      " + (", ".join(f"{r}={n}" for r, n in endpoints.most_common()) or "none"))
     kinds = Counter(a["kind"] for _, _, a in g.edges(data=True))
     lines.append("Edges:             " + ", ".join(f"{k}={n}" for k, n in kinds.most_common()))
     lines.append("")

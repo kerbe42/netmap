@@ -14,6 +14,7 @@ from subnetsleuth.hostinfo import (
     parse_win_connections,
     parse_win_software,
     parse_win_system,
+    windows_role,
 )
 from subnetsleuth.model import Host, Inventory
 
@@ -167,6 +168,13 @@ WIN_SYSTEM = json.dumps({
     "product": "VMware Virtual Platform", "serial": "VMware-56 4d",
     "cpu": "Intel(R) Xeon(R) Gold 6248", "cores": 4, "memory_mb": 8192,
     "uptime_s": 360000, "logged_on": "CORP\\administrator",
+    "product_type": 2, "domain_role": 5,  # a domain controller
+})
+WIN_WORKSTATION = json.dumps({
+    "os": "Microsoft Windows 11 Enterprise", "version": "10.0.22631",
+    "hostname": "WS-042", "domain": "corp.local", "manufacturer": "Dell Inc.",
+    "product": "Latitude 7440", "cores": 8, "memory_mb": 16384,
+    "product_type": 1, "domain_role": 1,  # a domain-member workstation
 })
 WIN_SOFTWARE = json.dumps([
     {"name": "Google Chrome", "version": "120.0.6099.109"},
@@ -189,6 +197,18 @@ def test_parse_win_system():
     assert s["manufacturer"] == "VMware, Inc." and s["product"] == "VMware Virtual Platform"
     assert s["logged_on"] == ["CORP\\administrator"]
     assert s["hostname"] == "DC01"
+    assert s["product_type"] == 2 and s["domain_role"] == 5
+
+
+def test_windows_role_from_product_type():
+    assert windows_role({"product_type": 1, "domain_role": 1}) == "workstation"
+    assert windows_role({"product_type": 3, "domain_role": 3}) == "server"
+    assert windows_role({"product_type": 2, "domain_role": 5}) == "dc"
+    # DomainRole alone promotes a box reporting as a server to a domain controller
+    assert windows_role({"product_type": 3, "domain_role": 4}) == "dc"
+    # no usable facts -> no opinion
+    assert windows_role({}) == ""
+    assert windows_role({"product_type": 0, "domain_role": -1}) == ""
 
 
 def test_parse_win_software_and_connections():
@@ -250,6 +270,26 @@ def test_apply_facts_does_not_clobber_curated():
     apply_facts(host, inspect_ssh("10.0.0.5", "admin", run=linux_run()))
     assert host.hostname == "curated-name" and host.os == "Custom OS" and host.vendor == "Acme"
     assert host.system["cores"] == 8  # facts still applied
+
+
+def _winrm_facts(system_json):
+    def run_ps(script):
+        from subnetsleuth.hostinfo import PS_CONNECTIONS, PS_SERVICES, PS_SOFTWARE, PS_SYSTEM
+        return {PS_SYSTEM: system_json, PS_SOFTWARE: WIN_SOFTWARE,
+                PS_SERVICES: WIN_SERVICES, PS_CONNECTIONS: WIN_CONNS}[script]
+
+    return inspect_winrm("10.0.0.10", "corp\\admin", "pw", run_ps=run_ps)
+
+
+def test_apply_facts_classifies_windows_from_winrm():
+    dc = Host(ip="10.0.0.10")  # heuristic hasn't typed it yet
+    apply_facts(dc, _winrm_facts(WIN_SYSTEM))
+    assert dc.role == "dc" and dc.confidence == "high" and dc.os_family == "windows"
+    assert any(e["source"] == "winrm" and e["implies"] == "dc" for e in dc.evidence)
+
+    ws = Host(ip="10.0.0.11", role="windows")  # a generic guess the authenticated scan sharpens
+    apply_facts(ws, _winrm_facts(WIN_WORKSTATION))
+    assert ws.role == "workstation" and ws.confidence == "high"
 
 
 # --------------------------------------------------------------------------- #

@@ -6,6 +6,29 @@ All notable changes to SubnetSleuth (called NetMap up to 0.12) are recorded here
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.14.0] - 2026-10-02
+
+### Changed
+- The overview no longer shows *Devices by role* and *Endpoints by type* as two lists that
+  overlapped. It now splits everything by what it is: **Network infrastructure** — firewalls,
+  routers, switches and access points, wherever they were found, with the lighter part of each
+  bar the gear not yet polled over SNMP — and **Endpoints by type** — everything attached to the
+  network, in broad kinds (PCs, phones, printers, servers, …), with servers grouped into one row
+  since *Server functions* already breaks them down. *Network gear by vendor*, the spreadsheet
+  summary and the command-line summary use the same split, and the device and host lists gain a
+  hidden *Kind* column so you can filter with, for example, `group:servers`.
+
+### Added
+- An optional **try well-known default communities** step for a scan: after your own SNMP
+  credentials, SubnetSleuth can try the handful of factory-default community strings (public,
+  private, …) read-only, inside the same ranges as every other step. A device that answers one is
+  reported under *Needs attention* so you can change it — useful when you are taking over a
+  network with no documentation. In the New scan dialog, or `crawl --try-default-communities`.
+- Authenticated Windows inspection now identifies the **device type**: reading the operating
+  system's product type over WinRM tells a server, a domain controller and a workstation apart and
+  sets the host's type with high confidence. The inspect dialog (now *Inspect hosts*) can also
+  connect over HTTPS (WinRM 5986).
+
 ## [0.13.1] - 2026-10-01
 
 ### Changed
@@ -383,6 +406,7 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
+[0.14.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.11.0...v0.12.0

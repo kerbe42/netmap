@@ -401,6 +401,13 @@ def parse_win_system(text: str) -> dict:
         uptime_s = 0
     logged = _get(d, "logged_on", "UserName", "LoggedOn", default="")
     logged_on = logged if isinstance(logged, list) else ([logged] if logged else [])
+
+    def _int(*keys, default):
+        try:
+            return int(_get(d, *keys, default=default))
+        except (ValueError, TypeError):
+            return default
+
     return {
         "os": _get(d, "os", "OS", "Caption"),
         "kernel": _get(d, "version", "Version", "BuildNumber"),
@@ -414,6 +421,10 @@ def parse_win_system(text: str) -> dict:
         "logged_on": logged_on,
         "domain": _get(d, "domain", "Domain"),
         "hostname": _get(d, "hostname", "Hostname", "CSName", "Name"),
+        # Win32_OperatingSystem.ProductType: 1 workstation, 2 domain controller, 3 server.
+        # Win32_ComputerSystem.DomainRole: 4/5 are the backup/primary domain controller.
+        "product_type": _int("product_type", "ProductType", default=0),
+        "domain_role": _int("domain_role", "DomainRole", default=-1),
     }
 
 
@@ -480,7 +491,8 @@ $cpu=Get-CimInstance Win32_Processor | Select-Object -First 1
   cpu=$cpu.Name; cores=$cs.NumberOfLogicalProcessors;
   memory_mb=[math]::Round($cs.TotalPhysicalMemory/1MB);
   uptime_s=[math]::Round((New-TimeSpan -Start $os.LastBootUpTime -End (Get-Date)).TotalSeconds);
-  logged_on=$cs.UserName
+  logged_on=$cs.UserName;
+  product_type=$os.ProductType; domain_role=$cs.DomainRole
 } | ConvertTo-Json -Compress
 """
 
@@ -579,6 +591,27 @@ def inspect_winrm(ip: str, username: str, password: str, transport: str = "ntlm"
 # ===========================================================================
 # Apply + orchestrate
 # ===========================================================================
+def windows_role(system: dict) -> str:
+    """Classify a Windows box from its authoritative WMI facts.
+
+    ``Win32_OperatingSystem.ProductType`` is the reliable server-vs-workstation signal
+    (1 = workstation, 2 = domain controller, 3 = server); ``Win32_ComputerSystem.DomainRole``
+    (4 = backup DC, 5 = primary DC) corroborates a domain controller. Returns a role key
+    (``dc`` / ``server`` / ``workstation``) or ``""`` when the facts don't say.
+    """
+    system = system or {}
+    pt = system.get("product_type") or 0
+    dr = system.get("domain_role")
+    dr = dr if isinstance(dr, int) else -1
+    if pt == 2 or dr in (4, 5):
+        return "dc"
+    if pt == 3:
+        return "server"
+    if pt == 1:
+        return "workstation"
+    return ""
+
+
 def apply_facts(host, facts: dict) -> None:
     """Write a facts dict onto a :class:`~subnetsleuth.model.Host` (in place)."""
     facts = facts or {}
@@ -599,6 +632,21 @@ def apply_facts(host, facts: dict) -> None:
         host.hostname = system["hostname"]
     if not host.vendor and system.get("manufacturer"):
         host.vendor = system["manufacturer"]
+    # an authenticated Windows login tells us, authoritatively, whether this is a server,
+    # a domain controller or a workstation - better than any port/MAC heuristic, so it
+    # sets the role (the user's own role override lives in the project note, not here).
+    if source == "winrm":
+        host.os_family = host.os_family or "windows"
+        role = windows_role(system)
+        if role:
+            host.role = role
+            host.confidence = "high"
+            observed = f"ProductType={system.get('product_type')}"
+            if system.get("domain_role", -1) in (4, 5):
+                observed += f", DomainRole={system.get('domain_role')}"
+            ev = {"source": "winrm", "observed": observed, "implies": role}
+            if ev not in host.evidence:
+                host.evidence.append(ev)
 
 
 def _family(host) -> str:

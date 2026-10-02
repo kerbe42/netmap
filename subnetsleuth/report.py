@@ -15,6 +15,7 @@ from collections import Counter
 
 from .graph import edge_ports, ipam_rows, vlan_rows
 from .model import Inventory
+from .roles import GROUP_LABEL, GROUP_ORDER, endpoint_group, is_network_role
 
 log = logging.getLogger("subnetsleuth.report")
 
@@ -84,9 +85,25 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
     wb.remove(wb.active)
     snap = Snapshot(inv)  # the same derived views the desktop app shows (graph is cached)
 
-    roles = Counter(d.role for d in inv.devices.values())
-    vendors = Counter(d.vendor or "unknown" for d in inv.devices.values())
-    host_roles = Counter(h.role for ip, h in inv.hosts.items() if ip not in inv.ip_to_device)
+    # split every node by what it is (network fabric vs endpoint), not by how it was found, so
+    # the summary matches the overview. A node is "polled" when it answered SNMP (a device).
+    net_total, net_polled, net_vendors = Counter(), Counter(), Counter()
+    ep_by_group, ep_total_n = Counter(), 0
+    _items = [(d.role, True, d.vendor or "unknown") for d in inv.devices.values()]
+    _items += [(h.role, False, h.vendor or "unknown") for ip, h in inv.hosts.items() if ip not in inv.ip_to_device]
+    _items += [(a.get("role") or "unpolled", False, a.get("vendor") or "unknown")
+               for n, a in g.nodes(data=True) if a.get("kind") == "device" and n not in inv.devices]
+    for role, polled, vendor in _items:
+        if is_network_role(role):
+            net_total[role] += 1
+            net_vendors[vendor] += 1
+            if polled:
+                net_polled[role] += 1
+        else:
+            ep_by_group[endpoint_group(role)[0]] += 1
+            ep_total_n += 1
+    n_net, n_net_polled = sum(net_total.values()), sum(net_polled.values())
+
     edge_kinds = Counter(a["kind"] for _, _, a in g.edges(data=True))
     unpolled = [(n, a) for n, a in g.nodes(data=True) if a.get("role") == "unpolled"]
     ipam = ipam_rows(inv)
@@ -101,11 +118,12 @@ def export_xlsx(inv: Inventory, g, path: str) -> str:
         ["Neighbours seen but not polled", len(unpolled)],
         ["Addresses in use / usable", f"{sum(r['used'] for r in ipam)} / {sum(r['usable'] for r in ipam)}"],
         [],
-        ["Devices by role"] + [],
+        ["Network infrastructure", f"{n_net} ({n_net_polled} polled, {n_net - n_net_polled} not polled)"],
     ]
-    summary += [[f"  {r}", n] for r, n in roles.most_common()]
-    summary += [[], ["Devices by vendor"]] + [[f"  {v}", n] for v, n in vendors.most_common()]
-    summary += [[], ["Hosts by type"]] + [[f"  {r}", n] for r, n in host_roles.most_common()]
+    summary += [[f"  {r}", f"{n} ({net_polled.get(r, 0)} polled)"] for r, n in net_total.most_common()]
+    summary += [[], ["Network gear by vendor"]] + [[f"  {v}", n] for v, n in net_vendors.most_common()]
+    ep_sorted = sorted(ep_by_group.items(), key=lambda kv: (-kv[1], GROUP_ORDER.get(kv[0], 99)))
+    summary += [[], ["Endpoints by type", ep_total_n]] + [[f"  {GROUP_LABEL.get(k, k)}", n] for k, n in ep_sorted]
     summary += [[], ["Links by kind"]] + [[f"  {k}", n] for k, n in edge_kinds.most_common()]
     _sheet(wb, "Summary", ["Item", "Value"], summary, widths={"Item": 44, "Value": 30}, freeze="A2")
 

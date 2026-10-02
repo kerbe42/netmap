@@ -46,6 +46,10 @@ def build_credentials(args, cfg) -> list[Credential]:
         creds.append(
             Credential.from_dict({"kind": "v3", "user": args.v3_user, "auth": args.v3_auth, "auth_key": args.v3_auth_key, "priv": args.v3_priv, "priv_key": args.v3_priv_key})
         )
+    if getattr(args, "try_default_communities", False):
+        from .communities import default_community_creds
+
+        creds += default_community_creds()
     if not creds and util_env("COMMUNITY"):
         creds.append(Credential.from_dict({"kind": "v2c", "community": util_env("COMMUNITY"), "label": "env"}))
     if not creds:
@@ -467,6 +471,7 @@ def build_parser():
     cr.add_argument("--seed", "-s", action="append", metavar="IP", help="starting device (core switch/router) to spider from. Repeatable. Optional if --target is given")
     cr.add_argument("--community", "-C", action="append", metavar="STR", help="SNMPv2c community to try (repeatable, tried in order). 'env:VAR' reads it from that environment variable so it stays out of shell history")
     cr.add_argument("--v1-community", action="append", metavar="STR", help="SNMPv1 community to try, for agents that only speak v1 (repeatable; 'env:VAR' form accepted)")
+    cr.add_argument("--try-default-communities", action="store_true", help="after your own credentials, also try well-known factory-default communities (public, private, …) read-only. A device that answers one is reported as a finding")
     cr.add_argument("--v3-user", help="SNMPv3 user name")
     cr.add_argument("--v3-auth", default="SHA", help="v3 authentication protocol: MD5, SHA, SHA224, SHA256, SHA384, SHA512 or NONE (default SHA)")
     cr.add_argument("--v3-auth-key", help="v3 authentication passphrase; 'env:VAR' reads it from that environment variable")

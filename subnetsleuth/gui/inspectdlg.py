@@ -1,5 +1,6 @@
-"""Agentless server inspection (SSH for Linux/Unix, WinRM for Windows): credential dialog and
-background worker. Read-only — it only runs read commands to collect facts."""
+"""Agentless host inspection (SSH for Linux/Unix, WinRM for Windows): credential dialog and
+background worker. Read-only — it only runs read commands to collect facts. On Windows it also
+reads the OS product type, so a server, a domain controller and a workstation are told apart."""
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
 class InspectDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Inspect servers (SSH / WinRM)")
+        self.setWindowTitle("Inspect hosts (SSH / WinRM)")
         self.linux_on = QCheckBox("Linux / Unix over SSH")
         self.linux_on.setChecked(True)
         self.lin_user = QLineEdit()
@@ -41,14 +42,19 @@ class InspectDialog(QDialog):
         self.win_user.setPlaceholderText("DOMAIN\\user or user")
         self.win_pw = QLineEdit()
         self.win_pw.setEchoMode(QLineEdit.Password)
+        self.win_https = QCheckBox("Connect over HTTPS (WinRM port 5986)")
+        self.win_https.setToolTip("Use the encrypted WinRM listener on 5986 instead of 5985.\n"
+                                  "NTLM over 5985 already encrypts the payload; use this where only HTTPS is allowed.")
         wg = QGroupBox()
         wf = QFormLayout(wg)
         wf.addRow(self.win_on)
         wf.addRow("Username", self.win_user)
         wf.addRow("Password", self.win_pw)
+        wf.addRow(self.win_https)
         note = QLabel("Read-only: collects OS, hardware, installed software, services and active connections "
-                      "(which feed the dependency map). Credentials are used for this run only. WinRM must be enabled "
-                      "on the Windows hosts (usual in a domain); SSH for Linux/Unix.")
+                      "(which feed the dependency map), and on Windows the OS product type so servers, domain "
+                      "controllers and workstations are identified. Credentials are used for this run only. WinRM "
+                      "must be enabled on the Windows hosts (usual in a domain); SSH for Linux/Unix.")
         note.setWordWrap(True)
         note.setObjectName("muted")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -68,7 +74,8 @@ class InspectDialog(QDialog):
             c["linux"] = {"username": self.lin_user.text().strip(), "password": self.lin_pw.text(),
                           "key_filename": self.lin_key.text().strip() or None}
         if self.win_on.isChecked() and self.win_user.text():
-            c["windows"] = {"username": self.win_user.text().strip(), "password": self.win_pw.text(), "transport": "ntlm"}
+            c["windows"] = {"username": self.win_user.text().strip(), "password": self.win_pw.text(), "transport": "ntlm",
+                            "use_ssl": self.win_https.isChecked()}
         return c
 
 
