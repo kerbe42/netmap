@@ -67,6 +67,7 @@ const nodes = new vis.DataSet(DATA.nodes.map(n => ({
 const edgeStyle = e => e.kind==='l3' ? {dashes:[6,4], color:{color:'#e07a2f'}, width:1.5}
   : e.kind==='member' ? {dashes:[2,4], color:{color:'#475569'}, width:1}
   : e.kind==='fdb' ? {dashes:[1,3], color:{color:'#64748b'}, width:1}
+  : e.kind==='fdb-link' ? {dashes:[6,4], color:{color:'#93c5fd'}, width:2}
   : {color:{color:'#93c5fd'}, width:2};
 const edges = new vis.DataSet(DATA.edges.map((e,i) => ({id:'e'+i, from:e.source, to:e.target, title:e.label||e.kind, raw:e, ...edgeStyle(e),
   hidden: e.kind==='fdb' || (e.kind==='member' && (nodes.get(e.source)?.raw.kind==='host'))})));
@@ -87,7 +88,7 @@ function applyFilters(){
   edges.update(edges.get().map(e=>{
     const k=e.raw.kind; const a=nodes.get(e.from), b=nodes.get(e.to);
     let hide = (a&&a.hidden)||(b&&b.hidden);
-    if(k==='lldp'||k==='cdp') hide = hide||!f('f_lldp');
+    if(k==='lldp'||k==='cdp'||k==='fdb-link') hide = hide||!f('f_lldp');
     if(k==='l3') hide = hide||!f('f_l3');
     if(k==='fdb') hide = hide||!f('f_fdb');
     return {id:e.id, hidden:hide};

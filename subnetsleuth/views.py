@@ -641,6 +641,18 @@ def finding_rows(s: Snapshot) -> list[dict]:
         errs = [e for e in d.errors if e != "no answer on rescan"]
         if errs:
             add("info", "Partial collection", d.id, s.name(d.id), "; ".join(errs)[:200], "Some tables did not answer; the device view may be incomplete")
+        # a managed device with nothing to place it on the map: no neighbours, no MAC table,
+        # no routes. Almost always a restricted SNMP view/community or LLDP/CDP turned off —
+        # the single most common reason a topology comes out as disconnected subnet clusters.
+        if d.role in ("switch", "l3switch", "wireless", "router", "firewall"):
+            has_l2 = bool(d.neighbors) or bool(d.fdb)
+            has_l3 = any(r.nexthop not in ("", "0.0.0.0") and r.type != 3 for r in d.routes)
+            if not has_l2 and not has_l3:
+                add("attention", "Limited SNMP visibility", d.id, s.name(d.id),
+                    "managed, but reported no LLDP/CDP neighbours, no MAC table and no routes",
+                    "Its topology MIBs (LLDP, CDP, bridge/FDB, routing) returned nothing — usually an SNMP "
+                    "view or community that excludes them, or LLDP/CDP switched off. The map can't place it "
+                    "until at least one of those is readable.")
     for r in link_rows(s):
         if r.get("_mismatch"):
             add("attention", "Link speed mismatch", r["_id"], f"{r['a']} {r['a_port']} - {r['b']} {r['b_port']}", r["speed"],

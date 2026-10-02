@@ -62,34 +62,150 @@ async def _safe(dev: Device, label: str, coro):
         return None
 
 
-def classify_role(dev: Device) -> str:
+# physical ethernet-ish interface types (ethernetCsmacd, fastEther(FX), gigabitEthernet)
+_PHYS_IFTYPES = {6, 62, 69, 117}
+# a device with at least this many physical ports and no routing is treated as a switch, not
+# a router, however it describes itself — routers do not have 24 access ports.
+_SWITCH_PORT_MIN = 8
+
+
+# CDP and LLDP name the same capabilities differently; map everything onto the LLDP vocabulary
+# so a device seen over either protocol classifies the same way.
+_CAP_ALIASES = {"switch": "bridge", "srcbridge": "bridge", "phone": "telephone", "host": "station"}
+
+
+def _caps_set(s: str) -> set:
+    return {_CAP_ALIASES.get(c.strip(), c.strip()) for c in (s or "").split(",") if c.strip()}
+
+
+def _phys_port_count(dev: Device) -> int:
+    return sum(1 for i in dev.interfaces if i.type in _PHYS_IFTYPES and not i.lag
+               and not re.match(r"^(vlan|vl\d|lo|loopback|po\d|port-?channel|bundle|null|tunnel|mgmt|management|irb|bvi)",
+                                (i.name or i.descr or "").strip(), re.I))
+
+
+def _routes_for_real(dev: Device) -> bool:
+    """True if the device holds routes beyond connected/default — evidence it actually routes."""
+    return any(r.dest not in ("0.0.0.0/0", "") and r.type != 3 and r.nexthop not in ("", "0.0.0.0")
+               for r in dev.routes)
+
+
+def _bridges(dev: Device) -> bool:
+    """True if the device forwards at layer 2: it has a bridge forwarding table, LLDP/CDP
+    neighbours on physical ports, or many physical ports."""
+    return bool(dev.fdb) or _phys_port_count(dev) >= _SWITCH_PORT_MIN
+
+
+def classify_role(dev: Device, caps: Optional[str] = None) -> str:
+    """Decide what a polled device is, from the strongest evidence available.
+
+    Order of trust: an explicit firewall string; the capabilities the device (or, via
+    ``caps``, its neighbours) advertise over LLDP/CDP — a vendor-neutral statement of
+    bridge / router / WLAN-AP; the bridge forwarding table and physical-port count; and
+    only then the sysDescr text. Crucially it never falls back to "router" just because the
+    SNMP routing service bit is set — that bit is on nearly every managed switch — so a
+    switch or access point whose model string we don't recognise is no longer mislabelled.
+    """
     d = dev.sysdescr.lower()
     l2 = bool(dev.services & 2)
     l3 = bool(dev.services & 4)
+    cap = _caps_set(caps if caps is not None else dev.lldp_caps)
+    routes = _routes_for_real(dev)
+    addressed = sum(1 for i in dev.interfaces if i.ips)
+    # a bridge is an L3 switch when it also has layer-3 presence: the routing service bit AND
+    # either addresses on two or more interfaces (SVIs) or a real route. The bit alone is not
+    # enough — it is set on nearly every managed switch.
+    l3switch = l3 and (addressed >= 2 or routes)
+
+    # a firewall usually says so, and that wins over a generic bridge/router capability
     if re.search(r"fortigate|palo alto|pan-os|checkpoint|check point|\basa\b|adaptive security|sonicwall|pfsense|opnsense|firewall|\bsrx\d", d):
         return "firewall"
+
+    # what the device advertises it is (its own LLDP caps, or neighbours' view passed in).
+    # A device that both bridges and routes is an L3 switch — decide that before the wlan-ap
+    # bit, so one noisy or integrated-AP capability can't mislabel a core switch as wireless.
+    if cap:
+        bridge, router, wlan = "bridge" in cap, "router" in cap, "wlan-ap" in cap
+        if bridge and router:
+            return "l3switch"
+        if wlan and not router:  # an access point (it bridges too), not a router
+            return "wireless"
+        if router:
+            return "router"
+        if bridge:
+            return "switch"
+
     if re.search(r"wireless|access point|aironet|unifi|aruba (ap|instant)|meraki mr|lightweight ap|\bwlc\b", d):
         return "wireless"
     if re.search(r"printer|laserjet|jetdirect|officejet|xerox|ricoh|kyocera|konica|lexmark", d):
         return "printer"
+
     is_router = re.search(r"\brouter\b|\bisr\d|\basr\d|\bc\d{3,4}\b.*router|mikrotik|routeros|junos.*\bmx\d|edgerouter|vyos|\bccr\d", d)
     is_switch = re.search(r"switch|catalyst|nexus|\bex\d{4}|\bqfx|procurve|comware|aruba \d{4}|\bws-c|\bc9[235]00", d)
-    if is_router and not is_switch:
+    if is_switch:
+        return "l3switch" if l3switch else "switch"
+    if is_router and not _bridges(dev):
         return "router"
-    if is_switch or dev.fdb:
-        # sysServices says "routing" on nearly every managed switch, even an access switch whose
-        # only address is its management SVI. Call it L3 only with evidence that it routes:
-        # addresses on two or more interfaces, or routes other than connected and default.
-        addressed = sum(1 for i in dev.interfaces if i.ips)
-        learned = any(r.dest != "0.0.0.0/0" and r.type != 3 and r.nexthop not in ("", "0.0.0.0") for r in dev.routes)
-        return "l3switch" if l3 and (addressed >= 2 or learned) else "switch"
+
+    # bridge/port evidence: a device that forwards at L2 is a switch (L3 switch if it also
+    # has the layer-3 presence above), whatever its model string — this rescues unrecognised kit.
+    if _bridges(dev):
+        return "l3switch" if l3switch else "switch"
+
     if re.search(r"vmware esx|esxi|\bwindows\b|\blinux\b|freebsd|ubuntu|debian|centos|red hat|net-snmp", d):
         return "server"
-    if l3:
+
+    # a device with a real routing table and few ports is a router; otherwise fall back to the
+    # weak datalink/neighbour signals before giving up — never to "router" on the L3 bit alone.
+    if routes:
         return "router"
     if l2 or any(n.proto in ("lldp", "cdp") for n in dev.neighbors):
         return "switch"
     return "unknown"
+
+
+def _neighbor_device_id(inv, nb) -> Optional[str]:
+    """The id of the polled device a neighbour entry points at, or None."""
+    for ip in nb.remote_mgmt_ips:
+        if ip in inv.ip_to_device:
+            return inv.ip_to_device[ip]
+    for cid in (nb.remote_chassis_id, (nb.remote_chassis_id or "").lower()):
+        if cid and cid in inv.mac_to_device:
+            return inv.mac_to_device[cid]
+    d = inv.device_for_name(nb.remote_name)
+    return d.id if d else None
+
+
+def reclassify_from_neighbor_caps(inv) -> int:
+    """Second pass, only for devices we could not type at all (role ``unknown``): a device
+    whose own data was too thin — unrecognised model, no bridge table, no LLDP capabilities —
+    may still be described by its neighbours, since CDP and LLDP both carry the capability
+    bits. Pool what every neighbour says about each such device and classify from that.
+
+    Deliberately conservative: it never revisits a device that classified from its own
+    evidence (a model string, a bridge table, its own advertised capabilities), so a router
+    that a neighbour happens to advertise with the CDP ``switch`` bit is never downgraded.
+    Returns how many devices were newly typed."""
+    caps_about: dict[str, set] = defaultdict(set)
+    for d in inv.devices.values():
+        for nb in d.neighbors:
+            if not nb.remote_caps:
+                continue
+            tid = _neighbor_device_id(inv, nb)
+            if tid and tid in inv.devices:
+                caps_about[tid] |= _caps_set(nb.remote_caps)
+    changed = 0
+    for d in inv.devices.values():
+        if d.role != "unknown":
+            continue
+        cap = caps_about.get(d.id)
+        if not cap:
+            continue
+        new = classify_role(d, caps=",".join(sorted(cap)))
+        if new and new != "unknown":
+            d.role = new
+            changed += 1
+    return changed
 
 
 def _vendor(sysobjectid: str, sysdescr: str) -> str:
@@ -438,8 +554,11 @@ def _find_if_by_port(dev: Device, *candidates: str) -> Optional[int]:
 async def collect_lldp(sess: SnmpSession, dev: Device, bp: Optional[dict] = None) -> None:
     """LLDP neighbours. `bp` is dot1dBasePortIfIndex when already walked: on many switches
     lldpLocPortNum is the bridge port, not the ifIndex, and this maps between them."""
-    loc = await sess.get(O.LLDP_LOC_CHASSIS_SUBTYPE, O.LLDP_LOC_CHASSIS_ID)
+    loc = await sess.get(O.LLDP_LOC_CHASSIS_SUBTYPE, O.LLDP_LOC_CHASSIS_ID, O.LLDP_LOC_SYS_CAP_ENABLED)
     dev.lldp_chassis_id = _lldp_id(loc.get(O.LLDP_LOC_CHASSIS_SUBTYPE), loc.get(O.LLDP_LOC_CHASSIS_ID), "chassis")
+    # the device's own advertised capabilities (bridge/router/wlan-ap…) — a vendor-neutral
+    # statement of what it is, kept even when it reports no neighbours.
+    dev.lldp_caps = _lldp_caps(loc.get(O.LLDP_LOC_SYS_CAP_ENABLED)) or dev.lldp_caps
     rem_sys = await sess.walk(O.LLDP_REM_SYSNAME)
     if not rem_sys:
         return

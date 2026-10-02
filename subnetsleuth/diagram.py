@@ -53,7 +53,7 @@ def select(g, flags: dict, preset: str = "physical") -> tuple[dict, list]:
         if u not in nodes or v not in nodes:
             continue
         both_devices = nodes[u].get("kind") == "device" and nodes[v].get("kind") == "device"
-        if k in ("lldp", "cdp") and not flags.get("l2"):
+        if k in ("lldp", "cdp", "fdb-link") and not flags.get("l2"):
             # hosts announced over LLDP (APs, phones) still hang off their switch
             if not flags.get("hosts") or both_devices:
                 continue
@@ -168,6 +168,7 @@ DRAWIO_EDGE = {
     "l3": "endArrow=none;html=1;strokeWidth=1.5;strokeColor=#ea580c;dashed=1;",
     "member": "endArrow=none;html=1;strokeWidth=1;strokeColor=#94a3b8;dashed=1;dashPattern=1 3;",
     "fdb": "endArrow=none;html=1;strokeWidth=1;strokeColor=#94a3b8;",
+    "fdb-link": "endArrow=none;html=1;strokeWidth=2;strokeColor=#2563eb;dashed=1;dashPattern=6 4;",
 }
 
 
@@ -221,7 +222,7 @@ def drawio_page(name: str, nodes: dict, edges: list, pos: dict, page_id: str) ->
             f'<mxCell id="{eid}" style="{_esc(style)}" edge="1" parent="1" source="{ids[u]}" target="{ids[v]}">'
             f'<mxGeometry relative="1" as="geometry"/></mxCell>'
         )
-        if a.get("kind") in ("lldp", "cdp"):
+        if a.get("kind") in ("lldp", "cdp", "fdb-link"):
             pu, pv = edge_ports(u, v, a)
             for k, (text, x) in enumerate(((pu, -0.7), (pv, 0.7))):
                 if text:

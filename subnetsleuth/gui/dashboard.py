@@ -365,7 +365,10 @@ class Dashboard(QWidget):
         self.c_sub.set(len(inv.subnets), f"{swept} swept")
         self.c_vlan.set(len(s.vlans), f"{sum(1 for n, _ in s.vlans.values() if len(n) > 1)} named inconsistently" if any(len(n) > 1 for n, _ in s.vlans.values()) else "")
         kinds = Counter(a.get("kind") for _, _, a in s.links)
-        self.c_link.set(len(s.links), f"{kinds.get('lldp', 0) + kinds.get('cdp', 0)} cabled · {kinds.get('l3', 0)} routed only")
+        cabled = kinds.get("lldp", 0) + kinds.get("cdp", 0)
+        inferred = kinds.get("fdb-link", 0)
+        link_sub = f"{cabled} cabled" + (f" · {inferred} inferred" if inferred else "") + f" · {kinds.get('l3', 0)} routed only"
+        self.c_link.set(len(s.links), link_sub)
         self.c_find.set(len(attention), f"{len(findings)} findings in total")
 
         # Network infrastructure: total per role, with the not-polled share as a lighter band.

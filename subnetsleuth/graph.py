@@ -54,6 +54,70 @@ def norm_port(name: str) -> str:
     return n  # a port with more MACs than this is treated as an uplink/trunk, not a host port
 
 
+def _norm_mac(m) -> str:
+    """A MAC reduced to its 12 hex digits, so the same address compares equal however it was
+    written (colons, dashes, dots, upper/lower)."""
+    h = re.sub(r"[^0-9a-f]", "", (m or "").lower())
+    return h if len(h) == 12 else ""
+
+
+def _infer_fdb_links(inv: Inventory, g) -> int:
+    """Draw switch-to-switch links from the bridge MAC tables when LLDP/CDP didn't reveal them.
+
+    On a network with LLDP/CDP disabled, the devices still answer SNMP but report no neighbours,
+    so the map has no cabling and collapses into subnet clusters. The forwarding tables still
+    hold the topology: the port on switch A through which switch B's own MAC is learned is the
+    port facing B. Two switches are taken to be directly connected when each learns the other on
+    some port **and** no third device is learned beyond both of those ports (otherwise something
+    sits between them). Links already known from LLDP/CDP or routing are left as they are.
+
+    Returns the number of inferred links added.
+    """
+    dmac: dict[str, str] = {}  # every device MAC -> its device id
+    for d in inv.devices.values():
+        for m in [d.lldp_chassis_id, *d.macs, *[i.mac for i in d.interfaces]]:
+            nm = _norm_mac(m)
+            if nm:
+                dmac.setdefault(nm, d.id)
+
+    # for each device: port ifIndex -> the set of *other devices* learned on that port
+    port_devs: dict[str, dict] = {}
+    for d in inv.devices.values():
+        pd: dict = defaultdict(set)
+        for e in d.fdb:
+            if e.if_index is None:
+                continue
+            did = dmac.get(_norm_mac(e.mac))
+            if did and did != d.id:
+                pd[e.if_index].add(did)
+        port_devs[d.id] = pd
+
+    existing = set()  # device pairs already linked by LLDP/CDP/L3 — don't duplicate
+    for u, v in g.edges():
+        if g.nodes.get(u, {}).get("kind") == "device" and g.nodes.get(v, {}).get("kind") == "device":
+            existing.add(frozenset((u, v)))
+
+    added, done = 0, set()
+    for a in inv.devices:
+        for pa, devs_a in port_devs.get(a, {}).items():
+            for b in devs_a:
+                key = frozenset((a, b))
+                if key in existing or key in done or a == b or b not in inv.devices:
+                    continue
+                pb = next((p for p, ds in port_devs.get(b, {}).items() if a in ds), None)
+                if pb is None:  # require a mutual sighting
+                    continue
+                if (devs_a - {b}) & (port_devs[b][pb] - {a}):  # a third device beyond both -> not direct
+                    continue
+                if a in g and b in g:
+                    la, lb = inv.devices[a].iface_label(pa), inv.devices[b].iface_label(pb)
+                    g.add_edge(a, b, kind="fdb-link", src=a, src_port=la, dst_port=lb,
+                               label=f"{la} - {lb} (from MAC table)")
+                    done.add(key)
+                    added += 1
+    return added
+
+
 def enrich_inventory(inv: Inventory) -> None:
     """Fill in what can be derived offline, so a crawl without nmap still types its kit.
 
@@ -80,6 +144,8 @@ def enrich_inventory(inv: Inventory) -> None:
                     break
         d.os_version = d.os_version or parse_os_version(d.sysdescr, d.vendor)  # maps saved before it was collected
         d.model = d.model or device_model(d.sysobjectid, d.sysdescr, d.vendor)  # sysDescr model where ENTITY-MIB was blank
+    from .collect import reclassify_from_neighbor_caps
+    reclassify_from_neighbor_caps(inv)  # sharpen ambiguous roles from how neighbours describe them
     _register_vips(inv)
 
 
@@ -343,6 +409,10 @@ def build_graph(inv: Inventory, include_hosts: bool = True, include_subnets: boo
                 continue
             seen_l3.add(l3_key)
             g.add_edge(d.id, tgt, kind="l3", label=f"{n} routes", routes=n)
+
+    # --- L2 adjacency inferred from MAC tables (when LLDP/CDP is silent) ---
+    if fdb_links:
+        _infer_fdb_links(inv, g)
 
     # --- subnets ---
     if include_subnets:

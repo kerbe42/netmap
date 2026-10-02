@@ -137,6 +137,7 @@ class Device:
     depth: int = 0
     discovered_via: str = ""
     lldp_chassis_id: str = ""
+    lldp_caps: str = ""  # lldpLocSysCapEnabled, decoded: what the device says it is (bridge, router, wlan-ap…)
     interfaces: list[Interface] = field(default_factory=list)
     neighbors: list[Neighbor] = field(default_factory=list)
     routes: list[Route] = field(default_factory=list)

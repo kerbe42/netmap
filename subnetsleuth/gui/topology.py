@@ -58,7 +58,7 @@ from ..views import is_mac, short_port
 from .icons import ROLE_LABELS, paint_badge, role_color, role_pixmap
 
 LAYOUTS = {"layered": "Layered (core on top)", "organic": "Organic", "radial": "Radial around selection"}
-EDGE_TITLES = {"lldp": "LLDP", "cdp": "CDP", "l3": "Routing", "member": "Subnet", "fdb": "MAC table"}
+EDGE_TITLES = {"lldp": "LLDP", "cdp": "CDP", "l3": "Routing", "member": "Subnet", "fdb": "MAC table", "fdb-link": "MAC table (inferred)"}
 
 NODE_SIZE = {"device": 40.0, "host": 26.0, "subnet": 30.0}
 MAX_RENDER_SIDE = 8192  # a PNG's long side; beyond this a 32-bit image is hundreds of MB
@@ -248,6 +248,9 @@ class EdgeItem(QGraphicsPathItem):
         if self.kind in ("lldp", "cdp"):
             c = QColor("#60a5fa") if dark else QColor("#2563eb")
             pen = QPen(c, 2.2)
+        elif self.kind == "fdb-link":
+            c = QColor("#60a5fa") if dark else QColor("#2563eb")
+            pen = QPen(c, 2.0, Qt.DashLine)  # inferred cabling: cabling colour, dashed
         elif self.kind == "l3":
             c = QColor("#fb923c") if dark else QColor("#ea580c")
             pen = QPen(c, 1.6, Qt.DashLine)

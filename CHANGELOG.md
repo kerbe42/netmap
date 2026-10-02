@@ -6,6 +6,32 @@ All notable changes to SubnetSleuth (called NetMap up to 0.12) are recorded here
 change behaviour). The release workflow publishes the section for a tag as its release notes,
 so every release needs its `## [x.y.z] - date` heading here before it is tagged.
 
+## [0.15.0] - 2026-10-02
+
+Better at telling network devices apart, and able to draw a topology even when the switches
+don't speak LLDP or CDP.
+
+### Changed
+- **Device types are worked out from evidence, not just the model string.** A device is now
+  classified from the capabilities it (or its neighbours) advertise over LLDP/CDP — bridge,
+  router, wireless access point — together with its bridge forwarding table and physical-port
+  count, before any guess from its description. Crucially it no longer falls back to *router*
+  just because the SNMP routing service bit is set (that bit is on almost every managed switch),
+  so a switch or access point whose model isn't recognised is no longer mislabelled as a router.
+  A second pass types a device the tool couldn't place at all from how its neighbours describe it.
+
+### Added
+- **Topology from the MAC tables.** When LLDP and CDP are switched off (or not readable), the map
+  used to collapse into disconnected subnet groups. SubnetSleuth now reconstructs the
+  switch-to-switch links from the bridge forwarding tables — the port through which a switch
+  learns another switch's address is the port facing it — so the map joins up from the MAC tables
+  alone. Inferred links are drawn dashed to distinguish them from links a device actually
+  reported, and the path tracer follows them.
+- A **Limited SNMP visibility** finding: a managed device that answers SNMP but returns no
+  LLDP/CDP neighbours, no MAC table and no routes is flagged, because that is the usual reason a
+  topology comes out disconnected — an SNMP view or community that excludes those MIBs, or
+  LLDP/CDP turned off.
+
 ## [0.14.0] - 2026-10-02
 
 ### Changed
@@ -406,6 +432,7 @@ is, plus responsiveness at very large inventories.
 - First release: SNMP/LLDP/CDP crawler with routes, ARP, MAC tables and VLANs, and an
   interactive topology map.
 
+[0.15.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/kerbe42/subnetsleuth/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/kerbe42/subnetsleuth/compare/v0.12.0...v0.13.0

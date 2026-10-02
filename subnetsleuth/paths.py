@@ -129,7 +129,7 @@ def _topo_graph(g: nx.MultiGraph) -> nx.Graph:
     """A simple graph of the routed/switched backbone (device-to-device links only)."""
     h = nx.Graph()
     for u, v, a in g.edges(data=True):
-        if a.get("kind") in ("lldp", "cdp", "l3") and g.nodes[u].get("kind") == "device" and g.nodes[v].get("kind") == "device":
+        if a.get("kind") in ("lldp", "cdp", "l3", "fdb-link") and g.nodes[u].get("kind") == "device" and g.nodes[v].get("kind") == "device":
             if not h.has_edge(u, v):
                 pu, pv = edge_ports(u, v, a)
                 # record which endpoint pu belongs to, so a traversal in the opposite
@@ -187,7 +187,7 @@ def host_access(inv, g: nx.MultiGraph, host_ip: str) -> Optional[tuple[str, str]
 def _infra_degree(g: nx.MultiGraph, n: str) -> int:
     """Links to other network kit only: hosts on ports and subnet membership would make a
     48-port access switch look better connected than the core."""
-    return sum(1 for _, _, a in g.edges(n, data=True) if a.get("kind") in ("lldp", "cdp", "l3"))
+    return sum(1 for _, _, a in g.edges(n, data=True) if a.get("kind") in ("lldp", "cdp", "l3", "fdb-link"))
 
 
 def _pick_origin(inv, g: nx.MultiGraph) -> Optional[str]:
